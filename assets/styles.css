@@ -1,0 +1,63 @@
+/* Estilos específicos para dashboard de telecomunicaciones */
+.telecom-kpi-card {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border: 1px solid #dee2e6;
+    border-radius: 10px;
+    transition: transform 0.2s;
+}
+
+.telecom-kpi-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+/* Colores para indicadores de calidad */
+.quality-excellent {
+    background-color: #00C851 !important;
+    color: white !important;
+}
+
+.quality-good {
+    background-color: #ffbb33 !important;
+    color: black !important;
+}
+
+.quality-poor {
+    background-color: #ff4444 !important;
+    color: white !important;
+}
+
+/* Mejoras para tablas de telecom */
+.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
+    background: linear-gradient(135deg, #6c757d 0%, #495057 100%) !important;
+    color: white !important;
+}
+
+/* Responsividad mejorada para móviles */
+@media (max-width: 768px) {
+    .telecom-kpi-card {
+        margin-bottom: 1rem;
+    }
+
+    .sidebar {
+        position: relative;
+        height: auto;
+        margin-bottom: 2rem;
+    }
+}
+
+/* Animaciones para carga de datos */
+.fade-in {
+    animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Estilos para gráficas */
+.js-plotly-plot .plotly .modebar {
+    background: rgba(255, 255, 255, 0.8) !important;
+    border-radius: 5px;
+}
