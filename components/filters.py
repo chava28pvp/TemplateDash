@@ -1,86 +1,56 @@
+from dash import html, dcc
 import dash_bootstrap_components as dbc
-from dash import dcc, html
-import datetime
-from database.db_connection import get_available_regions, get_date_range
+from src.utils import default_date_str, default_hour_str
 
+def build_filters(vendor_options=None, cluster_options=None):
+    vendor_options = vendor_options or []
+    cluster_options = cluster_options or []
 
-def create_date_range_filter():
-    min_date, max_date = get_date_range() or (datetime.datetime.now() - datetime.timedelta(days=30),
-                                              datetime.datetime.now())
-
-    return dbc.Card([
-        dbc.CardHeader("Rango de Fechas"),
+    hours = [f"{h:02d}:00:00" for h in range(24)]
+    return dbc.Card(
         dbc.CardBody([
-            dcc.DatePickerRange(
-                id='date-range-filter',
-                start_date=min_date,
-                end_date=max_date,
-                display_format='YYYY-MM-DD',
-                style={'width': '100%'}
-            )
-        ])
-    ], className="mb-3")
-
-
-def create_region_filter():
-    regions = get_available_regions()
-    return dbc.Card([
-        dbc.CardHeader("Regiones"),
-        dbc.CardBody([
-            dcc.Dropdown(
-                id='region-filter',
-                options=[{'label': region, 'value': region} for region in regions],
-                value=regions,
-                multi=True,
-                clearable=True,
-                placeholder="Seleccione regiones"
-            )
-        ])
-    ], className="mb-3")
-
-
-def create_kpi_threshold_filter():
-    return dbc.Card([
-        dbc.CardHeader("Umbrales de Calidad"),
-        dbc.CardBody([
+            html.H4("Filtros", className="mb-3"),
             dbc.Row([
                 dbc.Col([
-                    html.Label("PS RRC Failure (%)"),
-                    dcc.Slider(
-                        id='ps-rrc-threshold',
-                        min=0,
-                        max=5,
-                        step=0.1,
-                        value=1.5,
-                        marks={i: str(i) for i in range(0, 6)},
-                        tooltip={"placement": "bottom", "always_visible": True}
+                    dbc.Label("Fecha"),
+                    dcc.DatePickerSingle(
+                        id="f-fecha",
+                        date=default_date_str(),
+                        display_format="YYYY-MM-DD",
+                        clearable=False
                     )
-                ], width=6),
+                ], md=3),
                 dbc.Col([
-                    html.Label("CS RRC Failure (%)"),
-                    dcc.Slider(
-                        id='cs-rrc-threshold',
-                        min=0,
-                        max=3,
-                        step=0.1,
-                        value=1.0,
-                        marks={i: str(i) for i in range(0, 4)},
-                        tooltip={"placement": "bottom", "always_visible": True}
+                    dbc.Label("Hora"),
+                    dcc.Dropdown(
+                        id="f-hora",
+                        options=[{"label": "Todas", "value": "Todas"}] + [{"label": h[:5], "value": h} for h in hours],
+                        value=default_hour_str(),
+                        clearable=False
                     )
-                ], width=6)
-            ])
-        ])
-    ], className="mb-3")
-
-
-def create_filter_panel():
-    return html.Div([
-        html.H4("Filtros", className="mb-3"),
-        create_date_range_filter(),
-        create_region_filter(),
-        create_kpi_threshold_filter(),
-        html.Div([
-            dbc.Button("🔄 Actualizar", id="apply-filters", color="primary", className="w-100 mb-2"),
-            dbc.Button("🧹 Limpiar", id="clear-filters", color="secondary", className="w-100"),
-        ])
-    ])
+                ], md=3),
+                dbc.Col([
+                    dbc.Label("Vendor"),
+                    dcc.Dropdown(
+                        id="f-vendor",
+                        options=[{"label": v, "value": v} for v in vendor_options],
+                        value=vendor_options[:1],
+                        multi=True,
+                        placeholder="Selecciona vendor"
+                    )
+                ], md=3),
+                dbc.Col([
+                    dbc.Label("Cluster"),
+                    dcc.Dropdown(
+                        id="f-cluster",
+                        options=[{"label": c, "value": c} for c in cluster_options],
+                        value=cluster_options[:1],
+                        multi=True,
+                        placeholder="Selecciona cluster"
+                    )
+                ], md=3),
+            ], className="g-3"),
+            dcc.Interval(id="refresh-interval"),
+        ]),
+        className="shadow-sm"
+    )

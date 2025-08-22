@@ -1,63 +1,63 @@
-/* Estilos específicos para dashboard de telecomunicaciones */
-.telecom-kpi-card {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    border: 1px solid #dee2e6;
-    border-radius: 10px;
-    transition: transform 0.2s;
+/* === Centrado y divisores en headers === */
+.kpi-table {
+  border-collapse: separate; /* importante para ver divisores limpios */
+  border-spacing: 0;
+}
+.kpi-table thead th {
+  text-align: center;
+  vertical-align: middle;
 }
 
-.telecom-kpi-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+/* Fila superior: grupos */
+.kpi-table .th-group {
+  background: #eef2f7;
+  font-weight: 700;
+  border-top: 1px solid #d0d7e2;
+  border-bottom: 2px solid #cbd5e1;
+  /* divisor entre grupos: línea a la derecha */
+  border-right: 2px solid #b6c2d0;
+}
+/* Evita doble borde en el primer grupo (sin borde izquierdo grueso) */
+.kpi-table thead tr:first-child th:first-child {
+  border-left: 1px solid #d0d7e2;
 }
 
-/* Colores para indicadores de calidad */
-.quality-excellent {
-    background-color: #00C851 !important;
-    color: white !important;
+/* Fila inferior: sub-headers */
+.kpi-table thead tr:nth-child(2) th.th-sub {
+  background: #f8fafc;
+  font-weight: 600;
+  border-bottom: 1px solid #dee2e6;
+  border-right: 1px solid #e1e7ef;  /* divisores finos entre columnas */
+}
+.kpi-table thead tr:nth-child(2) th.th-end-of-group {
+  border-right: 2px solid #b6c2d0;  /* divisor fuerte al final de cada grupo */
 }
 
-.quality-good {
-    background-color: #ffbb33 !important;
-    color: black !important;
+/* Extiende el divisor de grupo hacia el cuerpo de la tabla */
+.kpi-table tbody td {
+  border-right: 1px solid #f0f3f7;   /* divisores finos para alineación general */
+}
+.kpi-table tbody td.td-end-of-group {
+  border-right: 2px solid #b6c2d0;   /* divisor fuerte al final de cada grupo */
+}
+/* Línea inferior de cierre */
+.kpi-table tbody tr:last-child td {
+  border-bottom: 1px solid #d0d7e2;
 }
 
-.quality-poor {
-    background-color: #ff4444 !important;
-    color: white !important;
+/* === Compactar un poco más === */
+.kpi-table.compact {
+  font-size: 0.85rem;
+}
+.kpi-table.compact td,
+.kpi-table.compact th {
+  padding: 0.25rem 0.5rem;
 }
 
-/* Mejoras para tablas de telecom */
-.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
-    background: linear-gradient(135deg, #6c757d 0%, #495057 100%) !important;
-    color: white !important;
-}
+/* Colores por severidad (existentes) */
+.cell-ok   { background: #e9f7ef; }
+.cell-warn { background: #fff8e1; }
+.cell-bad  { background: #ffebee; }
 
-/* Responsividad mejorada para móviles */
-@media (max-width: 768px) {
-    .telecom-kpi-card {
-        margin-bottom: 1rem;
-    }
-
-    .sidebar {
-        position: relative;
-        height: auto;
-        margin-bottom: 2rem;
-    }
-}
-
-/* Animaciones para carga de datos */
-.fade-in {
-    animation: fadeIn 0.5s ease-in;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* Estilos para gráficas */
-.js-plotly-plot .plotly .modebar {
-    background: rgba(255, 255, 255, 0.8) !important;
-    border-radius: 5px;
-}
+/* Progress bars compactas */
+.kpi-progress .progress-bar { font-size: 0.6rem; }
