@@ -59,5 +59,51 @@
 .cell-warn { background: #fff8e1; }
 .cell-bad  { background: #ffebee; }
 
-/* Progress bars compactas */
-.kpi-progress .progress-bar { font-size: 0.6rem; }
+
+/* === Progress bar custom (independiente de Bootstrap) === */
+.kb {
+  /* Variables personalizables */
+  --kb-height: 16px;
+  --kb-radius: 8px;
+  --kb-track: #e9ecef;
+  --kb-fill: #0d6efd;         /* azul por defecto */
+  --kb-text: #fff;
+  --kb-font-size: 0.70rem;
+  --kb-font-weight: 700;
+
+  position: relative;
+  width: 100%;
+  height: var(--kb-height);
+  background: var(--kb-track);
+  border-radius: var(--kb-radius);
+  overflow: hidden;
+}
+
+.kb__fill {
+  height: 100%;
+  background: var(--kb-fill);
+  color: var(--kb-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--kb-font-size);
+  font-weight: var(--kb-font-weight);
+  line-height: 1;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(0,0,0,.2);
+  min-width: 2.4rem;          /* que el número no desaparezca */
+  border-radius: var(--kb-radius) 0 0 var(--kb-radius);
+}
+
+/* Modificadores de color (opcional) */
+.kb--primary { --kb-fill: #0d6efd; }
+.kb--success { --kb-fill: #198754; }
+.kb--warning { --kb-fill: #ffc107; }
+.kb--danger  { --kb-fill: #dc3545; }
+.kb--info    { --kb-fill: #0dcaf0; }
+
+
+/* Tablas simples abajo */
+.mini-table { font-size: .88rem; }
+.mini-table th, .mini-table td { padding: .35rem .5rem; }
+

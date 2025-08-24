@@ -13,6 +13,7 @@ def serve_layout():
             dbc.Row([
                 dbc.Col(html.Div(id="table-container"), md=12, className="my-3")
             ]),
+
             dbc.Row([
                 dbc.Col(dbc.Card(dbc.CardBody([
                     html.H4("Gráfica de línea", className="mb-3"),
@@ -28,7 +29,13 @@ def serve_layout():
                     ),
                     html.Div(id="line-chart")
                 ]), className="shadow-sm"), md=12, className="my-3")
+            ]),
+            # src/layout.py (dentro de serve_layout, debajo de la fila de la gráfica)
+            dbc.Row([
+                dbc.Col(html.Div(id="table-bottom-a"), md=6, className="my-3"),
+                dbc.Col(html.Div(id="table-bottom-b"), md=6, className="my-3"),
             ])
+
         ]),
         dcc.Store(id="defaults-store", data={"fecha": default_date_str(), "hora": default_hour_str()}),
         dcc.Interval(id="refresh-interval-global", interval=REFRESH_INTERVAL_MS, n_intervals=0),
