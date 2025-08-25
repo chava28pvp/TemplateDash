@@ -20,9 +20,6 @@ THRESHOLDS = {
     "ps_failures_rab_percent": {"warn": 1.0, "bad": 2.0},
     "cs_failures_rrc_percent": {"warn": 1.0, "bad": 2.0},
     "cs_failures_rab_percent": {"warn": 1.0, "bad": 2.0},
-    # tasas de éxito (0-100): invertimos
-    "lcs_ps_rate": {"warn_low": 99.0, "bad_low": 98.0},
-    "lcs_cs_rate": {"warn_low": 99.0, "bad_low": 98.0}
 }
 
 def cell_severity(column: str, value):
@@ -52,3 +49,27 @@ def cell_severity(column: str, value):
         return "ok"
 
     return "ok"
+# Config de escalas/formato por KPI para progress bars
+PROGRESS_CONFIG = {
+    # Ejemplos: ajusta a tus rangos reales
+    "cs_failures_rrc":       {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
+    "ps_failures_rab":       {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
+    "cs_abnormal_releases":  {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
+    "ps_failure_rrc":        {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
+    "ps_abnormal_releases":  {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
+    # Si alguna columna es realmente porcentaje, déjala en 0–100
+    # "lcs_ps_rate": {"min": 0, "max": 100, "decimals": 1, "label": "{value:.1f}%"},
+}
+
+def progress_cfg(column: str):
+    """
+    Devuelve un dict con min/max/decimals/label para una columna de progress bar.
+    Si no hay config específica, retorna defaults (0–100).
+    """
+    cfg = PROGRESS_CONFIG.get(column, {})
+    return {
+        "min": cfg.get("min", 0.0),
+        "max": cfg.get("max", 100.0),
+        "decimals": cfg.get("decimals", 1),
+        "label": cfg.get("label", "{value:.1f}"),
+    }

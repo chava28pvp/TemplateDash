@@ -1,6 +1,6 @@
 from dash import html
 import dash_bootstrap_components as dbc
-from src.utils import cell_severity
+from src.utils import cell_severity, progress_cfg
 
 
 # 1) DICCIONARIO de etiquetas visibles por columna (puedes ajustar libremente)
@@ -8,13 +8,18 @@ DISPLAY_NAME = {
     "fecha": "Fecha",
     "hora": "Hora",
     "vendor": "Vendor",
+    "integrity": "Integrity",
     "noc_cluster": "Cluster",
     "lcs_ps_rate": "%DC",
     "lcs_cs_rate": "%DC",
     "ps_failure_rrc_percent": "%IA",
+    "ps_failure_rrc": "FAIL",
     "ps_failures_rab_percent": "%IA",
+    "ps_failures_rab": "FAIL",
     "cs_failures_rrc_percent": "%IA",
+    "cs_failures_rrc": "FAIL",
     "cs_failures_rab_percent": "%IA",
+    "cs_failures_rab": "FAIL",
     "total_mbytes_nocperf": "GB",
     "delta_total_mbytes_nocperf": "DELTA",
     "total_erlangs_nocperf": "ERL",
@@ -33,16 +38,19 @@ DISPLAY_NAME = {
 
 # Grupos (header superior) → columnas (sub-headers)
 GROUPS = [
-    ("Fecha/Hora", ["fecha","hora"]),
-    ("Identidad", ["vendor","noc_cluster"]),
-    ("LCS Rate", ["lcs_ps_rate","lcs_cs_rate"]),
-    ("PS RRC", ["ps_failure_rrc_percent","ps_failures_rab_percent"]),
-    ("CS RRC", ["cs_failures_rrc_percent","cs_failures_rab_percent"]),
-    ("PS_TRAFF", ["total_mbytes_nocperf","delta_total_mbytes_nocperf"]),
-    ("CS_TRAFF", ["total_erlangs_nocperf","delta_total_erlangs_nocperf"]),
-    ("Traffic ATT", ["traffic_gb_att","delta_traffic_gb_att","traffic_amr_att","delta_traffic_amr_att"]),
-    ("Traffic PLMN2", ["traffic_gb_plmn2","delta_traffic_gb_plmn2","traffic_amr_plmn2","delta_traffic_amr_plmn2"]),
-    ("Abnormal Releases", ["ps_abnormal_releases","cs_abnormal_releases"]),
+    (">2%", ["vendor"]),
+    (">5%", ["fecha"]),
+    (">10%", ["hora"]),
+    ("      ", ["noc_cluster"]),
+    ("CS_TRAFF", ["delta_total_erlangs_nocperf","total_erlangs_nocperf"]),
+    ("CS_RRC", ["cs_failures_rrc_percent", "cs_failures_rrc"]),
+    ("CS_RAB", ["cs_failures_rab_percent", "ps_failures_rab"]),
+    ("CS_DROP", ["lcs_cs_rate", "cs_abnormal_releases"]),
+    ("PS_TRAFF", ["delta_total_mbytes_nocperf", "total_mbytes_nocperf"]),
+    ("PS_RRC", ["ps_failure_rrc_percent", "ps_failure_rrc"]),
+    ("PS_RAB", ["ps_failures_rab_percent", "ps_failures_rab"]),
+    ("PS_DROP", ["lcs_ps_rate", "ps_abnormal_releases"]),
+
 ]
 
 # Orden visible = concatenación de todos los sub-headers
@@ -52,15 +60,17 @@ VISIBLE_ORDER = [col for _, cols in GROUPS for col in cols]
 END_OF_GROUP = {cols[-1] for _, cols in GROUPS}
 
 # Columnas con progress bar (0-100)
+# Sustituye PROGRESS_COLS por una configuración más rica:
 PROGRESS_COLS = [
-    "lcs_ps_rate",
-    "lcs_cs_rate"
+    "cs_failures_rrc", "ps_failures_rab", "cs_abnormal_releases",
+    "ps_failure_rrc", "ps_failures_rab", "ps_abnormal_releases"
 ]
+
 
 # Columnas con semáforo
 SEVERITY_COLS = [
-    "ps_failure_rrc_percent","ps_failures_rab_percent",
-    "cs_failures_rrc_percent","cs_failures_rab_percent",
+    "cs_failures_rrc_percent","lcs_cs_rate",
+    "ps_failure_rrc_percent"
 ]
 
 def _label(col: str) -> str:
@@ -76,34 +86,41 @@ def _build_header():
         sub_cells.append(html.Th(_label(col), className=cls))  # <<< usa etiqueta visible
     return html.Thead([html.Tr(top_cells), html.Tr(sub_cells)])
 
-def _progress_cell(value, color=None, striped=True, animated=True, decimals=1):
-    # Asegura 0–100
+def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
+                   color=None, striped=True, animated=True, decimals=1):
     try:
-        val = float(value or 0.0)
+        real = float(value if value is not None else 0.0)
     except:
-        val = 0.0
-    # Si tus datos vienen 0–1, descomenta:
-    # if 0 <= val <= 1: val *= 100.0
+        real = 0.0
 
-    val = max(0.0, min(val, 100.0))
-    label = f"{val:.{decimals}f}%"
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+    pct = (real - vmin) / (vmax - vmin) * 100.0
+    pct = max(0.0, min(pct, 100.0))
+
+    label = label_tpl.format(value=real) if label_tpl else f"{real:.{decimals}f}"
 
     classes = ["kb", "kb--primary"]
     if striped:  classes.append("is-striped")
     if animated: classes.append("is-animated")
 
-    # Puedes cambiar color por celda con CSS var:
     container_style = {}
     if color:
-        container_style["--kb-fill"] = color  # ej: "#1e88e5"
+        container_style["--kb-fill"] = color
 
     return html.Div(
-        html.Div(label, className="kb__fill", style={"width": f"{val}%"}),
+        html.Div(label, className="kb__fill", style={"width": f"{pct:.2f}%"}),
         className=" ".join(classes),
         style=container_style,
-        role="progressbar",                 # accesible
-        **{"aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": f"{val:.0f}"}
+        role="progressbar",
+        **{
+            "aria-valuemin": f"{vmin:.0f}",
+            "aria-valuemax": f"{vmax:.0f}",
+            "aria-valuenow": f"{real:.0f}"
+        }
     )
+
+
 
 
 def _fmt_number(v):
@@ -124,8 +141,21 @@ def render_kpi_table(df):
         for col in VISIBLE_ORDER:
             val = row.get(col, None)
             # dentro de render_kpi_table, en el loop de columnas:
+            # dentro del loop de columnas en render_kpi_table:
             if col in PROGRESS_COLS:
-                cell = _progress_cell(val)
+                cfg = progress_cfg(col)
+                cell = _progress_cell(
+                    val,
+                    vmin=cfg["min"],
+                    vmax=cfg["max"],
+                    label_tpl=cfg["label"],
+                    decimals=cfg["decimals"],
+                    # Opcional: color según severidad
+                    # color={"ok":"#4caf50","warn":"#ffb300","bad":"#e53935"}.get(
+                    #     cell_severity(col, float(val) if isinstance(val,(int,float)) else None)
+                    # )
+                )
+
             else:
                 if col in SEVERITY_COLS:
                     # SOLO estas columnas llevan semáforo
