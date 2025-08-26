@@ -42,6 +42,7 @@ GROUPS = [
     (">5%", ["fecha"]),
     (">10%", ["hora"]),
     ("      ", ["noc_cluster"]),
+    ("      ", ["integrity"]),
     ("CS_TRAFF", ["delta_total_erlangs_nocperf","total_erlangs_nocperf"]),
     ("CS_RRC", ["cs_failures_rrc_percent", "cs_failures_rrc"]),
     ("CS_RAB", ["cs_failures_rab_percent", "ps_failures_rab"]),

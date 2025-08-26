@@ -7,7 +7,7 @@ from src.utils import default_date_str, default_hour_str
 
 def serve_layout():
     return dbc.Container([
-        html.H2("Telecom KPIs Monitor", className="my-3"),
+        html.H2("Dashboard Master", className="my-3"),
         build_filters(),  # se llenan opciones en callbacks
         html.Div(id="cards-row", children=[
             dbc.Row([
