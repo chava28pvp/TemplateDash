@@ -1,4 +1,4 @@
-# Dash Telecom KPIs Monitor
+# Dash Telecom KPIs Monitor (dashboard master)
 
 Template de dashboard en Dash con conexión MySQL, filtros dinámicos y actualización periódica.
 
