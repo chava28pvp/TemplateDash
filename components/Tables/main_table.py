@@ -1,9 +1,9 @@
 from dash import html
 import dash_bootstrap_components as dbc
-from src.utils import cell_severity, progress_cfg
+from src.Utils.utils_umbrales import cell_severity, progress_cfg
 
 
-# 1) DICCIONARIO de etiquetas visibles por columna (puedes ajustar libremente)
+# 1) DICCIONARIO de etiquetas visibles por columna
 DISPLAY_NAME = {
     "fecha": "Fecha",
     "hora": "Hora",

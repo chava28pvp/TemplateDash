@@ -3,7 +3,7 @@ import dash_bootstrap_components as dbc
 
 from components.filters import build_filters
 from src.config import REFRESH_INTERVAL_MS
-from src.utils import default_date_str, default_hour_str
+from src.Utils.utils_umbrales import default_date_str, default_hour_str
 
 def serve_layout():
     return dbc.Container([

@@ -1,11 +1,11 @@
-from dash import Input, Output, State, callback_context, no_update
-from components.kpi_table import render_kpi_table
-from components.simple_tables import render_simple_table
+from dash import Input, Output
+from components.Tables.main_table import render_kpi_table
+from components.Tables.simple_tables import render_simple_table
 from components.charts import line_by_time_multi
 from .data_access import fetch_kpis, distinct_vendors, distinct_clusters
 from .config import REFRESH_INTERVAL_MS
-from src.utils import HEADER_MAP, TABLE_TOP_ORDER, cols_from_order, TABLE_VENDOR_SUMMARY_ORDER
-
+from src.Utils.utils_tables import cols_from_order, TABLE_VENDOR_SUMMARY_ORDER, HEADER_MAP, TABLE_TOP_ORDER
+from src.Utils.utils_charts import metrics_for_chart_cs, metrics_for_chart_ps
 def register_callbacks(app):
 
     # 1) Actualiza opciones de vendor/cluster cuando cambian fecha/hora
@@ -28,8 +28,7 @@ def register_callbacks(app):
 
         return vendor_opts, vendor_val, cluster_opts, cluster_val
 
-    # 2) Refresca tabla y gráfica ante: filtros o intervalos
-    # 2) Refresca tabla y dos gráficas ante: filtros o intervalos
+
     # 2) Refresca tabla y dos gráficas ante: filtros o intervalos
     @app.callback(
         Output("table-container", "children"),
@@ -53,25 +52,10 @@ def register_callbacks(app):
             limit=None
         )
 
-        # A) Métricas para la gráfica A (CS)
-        metrics_for_chart_a = [
-            "total_erlangs_nocperf",
-            "cs_failures_rrc_percent",
-            "cs_failures_rab_percent",
-            "lcs_cs_rate",
-        ]
-        # B) Métricas para la gráfica B (PS)
-        metrics_for_chart_b = [
-            "total_mbytes_nocperf",
-            "ps_failure_rrc_percent",
-            "ps_failures_rab_percent",
-            "lcs_ps_rate",
-        ]
-
         table = render_kpi_table(df)
-        chart_a = line_by_time_multi(df, metrics_for_chart_a)
-        chart_b = line_by_time_multi(df, metrics_for_chart_b)
-        return table, chart_a, chart_b
+        chart_cs = line_by_time_multi(df, metrics_for_chart_cs)
+        chart_ps = line_by_time_multi(df, metrics_for_chart_ps)
+        return table, chart_cs, chart_ps
 
     # 3) Configura el intervalo visual del card de filtros (sincronizado con global)
     @app.callback(

@@ -1,7 +1,7 @@
 # charts.py
 from dash import dcc
 import plotly.express as px
-from src.utils import HEADER_MAP  # {"total_erlangs_nocperf":"CS_TRAFF_ERL", ...}
+from src.Utils.utils_tables import HEADER_MAP
 
 def line_by_time_multi(df, metrics):
     """

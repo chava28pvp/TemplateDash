@@ -1,6 +1,6 @@
 from dash import html, dcc
 import dash_bootstrap_components as dbc
-from src.utils import default_date_str, default_hour_str
+from src.Utils.utils_umbrales import default_date_str, default_hour_str
 
 def build_filters(vendor_options=None, cluster_options=None):
     vendor_options = vendor_options or []
