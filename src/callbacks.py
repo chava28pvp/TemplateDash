@@ -29,37 +29,49 @@ def register_callbacks(app):
         return vendor_opts, vendor_val, cluster_opts, cluster_val
 
     # 2) Refresca tabla y gráfica ante: filtros o intervalos
+    # 2) Refresca tabla y dos gráficas ante: filtros o intervalos
+    # 2) Refresca tabla y dos gráficas ante: filtros o intervalos
     @app.callback(
         Output("table-container", "children"),
-        Output("line-chart", "children"),
+        Output("line-chart-a", "children"),
+        Output("line-chart-b", "children"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
-        Input("chart-metric", "value"),
         Input("refresh-interval-global", "n_intervals"),
     )
-    def refresh_outputs(fecha, hora, vendors, clusters, metric, _n):
-        # vendors/clusters pueden ser None o string (cuando una sola opción)
+    def refresh_outputs(fecha, hora, vendors, clusters, _n):
         if isinstance(vendors, str): vendors = [vendors]
         if isinstance(clusters, str): clusters = [clusters]
 
         df = fetch_kpis(
             fecha=fecha,
             hora=hora,
-            vendors=vendors if vendors else None,
-            clusters=clusters if clusters else None,
+            vendors=vendors or None,
+            clusters=clusters or None,
             limit=None
         )
-        metrics_for_chart = [
+
+        # A) Métricas para la gráfica A (CS)
+        metrics_for_chart_a = [
             "total_erlangs_nocperf",
             "cs_failures_rrc_percent",
             "cs_failures_rab_percent",
             "lcs_cs_rate",
         ]
+        # B) Métricas para la gráfica B (PS)
+        metrics_for_chart_b = [
+            "total_mbytes_nocperf",
+            "ps_failure_rrc_percent",
+            "ps_failures_rab_percent",
+            "lcs_ps_rate",
+        ]
+
         table = render_kpi_table(df)
-        chart = line_by_time_multi(df, metrics_for_chart)
-        return table, chart
+        chart_a = line_by_time_multi(df, metrics_for_chart_a)
+        chart_b = line_by_time_multi(df, metrics_for_chart_b)
+        return table, chart_a, chart_b
 
     # 3) Configura el intervalo visual del card de filtros (sincronizado con global)
     @app.callback(
@@ -89,13 +101,13 @@ def register_callbacks(app):
             fecha=fecha, hora=hora, vendors=vendors or None, clusters=clusters or None
         )
         cols_top = cols_from_order(TABLE_TOP_ORDER, HEADER_MAP)
-        table_a = render_simple_table(df_top, "Reporte por PS", cols_top)
+        table_a = render_simple_table(df_top, "Reporte por CS", cols_top)
 
         # B) Resumen por vendor
         df_vs = fetch_kpis(
             fecha=fecha, hora=hora, vendors=vendors or None, clusters=clusters or None
         )
         cols_vs = cols_from_order(TABLE_VENDOR_SUMMARY_ORDER, HEADER_MAP)
-        table_b = render_simple_table(df_vs, "Reporte por CS", cols_vs)
+        table_b = render_simple_table(df_vs, "Reporte por PS", cols_vs)
 
         return table_a, table_b

@@ -16,20 +16,15 @@ def serve_layout():
 
             dbc.Row([
                 dbc.Col(dbc.Card(dbc.CardBody([
-                    html.H4("Gráfica de línea", className="mb-3"),
-                    dcc.Dropdown(
-                        id="chart-metric",
-                        options=[
-                            {"label": "total_mbytes_nocperf", "value": "total_mbytes_nocperf"},
-                            {"label": "total_erlangs_nocperf", "value": "total_erlangs_nocperf"},
-                            {"label": "traffic_gb_att", "value": "traffic_gb_att"},
-                        ],
-                        value="total_mbytes_nocperf",
-                        clearable=False
-                    ),
-                    html.Div(id="line-chart")
-                ]), className="shadow-sm"), md=12, className="my-3")
+                    html.H4("Gráfica A (CS)", className="mb-3"),
+                    html.Div(id="line-chart-a")
+                ]), className="shadow-sm"), md=6, sm=12, className="my-3"),
+                dbc.Col(dbc.Card(dbc.CardBody([
+                    html.H4("Gráfica B (PS)", className="mb-3"),
+                    html.Div(id="line-chart-b")
+                ]), className="shadow-sm"), md=6, sm=12, className="my-3"),
             ]),
+
             # src/layout.py (dentro de serve_layout, debajo de la fila de la gráfica)
             dbc.Row([
                 dbc.Col(html.Div(id="table-bottom-a"), md=6, className="my-3"),
