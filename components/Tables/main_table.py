@@ -1,7 +1,7 @@
 from dash import html
 import dash_bootstrap_components as dbc
 from src.Utils.utils_umbrales import cell_severity, progress_cfg
-
+import pandas as pd
 
 # 1) DICCIONARIO de etiquetas visibles por columna
 DISPLAY_NAME = {
@@ -136,54 +136,65 @@ def render_kpi_table(df):
 
     header = _build_header()
 
+    # 1) Mapa columna → índice para acceso O(1) en tuplas
+    idx_map = {c: i for i, c in enumerate(df.columns)}
+
+    def _safe_get(row_tuple, col):
+        i = idx_map.get(col)
+        if i is None:
+            return None
+        try:
+            return row_tuple[i]
+        except Exception:
+            return None
+
     body_rows = []
-    for _, row in df.iterrows():
+
+    # 2) Itera con itertuples: más rápido que iterrows
+    for row in df.itertuples(index=False, name=None):  # 'row' es una tupla
         tds = []
         for col in VISIBLE_ORDER:
-            val = row.get(col, None)
-            # dentro de render_kpi_table, en el loop de columnas:
-            # dentro del loop de columnas en render_kpi_table:
+            val = _safe_get(row, col)
+
             if col in PROGRESS_COLS:
                 cfg = progress_cfg(col)
                 cell = _progress_cell(
                     val,
-                    vmin=cfg["min"],
-                    vmax=cfg["max"],
-                    label_tpl=cfg["label"],
-                    decimals=cfg["decimals"],
-                    # Opcional: color según severidad
-                    # color={"ok":"#4caf50","warn":"#ffb300","bad":"#e53935"}.get(
-                    #     cell_severity(col, float(val) if isinstance(val,(int,float)) else None)
-                    # )
+                    vmin=cfg.get("min", 0.0),
+                    vmax=cfg.get("max", 100.0),
+                    label_tpl=cfg.get("label", "{value:.1f}"),
+                    decimals=cfg.get("decimals", 1),
+                    # color=_severity_color(col, _to_number_or_none(val))  # opcional
                 )
-
             else:
-                if col in SEVERITY_COLS:
-                    # SOLO estas columnas llevan semáforo
-                    sev = cell_severity(col, float(val) if isinstance(val, (int, float)) else None)
-                    cls = f"cell-{sev}"  # cell-ok | cell-warn | cell-bad
+                # Trata NaN como ausencia
+                num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
+                if col in SEVERITY_COLS and isinstance(num_val, (int, float)):
+                    sev = cell_severity(col, float(num_val))
+                    cls = f"cell-{sev}"
                 else:
-                    cls = "cell-neutral"  # sin color de fondo
+                    cls = "cell-neutral"
 
                 cell = html.Div(_fmt_number(val), className=cls)
 
-            # Clase para trazar divisor fuerte al fin de grupo
             td_cls = "td-cell"
             if col in END_OF_GROUP:
                 td_cls += " td-end-of-group"
 
             tds.append(html.Td(cell, className=td_cls))
+
         body_rows.append(html.Tr(tds))
+
     body = html.Tbody(body_rows)
 
     table = dbc.Table(
-        [header, body],
+        [_build_header(), body],
         bordered=False,
         hover=True,
         responsive=True,
         striped=True,
-        size="sm",                        # tabla compacta
-        className="kpi-table compact"     # clase para CSS
+        size="sm",
+        className="kpi-table compact"
     )
     card = dbc.Card(
         dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]),
