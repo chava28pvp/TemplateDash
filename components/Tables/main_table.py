@@ -1,109 +1,117 @@
 from dash import html
 import dash_bootstrap_components as dbc
-from src.Utils.utils_umbrales import cell_severity, progress_cfg
 import pandas as pd
+from src.Utils.utils_umbrales import cell_severity, progress_cfg
 
-# 1) DICCIONARIO de etiquetas visibles por columna
-DISPLAY_NAME = {
+# =========================
+# Configuración / Constantes
+# =========================
+
+# Keys que identifican una fila (NO se prefijan por network, se muestran una sola vez a la izquierda)
+ROW_KEYS = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
+
+# Grupos SOLO de métricas (sin fecha/hora/vendor/cluster/tech)
+BASE_GROUPS = [
+    ("INTEG",   ["integrity"]),
+    ("CS_TRAFF", ["cs_traff_delta", "cs_traff_erl"]),
+    ("CS_RRC",   ["cs_rrc_ia_percent", "cs_rrc_fail"]),
+    ("CS_RAB",   ["cs_rab_ia_percent", "cs_rab_fail"]),
+    ("CS_DROP",  ["cs_drop_dc_percent", "cs_drop_abnrel"]),
+    ("PS_TRAFF", ["ps_traff_delta", "ps_traff_gb"]),
+    ("PS_RRC",   ["ps_rrc_ia_percent", "ps_rrc_fail"]),
+    ("PS_RAB",   ["ps_rab_ia_percent", "ps_rab_fail"]),
+    ("PS_S1",    ["ps_s1_ia_percent", "ps_s1_fail"]),
+    ("PS_DROP",  ["ps_drop_dc_percent", "ps_drop_abnrel"]),
+]
+
+# Columnas base que llevan progress bar y severidad (sin prefijo de red)
+BASE_PROGRESS_COLS = [
+    "ps_rrc_fail", "ps_rab_fail", "ps_s1_fail", "ps_drop_abnrel",
+    "cs_rrc_fail", "cs_rab_fail", "cs_drop_abnrel"
+]
+BASE_SEVERITY_COLS = [
+    "ps_rrc_ia_percent", "ps_rab_ia_percent", "ps_s1_ia_percent", "ps_drop_dc_percent",
+    "cs_rrc_ia_percent", "cs_rab_ia_percent", "cs_drop_dc_percent"
+]
+
+# Etiquetas visibles para alias (sin prefijo)
+DISPLAY_NAME_BASE = {
+    # ROW_KEYS
     "fecha": "Fecha",
     "hora": "Hora",
     "vendor": "Vendor",
-    "integrity": "Integrity",
+    "technology": "Tech",
     "noc_cluster": "Cluster",
-    "lcs_ps_rate": "%DC",
-    "lcs_cs_rate": "%DC",
-    "ps_failure_rrc_percent": "%IA",
-    "ps_failure_rrc": "FAIL",
-    "ps_failures_rab_percent": "%IA",
-    "ps_failures_rab": "FAIL",
-    "cs_failures_rrc_percent": "%IA",
-    "cs_failures_rrc": "FAIL",
-    "cs_failures_rab_percent": "%IA",
-    "cs_failures_rab": "FAIL",
-    "total_mbytes_nocperf": "GB",
-    "delta_total_mbytes_nocperf": "DELTA",
-    "total_erlangs_nocperf": "ERL",
-    "delta_total_erlangs_nocperf": "DELTA",
-    "traffic_gb_att": "GB",
-    "delta_traffic_gb_att": "DELTA",
-    "traffic_amr_att": "ERL",
-    "delta_traffic_amr_att": "DELTA",
-    "traffic_gb_plmn2": "GB",
-    "delta_traffic_gb_plmn2": "DELTA",
-    "traffic_amr_plmn2": "ERL",
-    "delta_traffic_amr_plmn2": "DELTA",
-    "ps_abnormal_releases": "ABNREL",
-    "cs_abnormal_releases": "ABNREL",
+
+    # Métricas
+    "integrity": "Integrity",
+
+    "ps_traff_delta": "DELTA",
+    "ps_traff_gb": "GB",
+    "ps_rrc_ia_percent": "%IA",
+    "ps_rrc_fail": "FAIL",
+    "ps_rab_ia_percent": "%IA",
+    "ps_rab_fail": "FAIL",
+    "ps_s1_ia_percent": "%IA",
+    "ps_s1_fail": "FAIL",
+    "ps_drop_dc_percent": "%DC",
+    "ps_drop_abnrel": "ABNREL",
+
+    "cs_traff_delta": "DELTA",
+    "cs_traff_erl": "ERL",
+    "cs_rrc_ia_percent": "%IA",
+    "cs_rrc_fail": "FAIL",
+    "cs_rab_ia_percent": "%IA",
+    "cs_rab_fail": "FAIL",
+    "cs_drop_dc_percent": "%DC",
+    "cs_drop_abnrel": "ABNREL",
 }
 
-# Grupos (header superior) → columnas (sub-headers)
-GROUPS = [
-    (">2%", ["vendor"]),
-    (">5%", ["fecha"]),
-    (">10%", ["hora"]),
-    ("      ", ["noc_cluster"]),
-    ("      ", ["integrity"]),
-    ("CS_TRAFF", ["delta_total_erlangs_nocperf","total_erlangs_nocperf"]),
-    ("CS_RRC", ["cs_failures_rrc_percent", "cs_failures_rrc"]),
-    ("CS_RAB", ["cs_failures_rab_percent", "ps_failures_rab"]),
-    ("CS_DROP", ["lcs_cs_rate", "cs_abnormal_releases"]),
-    ("PS_TRAFF", ["delta_total_mbytes_nocperf", "total_mbytes_nocperf"]),
-    ("PS_RRC", ["ps_failure_rrc_percent", "ps_failure_rrc"]),
-    ("PS_RAB", ["ps_failures_rab_percent", "ps_failures_rab"]),
-    ("PS_DROP", ["lcs_ps_rate", "ps_abnormal_releases"]),
-
-]
-
-# Orden visible = concatenación de todos los sub-headers
-VISIBLE_ORDER = [col for _, cols in GROUPS for col in cols]
-
-# Última columna de cada grupo (para marcar divisores verticales)
-END_OF_GROUP = {cols[-1] for _, cols in GROUPS}
-
-# Columnas con progress bar (0-100)
-# Sustituye PROGRESS_COLS por una configuración más rica:
-PROGRESS_COLS = [
-    "cs_failures_rrc", "ps_failures_rab", "cs_abnormal_releases",
-    "ps_failure_rrc", "ps_failures_rab", "ps_abnormal_releases"
-]
+# Derivados
+INDEX_KEYS = ROW_KEYS
+VALUE_COLS = sorted({c for _, cols in BASE_GROUPS for c in cols} | {"integrity"})
 
 
-# Columnas con semáforo
-SEVERITY_COLS = [
-    "cs_failures_rrc_percent","lcs_cs_rate",
-    "ps_failure_rrc_percent"
-]
+# =========================
+# Helpers
+# =========================
 
-def _label(col: str) -> str:
-    return DISPLAY_NAME.get(col, col)  # fallback al nombre real si no está mapeado
+def strip_net(colname: str) -> str:
+    """ATT__ps_rrc_fail -> ps_rrc_fail; si no hay prefijo, retorna igual."""
+    if "__" in colname:
+        return colname.split("__", 1)[1]
+    return colname
 
-def _build_header():
-    top_cells = [html.Th(title, colSpan=len(cols), className="th-group") for title, cols in GROUPS]
-    sub_cells = []
-    for col in VISIBLE_ORDER:
-        cls = "th-sub"
-        if col in END_OF_GROUP:
-            cls += " th-end-of-group"
-        sub_cells.append(html.Th(_label(col), className=cls))  # <<< usa etiqueta visible
-    return html.Thead([html.Tr(top_cells), html.Tr(sub_cells)])
+def _label_base(base: str) -> str:
+    return DISPLAY_NAME_BASE.get(base, base)
+
+def _fmt_number(v):
+    if v is None:
+        return "-"
+    if isinstance(v, float):
+        return f"{v:,.3f}"
+    return str(v)
 
 def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
                    color=None, striped=True, animated=True, decimals=1):
     try:
         real = float(value if value is not None else 0.0)
-    except:
+    except Exception:
         real = 0.0
 
     if vmax <= vmin:
         vmax = vmin + 1.0
+
     pct = (real - vmin) / (vmax - vmin) * 100.0
     pct = max(0.0, min(pct, 100.0))
 
     label = label_tpl.format(value=real) if label_tpl else f"{real:.{decimals}f}"
 
     classes = ["kb", "kb--primary"]
-    if striped:  classes.append("is-striped")
-    if animated: classes.append("is-animated")
+    if striped:
+        classes.append("is-striped")
+    if animated:
+        classes.append("is-animated")
 
     container_style = {}
     if color:
@@ -117,26 +125,117 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
         **{
             "aria-valuemin": f"{vmin:.0f}",
             "aria-valuemax": f"{vmax:.0f}",
-            "aria-valuenow": f"{real:.0f}"
-        }
+            "aria-valuenow": f"{real:.0f}",
+        },
     )
 
 
+# =========================
+# Lógica multi-network
+# =========================
+
+def expand_groups_for_networks(networks):
+    """
+    Devuelve:
+      - groups_3lvl: [(net, group_title, [prefixed_cols])]
+      - visible_order: lista lineal de todas las columnas prefijadas
+      - end_of_group: set con la última col de cada (network, group)
+    """
+    groups_3lvl, visible_order, end_of_group = [], [], set()
+    for net in networks:
+        for grp_title, base_cols in BASE_GROUPS:
+            cols = [f"{net}__{c}" for c in base_cols]
+            groups_3lvl.append((net, grp_title, cols))
+            visible_order.extend(cols)
+            end_of_group.add(cols[-1])
+    return groups_3lvl, visible_order, end_of_group
+
+def prefixed_progress_cols(networks):
+    return {f"{net}__{c}" for net in networks for c in BASE_PROGRESS_COLS}
+
+def prefixed_severity_cols(networks):
+    return {f"{net}__{c}" for net in networks for c in BASE_SEVERITY_COLS}
+
+def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
+    """
+    Si networks es None, usa todas las redes presentes en df_long['network'].
+    """
+    if networks is None:
+        networks = sorted(df_long["network"].dropna().unique().tolist())
+
+    df = df_long[df_long["network"].isin(networks)].copy()
+    if df.empty:
+        return df
+
+    wide = df.pivot_table(
+        index=INDEX_KEYS,
+        columns="network",
+        values=VALUE_COLS,
+        aggfunc="first"
+    )
+    wide.columns = [f"{net}__{val}" for (val, net) in wide.columns]
+    wide = wide.reset_index()
+    return wide
 
 
-def _fmt_number(v):
-    if v is None: return "-"
-    if isinstance(v, float):
-        return f"{v:,.3f}"
-    return str(v)
 
-def render_kpi_table(df):
-    if df is None or df.empty:
+# =========================
+# Header 3 niveles (keys + grupos por network)
+# =========================
+
+def build_header_3lvl(groups_3lvl, end_of_group_set):
+    # Nivel 1: celdas izquierdas (ROW_KEYS) con rowSpan=3
+    left = [
+        html.Th(DISPLAY_NAME_BASE.get(k, k).title(), rowSpan=3, className="th-left")
+        for k in ROW_KEYS
+    ]
+
+    # Nivel 1: Networks (colSpan por cantidad de métricas)
+    net_to_span = {}
+    for net, _, cols in groups_3lvl:
+        net_to_span[net] = net_to_span.get(net, 0) + len(cols)
+    row1 = left + [html.Th(net, colSpan=span, className="th-network") for net, span in net_to_span.items()]
+
+    # Nivel 2: Títulos de grupo por network
+    row2 = [html.Th(grp, colSpan=len(cols), className="th-group") for (_, grp, cols) in groups_3lvl]
+
+    # Nivel 3: Subheaders de cada métrica
+    row3 = []
+    for _, _, cols in groups_3lvl:
+        for c in cols:
+            base = strip_net(c)
+            cls = "th-sub"
+            if c in end_of_group_set:
+                cls += " th-end-of-group"
+            row3.append(html.Th(_label_base(base), className=cls))
+
+    return html.Thead([html.Tr(row1), html.Tr(row2), html.Tr(row3)])
+
+
+# =========================
+# Render principal
+# =========================
+
+def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
+    if df_long is None or df_long.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
 
-    header = _build_header()
+    # Derivar redes si no se especifican (para “mostrar todas”)
+    if networks is None:
+        networks = sorted(df_long["network"].dropna().unique().tolist())
 
-    # 1) Mapa columna → índice para acceso O(1) en tuplas
+    df = pivot_by_network(df_long, networks=networks)
+    if df is None or df.empty:
+        return dbc.Alert("Sin datos para las redes seleccionadas.", color="warning", className="my-3")
+
+    # A partir de aquí networks ya es una lista, no None
+    groups_3lvl, METRIC_ORDER, END_OF_GROUP = expand_groups_for_networks(networks)
+    PROGRESS_COLS = prefixed_progress_cols(networks)
+    SEVERITY_COLS = prefixed_severity_cols(networks)
+
+    header = build_header_3lvl(groups_3lvl, END_OF_GROUP)
+
+    VISIBLE_ORDER = ROW_KEYS + METRIC_ORDER
     idx_map = {c: i for i, c in enumerate(df.columns)}
 
     def _safe_get(row_tuple, col):
@@ -149,58 +248,40 @@ def render_kpi_table(df):
             return None
 
     body_rows = []
-
-    # 2) Itera con itertuples: más rápido que iterrows
-    for row in df.itertuples(index=False, name=None):  # 'row' es una tupla
+    for row in df.itertuples(index=False, name=None):
         tds = []
-        for col in VISIBLE_ORDER:
+        # 1) keys
+        for key in ROW_KEYS:
+            val = _safe_get(row, key)
+            tds.append(html.Td(html.Div(_fmt_number(val), className="cell-key"), className="td-key"))
+        # 2) métricas
+        for col in METRIC_ORDER:
             val = _safe_get(row, col)
-
+            base_name = strip_net(col)
             if col in PROGRESS_COLS:
-                cfg = progress_cfg(col)
+                cfg = progress_cfg(base_name)
                 cell = _progress_cell(
                     val,
                     vmin=cfg.get("min", 0.0),
                     vmax=cfg.get("max", 100.0),
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
-                    # color=_severity_color(col, _to_number_or_none(val))  # opcional
                 )
             else:
-                # Trata NaN como ausencia
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
-                if col in SEVERITY_COLS and isinstance(num_val, (int, float)):
-                    sev = cell_severity(col, float(num_val))
-                    cls = f"cell-{sev}"
+                if (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
+                    cls = f"cell-{cell_severity(base_name, float(num_val))}"
                 else:
                     cls = "cell-neutral"
-
                 cell = html.Div(_fmt_number(val), className=cls)
 
-            td_cls = "td-cell"
-            if col in END_OF_GROUP:
-                td_cls += " td-end-of-group"
-
+            td_cls = "td-cell" + (" td-end-of-group" if col in END_OF_GROUP else "")
             tds.append(html.Td(cell, className=td_cls))
 
         body_rows.append(html.Tr(tds))
 
     body = html.Tbody(body_rows)
-
-    table = dbc.Table(
-        [_build_header(), body],
-        bordered=False,
-        hover=True,
-        responsive=True,
-        striped=True,
-        size="sm",
-        className="kpi-table compact"
-    )
-    card = dbc.Card(
-        dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]),
-        className="shadow-sm"
-    )
-    return card
-
-
+    table = dbc.Table([header, body], bordered=False, hover=True, responsive=True, striped=True, size="sm",
+                      className="kpi-table compact")
+    return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
 
