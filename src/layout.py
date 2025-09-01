@@ -33,5 +33,5 @@ def serve_layout():
 
         ]),
         dcc.Store(id="defaults-store", data={"fecha": default_date_str(), "hora": default_hour_str()}),
-        dcc.Interval(id="refresh-interval-global", interval=REFRESH_INTERVAL_MS, n_intervals=0),
+        dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0)
     ], fluid=True)

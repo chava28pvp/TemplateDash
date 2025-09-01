@@ -52,13 +52,13 @@ def cell_severity(column: str, value):
 # Config de escalas/formato por KPI para progress bars
 PROGRESS_CONFIG = {
     # Ejemplos: ajusta a tus rangos reales
-    "cs_failures_rrc":       {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
-    "ps_failures_rab":       {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
-    "cs_abnormal_releases":  {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
-    "ps_failure_rrc":        {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
-    "ps_abnormal_releases":  {"min": 0, "max": 300, "decimals": 0, "label": "{value:.0f}"},
-    # Si alguna columna es realmente porcentaje, déjala en 0–100
-    # "lcs_ps_rate": {"min": 0, "max": 100, "decimals": 1, "label": "{value:.1f}%"},
+    "ps_rrc_fail":{"min": 0, "max": 30, "decimals": 0, "label": "{value:.0f}"},
+    "ps_rab_fail":{"min": 0, "max": 30, "decimals": 0, "label": "{value:.0f}"},
+    "ps_s1_fail":{"min": 0, "max": 30, "decimals": 0, "label": "{value:.0f}"},
+    "ps_drop_abnrel":{"min": 0, "max": 30, "decimals": 0, "label": "{value:.0f}"},
+    "cs_rrc_fail":{"min": 0, "max": 10, "decimals": 0, "label": "{value:.0f}"},
+    "cs_rab_fail":{"min": 0, "max": 10, "decimals": 0, "label": "{value:.0f}"},
+    "cs_drop_abnrel":{"min": 0, "max": 30, "decimals": 0, "label": "{value:.0f}"}
 }
 
 def progress_cfg(column: str):

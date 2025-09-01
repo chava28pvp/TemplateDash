@@ -27,7 +27,7 @@ BASE_GROUPS = [
 # Columnas base que llevan progress bar y severidad (sin prefijo de red)
 BASE_PROGRESS_COLS = [
     "ps_rrc_fail", "ps_rab_fail", "ps_s1_fail", "ps_drop_abnrel",
-    "cs_rrc_fail", "cs_rab_fail", "cs_drop_abnrel"
+    "cs_rrc_fa                                          il", "cs_rab_fail", "cs_drop_abnrel"
 ]
 BASE_SEVERITY_COLS = [
     "ps_rrc_ia_percent", "ps_rab_ia_percent", "ps_s1_ia_percent", "ps_drop_dc_percent",
@@ -82,6 +82,18 @@ def strip_net(colname: str) -> str:
         return colname.split("__", 1)[1]
     return colname
 
+def _resolve_sort_col(df, metric_order, sort_col):
+    if not sort_col:
+        return None
+    if sort_col in df.columns:
+        return sort_col
+    base = strip_net(sort_col)
+    for c in metric_order:
+        if strip_net(c) == base and c in df.columns:
+            return c
+    cand = [c for c in df.columns if c.endswith(f"__{base}")]
+    return cand[0] if cand else None
+
 def _label_base(base: str) -> str:
     return DISPLAY_NAME_BASE.get(base, base)
 
@@ -89,11 +101,12 @@ def _fmt_number(v):
     if v is None:
         return "-"
     if isinstance(v, float):
-        return f"{v:,.3f}"
+        return f"{v:,.1f}"
     return str(v)
 
 def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
-                   color=None, striped=True, animated=True, decimals=1):
+                   color=None, striped=True, animated=True, decimals=1,
+                   width_px=140, show_value_right=False):
     try:
         real = float(value if value is not None else 0.0)
     except Exception:
@@ -113,11 +126,11 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
     if animated:
         classes.append("is-animated")
 
-    container_style = {}
+    container_style = {"--kb-width": f"{width_px}px"}  # << controla ancho por celda
     if color:
         container_style["--kb-fill"] = color
 
-    return html.Div(
+    bar = html.Div(
         html.Div(label, className="kb__fill", style={"width": f"{pct:.2f}%"}),
         className=" ".join(classes),
         style=container_style,
@@ -128,6 +141,10 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
             "aria-valuenow": f"{real:.0f}",
         },
     )
+
+    if show_value_right:
+        return html.Div([bar, html.Div(label, className="kb-value")], className="kb-wrap")
+    return bar
 
 
 # =========================
@@ -194,10 +211,17 @@ def build_header_3lvl(groups_3lvl, end_of_group_set):
     net_to_span = {}
     for net, _, cols in groups_3lvl:
         net_to_span[net] = net_to_span.get(net, 0) + len(cols)
-    row1 = left + [html.Th(net, colSpan=span, className="th-network") for net, span in net_to_span.items()]
+
+    row1 = left + [
+        html.Th(net, colSpan=span, className="th-network")
+        for net, span in net_to_span.items()
+    ]
 
     # Nivel 2: Títulos de grupo por network
-    row2 = [html.Th(grp, colSpan=len(cols), className="th-group") for (_, grp, cols) in groups_3lvl]
+    row2 = [
+        html.Th(grp, colSpan=len(cols), className="th-group")
+        for (_, grp, cols) in groups_3lvl
+    ]
 
     # Nivel 3: Subheaders de cada métrica
     row3 = []
@@ -218,7 +242,11 @@ def build_header_3lvl(groups_3lvl, end_of_group_set):
 
 def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
     if df_long is None or df_long.empty:
-        return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
+        return dbc.Alert(
+            "Sin datos para los filtros seleccionados.",
+            color="warning",
+            className="my-3",
+        )
 
     # Derivar redes si no se especifican (para “mostrar todas”)
     if networks is None:
@@ -226,7 +254,11 @@ def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
 
     df = pivot_by_network(df_long, networks=networks)
     if df is None or df.empty:
-        return dbc.Alert("Sin datos para las redes seleccionadas.", color="warning", className="my-3")
+        return dbc.Alert(
+            "Sin datos para las redes seleccionadas.",
+            color="warning",
+            className="my-3",
+        )
 
     # A partir de aquí networks ya es una lista, no None
     groups_3lvl, METRIC_ORDER, END_OF_GROUP = expand_groups_for_networks(networks)
@@ -234,7 +266,6 @@ def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
     header = build_header_3lvl(groups_3lvl, END_OF_GROUP)
-
     VISIBLE_ORDER = ROW_KEYS + METRIC_ORDER
     idx_map = {c: i for i, c in enumerate(df.columns)}
 
@@ -250,14 +281,22 @@ def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
     body_rows = []
     for row in df.itertuples(index=False, name=None):
         tds = []
+
         # 1) keys
         for key in ROW_KEYS:
             val = _safe_get(row, key)
-            tds.append(html.Td(html.Div(_fmt_number(val), className="cell-key"), className="td-key"))
+            tds.append(
+                html.Td(
+                    html.Div(_fmt_number(val), className="cell-key"),
+                    className="td-key",
+                )
+            )
+
         # 2) métricas
         for col in METRIC_ORDER:
             val = _safe_get(row, col)
             base_name = strip_net(col)
+
             if col in PROGRESS_COLS:
                 cfg = progress_cfg(base_name)
                 cell = _progress_cell(
@@ -266,9 +305,13 @@ def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
                     vmax=cfg.get("max", 100.0),
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
+                    width_px=140,         # << ancho consistente y legible
+                    show_value_right=False,  # pon True si prefieres el número afuera
                 )
             else:
-                num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
+                num_val = (
+                    None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
+                )
                 if (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
                     cls = f"cell-{cell_severity(base_name, float(num_val))}"
                 else:
@@ -281,7 +324,20 @@ def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
         body_rows.append(html.Tr(tds))
 
     body = html.Tbody(body_rows)
-    table = dbc.Table([header, body], bordered=False, hover=True, responsive=True, striped=True, size="sm",
-                      className="kpi-table compact")
-    return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
+
+    table = dbc.Table(
+        [header, body],
+        bordered=False,
+        hover=True,
+        responsive=True,
+        striped=True,
+        size="sm",
+        className="kpi-table compact",
+    )
+
+    return dbc.Card(
+        dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]),
+        className="shadow-sm",
+    )
+
 

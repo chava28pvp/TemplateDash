@@ -1,0 +1,135 @@
+/* ======= Base tabla ======= */
+.kpi-table {
+  border-collapse: separate;   /* necesario para bordes limpios por celda */
+  border-spacing: 0;
+  table-layout: auto;
+  width: 100%;
+  background: #fff;
+
+  /* alturas aproximadas de cada fila de header (ajusta según tu padding/size) */
+  --hdr-h1: 36px;   /* fila 1: Networks */
+  --hdr-h2: 32px;   /* fila 2: Grupos */
+  --hdr-h3: 32px;   /* fila 3: Sub-headers */
+}
+
+/* Rejilla completa (todas las celdas con borde) */
+.kpi-table th,
+.kpi-table td {
+  border: 1px solid #d0d7e2;   /* borde fino por defecto */
+}
+
+/* Tamaño y tipografía compactos */
+.kpi-table.compact {
+  font-size: 0.85rem;
+}
+.kpi-table.compact td,
+.kpi-table.compact th {
+  padding: 0.25rem 0.5rem;
+}
+
+/* ======= Encabezados ======= */
+.kpi-table thead th {
+  text-align: center;
+  vertical-align: middle;
+  background: #f8fafc;
+  font-weight: 600;
+  position: sticky;        /* 👈 se quedan fijos al hacer scroll */
+  z-index: 2;
+}
+.kpi-table thead tr:nth-child(1) th { top: 0; }
+.kpi-table thead tr:nth-child(2) th { top: var(--hdr-h1); }
+.kpi-table thead tr:nth-child(3) th { top: calc(var(--hdr-h1) + var(--hdr-h2)); }
+
+/* Nivel 1 (Networks) */
+.kpi-table .th-network {
+  background: #e9eef6;
+  font-weight: 700;
+  border-bottom: 2px solid #cbd5e1;
+}
+
+/* Nivel 2 (Grupos) */
+.kpi-table .th-group {
+  background: #eef2f7;
+  font-weight: 700;
+  border-top: 1px solid #d0d7e2;
+  border-bottom: 2px solid #cbd5e1;
+  border-right: 2px solid #b6c2d0;
+}
+
+/* Nivel 3 (Sub-headers) */
+.kpi-table .th-sub {
+  background: #f8fafc;
+  font-weight: 600;
+  border-bottom: 1px solid #dee2e6;
+  border-right: 1px solid #e1e7ef;
+}
+.kpi-table .th-end-of-group {
+  border-right: 2px solid #b6c2d0 !important;
+}
+
+/* ======= Cuerpo ======= */
+.kpi-table tbody td {
+  border-right: 1px solid #eef2f7;
+  border-bottom: 1px solid #eef2f7;
+}
+.kpi-table tbody td.td-end-of-group {
+  border-right: 2px solid #b6c2d0 !important;
+}
+
+/* Última fila: línea de cierre inferior */
+.kpi-table tbody tr:last-child td {
+  border-bottom: 1px solid #d0d7e2;
+}
+
+/* Rayado suave + hover */
+.kpi-table tbody tr:nth-child(odd) td {
+  background: #fbfdff;
+}
+.kpi-table tbody tr:hover td {
+  background: #f5f9ff;
+}
+
+/* ======= Columna(s) izquierda(s) fija(s) ======= */
+.kpi-table .th-left,
+.kpi-table .td-key {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: #ffffff;
+  box-shadow: 2px 0 0 rgba(0,0,0,0.04);
+  min-width: 140px;     /* ancho fijo para consistencia */
+}
+/* Si fijas más columnas, define offsets acumulados:
+.kpi-table .td-key.col-2, .kpi-table .th-left.col-2 { left: 140px; }
+.kpi-table .td-key.col-3, .kpi-table .th-left.col-3 { left: 280px; }
+*/
+
+/* ======= Envoltura con scroll ======= */
+.kpi-table-wrap {
+  max-height: 480px;          /* 👈 alto máximo visible */
+  overflow-y: auto;           /* 👈 scroll vertical */
+  overflow-x: auto;           /* 👈 scroll horizontal */
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.25rem;
+}
+
+
+
+/* Colores por severidad (existentes) */
+.cell-ok   { background: #e9f7ef; }
+.cell-warn { background: #fff8e1; }
+.cell-bad  { background: #ffebee; }
+
+
+/*filter per column*/
+
+/* botones de orden */
+/* coloca esto en tu CSS */
+
+
+
+
+
