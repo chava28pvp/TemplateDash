@@ -126,9 +126,21 @@
 
 /*filter per column*/
 
-/* botones de orden */
-/* coloca esto en tu CSS */
+.th-sort-wrap { display:flex; align-items:center; gap:.35rem; justify-content:center; }
+.sort-btn { border:none; background:transparent; padding:0; cursor:pointer; font-size:.9rem; }
+.th-sorted { background: #eef6ff; } /* resalta la col ordenada */
 
+/* Estilos base */
+.cell-excelente { background-color: var(--color-excelente, #28a745); color: white; }
+.cell-bueno { background-color: var(--color-bueno, #ffc107); color: black; }
+.cell-regular { background-color: var(--color-regular, #fd7e14); color: white; }
+.cell-critico { background-color: var(--color-critico, #dc3545); color: white; }
+.cell-neutral { background-color: #f8f9fa; }
+
+/* Estilos dinámicos basados en configuración */
+.cell-good { background-color: var(--umbral-color-good, #28a745); }
+.cell-warning { background-color: var(--umbral-color-warning, #ffc107); }
+.cell-critical { background-color: var(--umbral-color-critical, #dc3545); }
 
 
 

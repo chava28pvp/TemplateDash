@@ -1,5 +1,6 @@
-from dash import Input, Output, State, no_update
-from components.Tables.main_table import render_kpi_table_multinet
+from dash import Input, Output, State, no_update, html, dcc, dash, callback_context
+import dash_bootstrap_components as dbc
+from components.Tables.main_table import render_kpi_table_multinet, strip_net
 from components.Tables.simple_tables import render_simple_table
 from components.charts import line_by_time_multi
 from .data_access import fetch_kpis
@@ -12,11 +13,13 @@ from src.Utils.utils_tables import (
 )
 from src.Utils.utils_charts import metrics_for_chart_cs, metrics_for_chart_ps
 from src.Utils.utils_time import now_local
+from src.Utils.umbrales_manager import UmbralesManager
 
 
 # =========================
 # Helpers
 # =========================
+umbrales_manager = UmbralesManager()
 
 def _apply_multi(df, col, selected):
     if not selected:  # None, [], ()
@@ -66,6 +69,30 @@ def register_callbacks(app):
         # <- SIN preselección
         return net_opts, [], tech_opts, []
 
+    from dash import ALL, ctx
+
+    @app.callback(
+        Output("sort-state", "data"),
+        Input({"type": "sort-btn", "col": ALL}, "n_clicks"),
+        State("sort-state", "data"),
+        prevent_initial_call=True,
+    )
+    def on_click_sort(n_clicks_list, sort_state):
+        sort_state = sort_state or {"column": None, "ascending": True}
+        # ¿qué botón disparó?
+        trig = ctx.triggered_id  # dict con {"type": "sort-btn", "col": "..."} o None
+        if not trig or "col" not in trig:
+            return sort_state
+
+        clicked_col = trig["col"]  # viene con prefijo (p.ej. "ATT__ps_rrc_fail")
+        # Si es la misma columna, invertimos asc/desc; si es nueva, asc True por defecto
+        if sort_state.get("column") in (clicked_col, strip_net(clicked_col)):
+            sort_state["ascending"] = not sort_state.get("ascending", True)
+        else:
+            sort_state["column"] = clicked_col
+            sort_state["ascending"] = True
+        return sort_state
+
     # -------------------------------------------------
     # 1) Actualiza opciones de Vendor/Cluster
     #     cuando cambian fecha/hora/network/technology
@@ -114,8 +141,9 @@ def register_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("refresh-timer", "n_intervals"),
+        Input("sort-state", "data"),  # ← nuevo
     )
-    def refresh_outputs(fecha, hora, networks, technologies, vendors, clusters, _n):
+    def refresh_outputs(fecha, hora, networks, technologies, vendors, clusters, _n, sort_state):
         networks = _ensure_list(networks)
         technologies = _ensure_list(technologies)
         vendors = _ensure_list(vendors)
@@ -128,21 +156,31 @@ def register_callbacks(app):
             clusters=clusters or None,
             limit=None,
         )
-
-        # Aplica filtros solo si hay selección
         df = _apply_multi(df, "network", networks)
         df = _apply_multi(df, "technology", technologies)
 
-        # Redes a mostrar en el header 3 niveles
-        if networks and len(networks) > 0:
-            nets = tuple(networks)
-        else:
-            nets = tuple(sorted(df["network"].dropna().unique().tolist()))
+        nets = networks if (networks and len(networks) > 0) else sorted(df["network"].dropna().unique().tolist())
 
-        table = render_kpi_table_multinet(df, networks=nets)
+        # --- Ordenamiento ---
+        # 1) Pivot a wide temporal para conocer columnas prefijadas
+        from components.Tables.main_table import expand_groups_for_networks, pivot_by_network, strip_net, \
+            _resolve_sort_col
+        wide = pivot_by_network(df, networks=nets)
+        if wide is not None and not wide.empty and sort_state:
+            groups_3lvl, METRIC_ORDER, _ = expand_groups_for_networks(nets)
+            sort_col_req = sort_state.get("column")
+            resolved = _resolve_sort_col(wide, METRIC_ORDER, sort_col_req)  # acepta base o prefijada
+            if resolved is not None and resolved in wide.columns:
+                # NaNs al final
+                asc = bool(sort_state.get("ascending", True))
+                wide = wide.sort_values(by=resolved, ascending=asc, na_position="last")
+            # Ahora renderiza desde este wide ordenado:
+            table = render_kpi_table_multinet(wide, networks=nets)  # acepta df_long o wide? ver nota abajo
+        else:
+            table = render_kpi_table_multinet(df, networks=nets)
+
         chart_cs = line_by_time_multi(df, metrics_for_chart_cs)
         chart_ps = line_by_time_multi(df, metrics_for_chart_ps)
-
         return table, chart_cs, chart_ps
 
     # -------------------------------------------------
@@ -243,3 +281,141 @@ def register_callbacks(app):
             return no_update, no_update
 
         return hh, today
+
+        # 1. Callback para abrir/cerrar el modal - CORREGIDO
+
+    @app.callback(
+        Output("umbral-config-modal", "is_open"),
+        [Input("open-umbral-config", "n_clicks"),
+         Input("umbral-close-btn", "n_clicks"),
+         Input("umbral-save-btn", "n_clicks")],
+        [State("umbral-config-modal", "is_open")],
+        prevent_initial_call=True
+    )
+    def toggle_modal(open_clicks, close_clicks, save_clicks, is_open):
+        # Usar callback_context directamente, no dash.callback_context
+        ctx = callback_context
+        if not ctx.triggered:
+            return False
+
+        button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+        if button_id == "open-umbral-config":
+            return True
+        elif button_id in ["umbral-close-btn", "umbral-save-btn"]:
+            return False
+
+        return is_open
+
+    # 2. Callback para cargar las métricas
+    @app.callback(
+        Output("umbral-metric-selector", "options"),
+        Input("umbral-config-modal", "is_open")
+    )
+    def load_metric_options(is_open):
+        if is_open:
+            metrics = umbrales_manager.get_all_metrics()
+            options = []
+            for m in metrics:
+                config = umbrales_manager.get_umbral(m)
+                options.append({
+                    "label": f"{config['nombre']} ({m})",
+                    "value": m
+                })
+            return options
+        return []
+
+    # 3. Callback para mostrar la configuración
+    @app.callback(
+        Output("umbral-config-container", "children"),
+        Input("umbral-metric-selector", "value")
+    )
+    def show_metric_config(selected_metric):
+        if not selected_metric:
+            return "Selecciona una métrica para configurar"
+
+        config = umbrales_manager.get_umbral(selected_metric)
+
+        config_inputs = []
+        for i, nivel in enumerate(config['niveles']):
+            config_inputs.append(
+                dbc.Row([
+                    dbc.Col([
+                        html.Label(nivel['nombre'], className="fw-bold"),
+                        dcc.Input(
+                            value=nivel['limite'],
+                            type="number",
+                            step="0.1",
+                            id={"type": "umbral-limit", "index": i},
+                            className="form-control mb-2"
+                        )
+                    ], width=4),
+                    dbc.Col([
+                        html.Label("Color HEX"),
+                        dcc.Input(
+                            value=nivel['color'],
+                            type="text",
+                            id={"type": "umbral-color", "index": i},
+                            className="form-control mb-2",
+                            placeholder="#28a745"
+                        )
+                    ], width=4),
+                    dbc.Col([
+                        html.Label("Vista previa"),
+                        html.Div(
+                            style={
+                                "width": "30px",
+                                "height": "30px",
+                                "backgroundColor": nivel['color'],
+                                "border": "2px solid #ddd",
+                                "borderRadius": "4px"
+                            }
+                        )
+                    ], width=2)
+                ], className="mb-3 align-items-center")
+            )
+
+        return config_inputs
+
+    # 4. Callback para guardar configuración
+    @app.callback(
+        Output("umbral-config-modal", "is_open", allow_duplicate=True),
+        Input("umbral-save-btn", "n_clicks"),
+        State("umbral-metric-selector", "value"),
+        State({"type": "umbral-limit", "index": "ALL"}, "value"),
+        State({"type": "umbral-color", "index": "ALL"}, "value"),
+        prevent_initial_call=True
+    )
+    def save_umbral_config(n_clicks, metric, limits, colors):
+        if n_clicks and metric:
+            try:
+                config = umbrales_manager.get_umbral(metric)
+
+                # Actualizar límites y colores
+                for i, (limite, color) in enumerate(zip(limits, colors)):
+                    if i < len(config['niveles']):
+                        config['niveles'][i]['limite'] = float(limite)
+                        config['niveles'][i]['color'] = color.upper() if color else "#000000"
+
+                umbrales_manager.update_umbral(metric, config)
+                print(f"✅ Umbrales de {metric} actualizados")
+
+            except Exception as e:
+                print(f"❌ Error al guardar: {e}")
+
+            return False  # Cerrar el modal
+        return True
+
+    # 5. Callback para restablecer valores por defecto
+    @app.callback(
+        Output("umbral-metric-selector", "value", allow_duplicate=True),
+        Input("umbral-reset-btn", "n_clicks"),
+        State("umbral-metric-selector", "value"),
+        prevent_initial_call=True
+    )
+    def reset_umbral_config(n_clicks, selected_metric):
+        if n_clicks and selected_metric:
+            umbrales_manager.reset_to_default(selected_metric)
+            print(f"✅ {selected_metric} restablecido a valores por defecto")
+            return selected_metric  # Mantener la selección
+        return None

@@ -1,6 +1,7 @@
 from dash import html
 import dash_bootstrap_components as dbc
 import pandas as pd
+from src.Utils.umbrales_manager import UmbralesManager
 from src.Utils.utils_umbrales import cell_severity, progress_cfg
 
 # =========================
@@ -27,7 +28,7 @@ BASE_GROUPS = [
 # Columnas base que llevan progress bar y severidad (sin prefijo de red)
 BASE_PROGRESS_COLS = [
     "ps_rrc_fail", "ps_rab_fail", "ps_s1_fail", "ps_drop_abnrel",
-    "cs_rrc_fa                                          il", "cs_rab_fail", "cs_drop_abnrel"
+    "cs_rrc_fail", "cs_rab_fail", "cs_drop_abnrel"
 ]
 BASE_SEVERITY_COLS = [
     "ps_rrc_ia_percent", "ps_rab_ia_percent", "ps_s1_ia_percent", "ps_drop_dc_percent",
@@ -200,74 +201,109 @@ def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
 # Header 3 niveles (keys + grupos por network)
 # =========================
 
-def build_header_3lvl(groups_3lvl, end_of_group_set):
-    # Nivel 1: celdas izquierdas (ROW_KEYS) con rowSpan=3
+def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
+    sort_col = (sort_state or {}).get("column")
+    ascending = (sort_state or {}).get("ascending", True)
+
+    # Nivel 1: keys fijos (igual que antes)
     left = [
         html.Th(DISPLAY_NAME_BASE.get(k, k).title(), rowSpan=3, className="th-left")
         for k in ROW_KEYS
     ]
 
-    # Nivel 1: Networks (colSpan por cantidad de métricas)
+    # Nivel 1: Networks
     net_to_span = {}
     for net, _, cols in groups_3lvl:
         net_to_span[net] = net_to_span.get(net, 0) + len(cols)
+    row1 = left + [html.Th(net, colSpan=span, className="th-network")
+                   for net, span in net_to_span.items()]
 
-    row1 = left + [
-        html.Th(net, colSpan=span, className="th-network")
-        for net, span in net_to_span.items()
-    ]
+    # Nivel 2: Grupos
+    row2 = [html.Th(grp, colSpan=len(cols), className="th-group")
+            for (_, grp, cols) in groups_3lvl]
 
-    # Nivel 2: Títulos de grupo por network
-    row2 = [
-        html.Th(grp, colSpan=len(cols), className="th-group")
-        for (_, grp, cols) in groups_3lvl
-    ]
-
-    # Nivel 3: Subheaders de cada métrica
+    # Nivel 3: Subheaders con botón de sort
     row3 = []
     for _, _, cols in groups_3lvl:
         for c in cols:
             base = strip_net(c)
+            # ¿esta columna es la actualmente ordenada?
+            is_sorted = (sort_col == c) or (sort_col == base)
+            arrow = "▲" if (is_sorted and ascending) else ("▼" if is_sorted else "↕")
+
+            inner = html.Div([
+                html.Span(_label_base(base), className="th-label"),
+                html.Button(
+                    arrow,
+                    id={"type": "sort-btn", "col": c},  # ← pattern-matching ID
+                    n_clicks=0,
+                    className="sort-btn",
+                    **{"aria-label": f"Ordenar {c}"}
+                )
+            ], className="th-sort-wrap")
+
             cls = "th-sub"
             if c in end_of_group_set:
                 cls += " th-end-of-group"
-            row3.append(html.Th(_label_base(base), className=cls))
+            if is_sorted:
+                cls += " th-sorted"
+            row3.append(html.Th(inner, className=cls))
 
     return html.Thead([html.Tr(row1), html.Tr(row2), html.Tr(row3)])
+
 
 
 # =========================
 # Render principal
 # =========================
 
-def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
-    if df_long is None or df_long.empty:
-        return dbc.Alert(
-            "Sin datos para los filtros seleccionados.",
-            color="warning",
-            className="my-3",
-        )
+# --- firma nueva (nota: agrega sort_state) ---
+def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=None):
+    if df_in is None or df_in.empty:
+        return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
 
-    # Derivar redes si no se especifican (para “mostrar todas”)
+    # 1) Detectar si es long o wide
+    is_long = "network" in df_in.columns  # long si tiene esta columna
+    df_long = df_in.copy()
+
+    # 2) Derivar networks si no se especifican explícitamente
     if networks is None:
-        networks = sorted(df_long["network"].dropna().unique().tolist())
+        if is_long:
+            networks = sorted(df_long["network"].dropna().unique().tolist())
+        else:
+            # inferir de columnas wide: prefijo antes de "__"
+            nets = set()
+            for c in df_in.columns:
+                if "__" in c:
+                    nets.add(c.split("__", 1)[0])
+            networks = sorted(nets)
 
-    df = pivot_by_network(df_long, networks=networks)
-    if df is None or df.empty:
-        return dbc.Alert(
-            "Sin datos para las redes seleccionadas.",
-            color="warning",
-            className="my-3",
-        )
+    # 3) Conseguir wide
+    if is_long:
+        df_wide = pivot_by_network(df_long, networks=networks)
+    else:
+        df_wide = df_in.copy()
 
-    # A partir de aquí networks ya es una lista, no None
+    if df_wide is None or df_wide.empty:
+        return dbc.Alert("Sin datos para las redes seleccionadas.", color="warning", className="my-3")
+
+    # 4) Construir grupos/orden y aplicar sort si procede
     groups_3lvl, METRIC_ORDER, END_OF_GROUP = expand_groups_for_networks(networks)
     PROGRESS_COLS = prefixed_progress_cols(networks)
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
-    header = build_header_3lvl(groups_3lvl, END_OF_GROUP)
+    # ↓↓↓ APLICAR ORDEN ↓↓↓
+    if sort_state:
+        sort_col_req = (sort_state or {}).get("column")
+        resolved = _resolve_sort_col(df_wide, METRIC_ORDER, sort_col_req)
+        if resolved and resolved in df_wide.columns:
+            asc = bool((sort_state or {}).get("ascending", True))
+            df_wide = df_wide.sort_values(by=resolved, ascending=asc, na_position="last")
+
+    # 5) Header (pasa sort_state para flecha)
+    header = build_header_3lvl(groups_3lvl, END_OF_GROUP, sort_state=sort_state)
     VISIBLE_ORDER = ROW_KEYS + METRIC_ORDER
-    idx_map = {c: i for i, c in enumerate(df.columns)}
+    idx_map = {c: i for i, c in enumerate(df_wide.columns)}
 
     def _safe_get(row_tuple, col):
         i = idx_map.get(col)
@@ -278,25 +314,23 @@ def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
         except Exception:
             return None
 
+    # 6) Body
     body_rows = []
-    for row in df.itertuples(index=False, name=None):
+    for row in df_wide.itertuples(index=False, name=None):
         tds = []
 
-        # 1) keys
+        # keys a la izquierda (si no existen en wide, intenta buscarlas en df_in)
         for key in ROW_KEYS:
             val = _safe_get(row, key)
-            tds.append(
-                html.Td(
-                    html.Div(_fmt_number(val), className="cell-key"),
-                    className="td-key",
-                )
-            )
+            if val is None and key in df_in.columns:
+                # fallback por si el wide no las trae (casos edge)
+                val = df_in.iloc[0][key]
+            tds.append(html.Td(html.Div(_fmt_number(val), className="cell-key"), className="td-key"))
 
-        # 2) métricas
+        # métricas
         for col in METRIC_ORDER:
             val = _safe_get(row, col)
             base_name = strip_net(col)
-
             if col in PROGRESS_COLS:
                 cfg = progress_cfg(base_name)
                 cell = _progress_cell(
@@ -305,13 +339,11 @@ def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
                     vmax=cfg.get("max", 100.0),
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
-                    width_px=140,         # << ancho consistente y legible
-                    show_value_right=False,  # pon True si prefieres el número afuera
+                    width_px=140,
+                    show_value_right=False,
                 )
             else:
-                num_val = (
-                    None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
-                )
+                num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
                 if (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
                     cls = f"cell-{cell_severity(base_name, float(num_val))}"
                 else:
@@ -324,20 +356,10 @@ def render_kpi_table_multinet(df_long: pd.DataFrame, networks=None):
         body_rows.append(html.Tr(tds))
 
     body = html.Tbody(body_rows)
-
-    table = dbc.Table(
-        [header, body],
-        bordered=False,
-        hover=True,
-        responsive=True,
-        striped=True,
-        size="sm",
-        className="kpi-table compact",
-    )
-
-    return dbc.Card(
-        dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]),
-        className="shadow-sm",
-    )
+    table = dbc.Table([header, body], bordered=False, hover=True, responsive=True, striped=True, size="sm",
+                      className="kpi-table compact")
+    return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
 
 
+
+#ALMACENANDO DATA TABLE
