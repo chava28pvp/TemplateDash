@@ -3,8 +3,8 @@ from dash import Dash
 import dash_bootstrap_components as dbc
 
 from src.layout import serve_layout
-from src.callbacks import register_callbacks
-
+from src.callbacks.callbacks import register_callbacks
+from src.callbacks.umbrales_callbacks import umbral_callbacks
 # Tema Bootstrap (elige otro si quieres: LUX, COSMO, CYBORG, etc.)
 external_stylesheets = [dbc.themes.LUX]
 
@@ -15,6 +15,6 @@ app.title = "Telecom KPIs Monitor"
 app.layout = serve_layout
 
 register_callbacks(app)
-
+umbral_callbacks(app)
 if __name__ == "__main__":
     app.run(debug=True)

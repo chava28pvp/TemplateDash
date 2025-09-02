@@ -3,7 +3,7 @@ import dash_bootstrap_components as dbc
 
 from components.filters import build_filters
 from src.config import REFRESH_INTERVAL_MS
-from src.Utils.utils_umbrales import default_date_str, default_hour_str
+from src.Utils.utils_time import default_date_str, default_hour_str
 from components.umbral_config_modal import create_umbral_config_modal
 
 
@@ -14,20 +14,20 @@ def serve_layout():
             dbc.Col([
                 html.H2("Dashboard Master", className="my-3"),
             ], width=8),
-            dbc.Col([
-                dbc.Button(
-                    "⚙️ Configurar Umbrales",
-                    id="open-umbral-config",
-                    color="light",
-                    className="me-2 float-end",
-                    n_clicks=0
-                ),
-            ], width=4, className="text-end"),
+
         ], className="align-items-center"),
 
         # Filtros
-        build_filters(),  # se llenan opciones en callbacks
-
+        html.Div(
+            children=[
+                build_filters(),  # tu card/contenedor de filtros
+                html.Div(
+                    create_umbral_config_modal(),  # botón + modal
+                    className="position-absolute top-0 end-0 mt-3 me-3 umbral-fab"
+                ),
+            ],
+            className="position-relative"  # ancla para el posicionamiento absoluto
+        ),
         # Contenido principal
         html.Div(id="cards-row", children=[
             dbc.Row([
@@ -56,8 +56,5 @@ def serve_layout():
         dcc.Store(id="defaults-store", data={"fecha": default_date_str(), "hora": default_hour_str()}),
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
-
-        # Modal de configuración de umbrales - ¡IMPORTANTE!
-        create_umbral_config_modal()
 
     ], fluid=True)

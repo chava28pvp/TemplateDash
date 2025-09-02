@@ -10,6 +10,7 @@ except Exception:
     _TZ = pytz.utc
 
 def now_local():
+    tz = pytz.timezone(TZ)
     return datetime.now(_TZ)
 
 def floor_to_hour(dt):
@@ -25,3 +26,10 @@ def to_local(dt):
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(_TZ)
+
+def default_date_str():
+    return now_local().strftime("%Y-%m-%d")
+
+def default_hour_str():
+    # redondea a la hora actual HH:MM:SS al inicio de la hora
+    return now_local().strftime("%H:00:00")

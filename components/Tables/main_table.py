@@ -1,8 +1,8 @@
 from dash import html
+import math
 import dash_bootstrap_components as dbc
 import pandas as pd
-from src.Utils.umbrales_manager import UmbralesManager
-from src.Utils.utils_umbrales import cell_severity, progress_cfg
+from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
 
 # =========================
 # Configuración / Constantes
@@ -99,19 +99,29 @@ def _label_base(base: str) -> str:
     return DISPLAY_NAME_BASE.get(base, base)
 
 def _fmt_number(v):
+    # vacío para None/NaN/inf
     if v is None:
-        return "-"
+        return ""
     if isinstance(v, float):
+        if pd.isna(v) or math.isinf(v):
+            return ""
         return f"{v:,.1f}"
+    if isinstance(v, int):
+        return f"{v:,}"
     return str(v)
 
 def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
                    color=None, striped=True, animated=True, decimals=1,
                    width_px=140, show_value_right=False):
+    # Detecta faltantes/inválidos
     try:
-        real = float(value if value is not None else 0.0)
-    except Exception:
-        real = 0.0
+        real = float(value)
+    except (TypeError, ValueError):
+        real = None
+
+    if real is None or pd.isna(real) or math.isinf(real):
+        # Celda vacía (sin barra ni label)
+        return html.Div("", className="kb kb--empty", style={"--kb-width": f"{width_px}px"})
 
     if vmax <= vmin:
         vmax = vmin + 1.0
@@ -127,7 +137,7 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
     if animated:
         classes.append("is-animated")
 
-    container_style = {"--kb-width": f"{width_px}px"}  # << controla ancho por celda
+    container_style = {"--kb-width": f"{width_px}px"}
     if color:
         container_style["--kb-fill"] = color
 
@@ -360,6 +370,3 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
                       className="kpi-table compact")
     return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
 
-
-
-#ALMACENANDO DATA TABLE

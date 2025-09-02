@@ -1,6 +1,6 @@
 from dash import html, dcc
 import dash_bootstrap_components as dbc
-from src.Utils.utils_umbrales import default_date_str, default_hour_str
+from src.Utils.utils_time import default_date_str, default_hour_str
 
 def build_filters(
     network_options=None,

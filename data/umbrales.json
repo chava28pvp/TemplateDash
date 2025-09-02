@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "severity": {
+    "ps_rrc_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 99.5,
+        "bueno": 98.5,
+        "regular": 97.5,
+        "critico": 0.0
+      }
+    },
+    "ps_rab_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 99.5,
+        "bueno": 98.5,
+        "regular": 97.5,
+        "critico": 0.0
+      }
+    },
+    "ps_s1_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 99.5,
+        "bueno": 98.5,
+        "regular": 97.5,
+        "critico": 0.0
+      }
+    },
+    "ps_drop_dc_percent": {
+      "orientation": "lower_is_better",
+      "thresholds": {
+        "excelente": 1.0,
+        "bueno": 2.0,
+        "regular": 3.0,
+        "critico": 100.0
+      }
+    },
+    "cs_rrc_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 90.0,
+        "bueno": 80.0,
+        "regular": 60.0,
+        "critico": -3.0
+      }
+    },
+    "cs_rab_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 99.5,
+        "bueno": 98.5,
+        "regular": 97.5,
+        "critico": 0.0
+      }
+    },
+    "cs_drop_dc_percent": {
+      "orientation": "lower_is_better",
+      "thresholds": {
+        "excelente": 1.0,
+        "bueno": 2.0,
+        "regular": 3.0,
+        "critico": 100.0
+      }
+    }
+  },
+  "progress": {
+    "ps_rrc_fail": {
+      "min": 0,
+      "max": 30,
+      "decimals": 0,
+      "label": "{value:.0f}"
+    },
+    "ps_rab_fail": {
+      "min": 0,
+      "max": 30,
+      "decimals": 0,
+      "label": "{value:.0f}"
+    },
+    "ps_s1_fail": {
+      "min": 0,
+      "max": 30,
+      "decimals": 0,
+      "label": "{value:.0f}"
+    },
+    "ps_drop_abnrel": {
+      "min": 0,
+      "max": 30,
+      "decimals": 0,
+      "label": "{value:.0f}"
+    },
+    "cs_rrc_fail": {
+      "min": 0.0,
+      "max": 11.0,
+      "decimals": 0,
+      "label": "{value:.0f}"
+    },
+    "cs_rab_fail": {
+      "min": 0,
+      "max": 30,
+      "decimals": 0,
+      "label": "{value:.0f}"
+    },
+    "cs_drop_abnrel": {
+      "min": 0,
+      "max": 30,
+      "decimals": 0,
+      "label": "{value:.0f}"
+    }
+  },
+  "colors": {
+    "excelente": "#2ecc71",
+    "bueno": "#f1c40f",
+    "regular": "#e67e22",
+    "critico": "#e74c3c"
+  }
+}
