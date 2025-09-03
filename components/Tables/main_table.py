@@ -2,8 +2,6 @@ from dash import html
 import math
 import dash_bootstrap_components as dbc
 import pandas as pd
-
-from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
 
 # =========================

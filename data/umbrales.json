@@ -87,16 +87,32 @@
   },
   "progress": {
     "ps_rrc_fail": {
-      "min": 0,
-      "max": 30,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 400.0
+        }
+      }
     },
     "ps_rab_fail": {
-      "min": 0,
-      "max": 30,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 1100.0
+        }
+      }
     },
     "ps_s1_fail": {
       "min": 0,

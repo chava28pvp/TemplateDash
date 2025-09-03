@@ -1,51 +1,54 @@
 from dash import Input, Output, State, no_update
-from components.Tables.main_table import render_kpi_table_multinet, strip_net
+from components.Tables.main_table import (
+    render_kpi_table_multinet, strip_net, expand_groups_for_networks,
+    pivot_by_network, _resolve_sort_col
+)
 from components.Tables.simple_tables import render_simple_table
 from components.charts import line_by_time_multi
 from src.data_access import fetch_kpis
 from src.config import REFRESH_INTERVAL_MS
 from src.Utils.utils_tables import (
-    cols_from_order,
-    TABLE_VENDOR_SUMMARY_ORDER,
-    HEADER_MAP,
-    TABLE_TOP_ORDER,
+    cols_from_order, TABLE_VENDOR_SUMMARY_ORDER, HEADER_MAP, TABLE_TOP_ORDER,
 )
 from src.Utils.utils_charts import metrics_for_chart_cs, metrics_for_chart_ps
 from src.Utils.utils_time import now_local
 
-
-# =========================
-# Helpers
-# =========================
-
 def _apply_multi(df, col, selected):
-    if not selected:  # None, [], ()
+    if not selected:
         return df
     return df[df[col].isin(selected)]
-
-
-def _ensure_list(x):
-    if x is None:
-        return None
-    if isinstance(x, (list, tuple)):
-        return list(x)
-    return [x]
-
 
 def round_down_to_hour(dt):
     return dt.replace(minute=0, second=0, microsecond=0)
 
+def _ensure_list(x):
+    if x is None: return None
+    if isinstance(x, (list, tuple)): return list(x)
+    return [x]
 
-# =========================
-# Callbacks
-# =========================
+def register_callbacks(app, cache):   # <-- recibe cache
 
-def register_callbacks(app):
+    # importa ctx/ALL aquí para usarlo en callbacks internos
+    from dash import ALL, ctx
 
-    # -------------------------------------------------
-    # 0) Actualiza opciones de Network y Technology
-    #     cuando cambian fecha/hora
-    # -------------------------------------------------
+
+    @cache.memoize(timeout=600)  # 10 min o lo que definas
+    def _read_hour_df(fecha, hora):
+        # Trae TODO lo de esa fecha/hora una vez
+        return fetch_kpis(
+            fecha=fecha,
+            hora=hora,
+            vendors=None,
+            clusters=None,
+            limit=None,
+        )
+    @cache.memoize(timeout=600)
+    def _pivot_cached(fecha, hora, nets_tuple):
+        df = _read_hour_df(fecha, hora)
+        return pivot_by_network(df, networks=list(nets_tuple))
+
+
+    # 0) Network/Technology
     @app.callback(
         Output("f-network", "options"),
         Output("f-network", "value"),
@@ -53,21 +56,18 @@ def register_callbacks(app):
         Output("f-technology", "value"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
+        prevent_initial_call=False,
     )
     def update_network_tech(fecha, hora):
-        df = fetch_kpis(fecha=fecha, hora=hora, limit=None)
+        df = _read_hour_df(fecha, hora)  # RAM
+        nets = sorted(df["network"].dropna().unique().tolist()) if "network" in df.columns else []
+        techs = sorted(df["technology"].dropna().unique().tolist()) if "technology" in df.columns else []
+        return (
+            [{"label": n, "value": n} for n in nets], [],
+            [{"label": t, "value": t} for t in techs], []
+        )
 
-        networks = sorted(df["network"].dropna().unique().tolist())
-        techs = sorted(df["technology"].dropna().unique().tolist())
-
-        net_opts = [{"label": n, "value": n} for n in networks]
-        tech_opts = [{"label": t, "value": t} for t in techs]
-
-        # <- SIN preselección
-        return net_opts, [], tech_opts, []
-
-    from dash import ALL, ctx
-
+    # sort-state
     @app.callback(
         Output("sort-state", "data"),
         Input({"type": "sort-btn", "col": ALL}, "n_clicks"),
@@ -76,13 +76,10 @@ def register_callbacks(app):
     )
     def on_click_sort(n_clicks_list, sort_state):
         sort_state = sort_state or {"column": None, "ascending": True}
-        # ¿qué botón disparó?
-        trig = ctx.triggered_id  # dict con {"type": "sort-btn", "col": "..."} o None
+        trig = ctx.triggered_id
         if not trig or "col" not in trig:
             return sort_state
-
-        clicked_col = trig["col"]  # viene con prefijo (p.ej. "ATT__ps_rrc_fail")
-        # Si es la misma columna, invertimos asc/desc; si es nueva, asc True por defecto
+        clicked_col = trig["col"]
         if sort_state.get("column") in (clicked_col, strip_net(clicked_col)):
             sort_state["ascending"] = not sort_state.get("ascending", True)
         else:
@@ -90,10 +87,7 @@ def register_callbacks(app):
             sort_state["ascending"] = True
         return sort_state
 
-    # -------------------------------------------------
-    # 1) Actualiza opciones de Vendor/Cluster
-    #     cuando cambian fecha/hora/network/technology
-    # -------------------------------------------------
+    # 1) Vendor/Cluster
     @app.callback(
         Output("f-vendor", "options"),
         Output("f-vendor", "value"),
@@ -103,30 +97,27 @@ def register_callbacks(app):
         Input("f-hora", "value"),
         Input("f-network", "value"),
         Input("f-technology", "value"),
+        prevent_initial_call=False,
     )
     def update_vendor_cluster(fecha, hora, networks, technologies):
-        networks = _ensure_list(networks)
-        technologies = _ensure_list(technologies)
+        df = _read_hour_df(fecha, hora)  # RAM
+        networks = _ensure_list(networks) or []
+        technologies = _ensure_list(technologies) or []
 
-        df = fetch_kpis(fecha=fecha, hora=hora, limit=None)
         if networks:
             df = df[df["network"].isin(networks)]
         if technologies:
             df = df[df["technology"].isin(technologies)]
 
-        vendors = sorted(df["vendor"].dropna().unique().tolist())
-        clusters = sorted(df["noc_cluster"].dropna().unique().tolist())
+        vendors = sorted(df["vendor"].dropna().unique().tolist()) if "vendor" in df.columns else []
+        clusters = sorted(df["noc_cluster"].dropna().unique().tolist()) if "noc_cluster" in df.columns else []
 
-        vendor_opts = [{"label": v, "value": v} for v in vendors]
-        cluster_opts = [{"label": c, "value": c} for c in clusters]
+        return (
+            [{"label": v, "value": v} for v in vendors], [],
+            [{"label": c, "value": c} for c in clusters], []
+        )
 
-        # <- SIN preselección
-        return vendor_opts, [], cluster_opts, []
-
-    # -------------------------------------------------
-    # 2) Refresca tabla y dos gráficas
-    #     ante: filtros o intervalos
-    # -------------------------------------------------
+    # 2) Tabla + gráficas
     @app.callback(
         Output("table-container", "children"),
         Output("line-chart-a", "children"),
@@ -138,51 +129,60 @@ def register_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("refresh-timer", "n_intervals"),
-        Input("sort-state", "data"),  # ← nuevo
+        Input("sort-state", "data"),
     )
     def refresh_outputs(fecha, hora, networks, technologies, vendors, clusters, _n, sort_state):
+        trig = ctx.triggered_id
+
+        # 1) Carga RAM por (fecha, hora)
+        df = _read_hour_df(fecha, hora)
+
+        # 2) Filtros en memoria (rápidos)
         networks = _ensure_list(networks)
         technologies = _ensure_list(technologies)
         vendors = _ensure_list(vendors)
         clusters = _ensure_list(clusters)
 
-        df = fetch_kpis(
-            fecha=fecha,
-            hora=hora,
-            vendors=vendors or None,
-            clusters=clusters or None,
-            limit=None,
-        )
-        df = _apply_multi(df, "network", networks)
-        df = _apply_multi(df, "technology", technologies)
+        if networks:
+            df = df[df["network"].isin(networks)]
+        if technologies:
+            df = df[df["technology"].isin(technologies)]
+        if vendors:
+            df = df[df["vendor"].isin(vendors)]
+        if clusters:
+            df = df[df["noc_cluster"].isin(clusters)]
 
-        nets = networks if (networks and len(networks) > 0) else sorted(df["network"].dropna().unique().tolist())
+        nets = networks if networks else sorted(df["network"].dropna().unique().tolist())
 
-        # --- Ordenamiento ---
-        # 1) Pivot a wide temporal para conocer columnas prefijadas
-        from components.Tables.main_table import expand_groups_for_networks, pivot_by_network, _resolve_sort_col
-        wide = pivot_by_network(df, networks=nets)
-        if wide is not None and not wide.empty and sort_state:
-            groups_3lvl, METRIC_ORDER, _ = expand_groups_for_networks(nets)
-            sort_col_req = sort_state.get("column")
-            resolved = _resolve_sort_col(wide, METRIC_ORDER, sort_col_req)  # acepta base o prefijada
-            if resolved is not None and resolved in wide.columns:
-                # NaNs al final
-                asc = bool(sort_state.get("ascending", True))
-                wide = wide.sort_values(by=resolved, ascending=asc, na_position="last")
-            # Ahora renderiza desde este wide ordenado:
-            table = render_kpi_table_multinet(wide, networks=nets)  # acepta df_long o wide? ver nota abajo
+        # 3) Ordenamiento / Tabla / Gráficas
+        if trig == "sort-state" and sort_state:
+            # (Opcional) usa pivot cacheado
+            wide = _pivot_cached(fecha, hora, tuple(nets))
+            if wide is not None and not wide.empty:
+                _, METRIC_ORDER, _ = expand_groups_for_networks(nets)
+                sort_col_req = sort_state.get("column")
+                resolved = _resolve_sort_col(wide, METRIC_ORDER, sort_col_req)
+                if resolved and (resolved in wide.columns):
+                    wide = wide.sort_values(
+                        by=resolved,
+                        ascending=bool(sort_state.get("ascending", True)),
+                        na_position="last"
+                    )
+                table_children = render_kpi_table_multinet(wide, networks=nets)
+            else:
+                table_children = render_kpi_table_multinet(df, networks=nets)
+
+            chart_cs = no_update
+            chart_ps = no_update
         else:
-            table = render_kpi_table_multinet(df, networks=nets)
+            table_children = render_kpi_table_multinet(df, networks=nets)
+            chart_cs = line_by_time_multi(df, metrics_for_chart_cs)
+            chart_ps = line_by_time_multi(df, metrics_for_chart_ps)
 
-        chart_cs = line_by_time_multi(df, metrics_for_chart_cs)
-        chart_ps = line_by_time_multi(df, metrics_for_chart_ps)
-        return table, chart_cs, chart_ps
+        return table_children, chart_cs, chart_ps
 
-    # -------------------------------------------------
-    # 3) Configura el intervalo visual del card de filtros
-    #     (sincronizado con global)
-    # -------------------------------------------------
+    # 3) (OJO) refresh-interval ↔ refresh-interval-global
+    # Asegúrate de que ESTOS IDs existan en tu layout; si no, borra este callback.
     @app.callback(
         Output("refresh-interval", "interval"),
         Input("refresh-interval-global", "n_intervals"),
@@ -191,10 +191,7 @@ def register_callbacks(app):
     def sync_intervals(_n):
         return REFRESH_INTERVAL_MS
 
-    # -------------------------------------------------
-    # 4) Tablas simples abajo (Top clusters + Resumen vendor)
-    #     con nuevos filtros
-    # -------------------------------------------------
+    # 4) Tablas inferiores
     @app.callback(
         Output("table-bottom-a", "children"),
         Output("table-bottom-b", "children"),
@@ -209,72 +206,41 @@ def register_callbacks(app):
     def refresh_bottom_tables(fecha, hora, networks, technologies, vendors, clusters, _n):
         networks = _ensure_list(networks)
         technologies = _ensure_list(technologies)
-        vendors = _ensure_list(vendors)
-        clusters = _ensure_list(clusters)
+        vendors_t = tuple(_ensure_list(vendors) or [])
+        clusters_t = tuple(_ensure_list(clusters) or [])
 
-        # A) Top clusters (ejemplo: reporte por CS)
-        df_top = fetch_kpis(
-            fecha=fecha,
-            hora=hora,
-            vendors=vendors or None,
-            clusters=clusters or None,
-        )
+        df = _read_hour_df(fecha, hora)
         if networks:
-            df_top = df_top[df_top["network"].isin(networks)]
+            df = df[df["network"].isin(networks)]
         if technologies:
-            df_top = df_top[df_top["technology"].isin(technologies)]
+            df = df[df["technology"].isin(technologies)]
 
         cols_top = cols_from_order(TABLE_TOP_ORDER, HEADER_MAP)
-        table_a = render_simple_table(df_top, "Reporte por CS", cols_top)
-
-        # B) Resumen por vendor (ejemplo: reporte por PS)
-        df_vs = fetch_kpis(
-            fecha=fecha,
-            hora=hora,
-            vendors=vendors or None,
-            clusters=clusters or None,
-        )
-        if networks:
-            df_vs = df_vs[df_vs["network"].isin(networks)]
-        if technologies:
-            df_vs = df_vs[df_vs["technology"].isin(technologies)]
+        table_a = render_simple_table(df, "Reporte por CS", cols_top)
 
         cols_vs = cols_from_order(TABLE_VENDOR_SUMMARY_ORDER, HEADER_MAP)
-        table_b = render_simple_table(df_vs, "Reporte por PS", cols_vs)
+        table_b = render_simple_table(df, "Reporte por PS", cols_vs)
 
         return table_a, table_b
 
-    # -------------------------------------------------
-    # 5) Actualiza automáticamente fecha/hora
-    #     al inicio de cada hora
-    # -------------------------------------------------
+    # 5) Tick de fecha/hora
     @app.callback(
         Output("f-hora", "value"),
         Output("f-fecha", "date"),
         Input("refresh-timer", "n_intervals"),
         State("f-hora", "value"),
         State("f-fecha", "date"),
-        State("f-hora", "options"),  # útil para validar que la hora exista
+        State("f-hora", "options"),
         prevent_initial_call=False,
     )
     def tick(_, current_hour, current_date, hour_options):
-        # Hora local “al inicio de la hora”
         now = now_local()
         floored = round_down_to_hour(now)
         hh = floored.strftime("%H:00:00")
         today = floored.strftime("%Y-%m-%d")
-
-        # ⛔️ Si el usuario fijó manualmente fecha/hora distintas, NO sobre-escribas
         if (current_date not in (None, today)) or (current_hour not in (None, hh)):
             return no_update, no_update
-
-        # ✅ Solo si el usuario está “siguiendo en vivo”
-        opt_values = {
-            (o["value"] if isinstance(o, dict) else o) for o in (hour_options or [])
-        }
+        opt_values = {(o["value"] if isinstance(o, dict) else o) for o in (hour_options or [])}
         if opt_values and hh not in opt_values:
-            # Si la nueva hora no existe en el dropdown, no fuerces actualización
             return no_update, no_update
-
         return hh, today
-

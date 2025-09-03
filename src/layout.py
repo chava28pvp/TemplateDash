@@ -35,13 +35,9 @@ def serve_layout():
             # Tabla principal (scroll interno)
             dbc.Row([
                 dbc.Col(
-                    # Contenedor con altura fija y scroll; dentro va el mismo id="table-container"
                     html.Div(
                         className="kpi-table-wrap",
-                        children=dcc.Loading(
-                            type="default",
-                            children=html.Div(id="table-container", className="kpi-table-container")
-                        )
+                        children=html.Div(id="table-container", className="kpi-table-container")
                     ),
                     md=12, className="my-3"
                 )

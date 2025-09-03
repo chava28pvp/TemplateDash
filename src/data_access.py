@@ -125,6 +125,27 @@ def _select_list_with_aliases(friendly_cols):
             select_parts.append(f"{_quote(real)} AS {friendly}")
     return select_parts
 
+# --- Optimización de dtypes para acelerar filtros/orden ---
+def optimize_kpi_df(df: pd.DataFrame) -> pd.DataFrame:
+    # Categorical para columnas de filtro
+    for col in ["network", "technology", "vendor", "noc_cluster"]:
+        if col in df.columns and df[col].dtype != "category":
+            df[col] = df[col].astype("category")
+
+    # Asegurar numéricos (con NaN si algo no parsea)
+    numeric_cols = [
+        "integrity",
+        "ps_traff_delta","ps_traff_gb","ps_rrc_ia_percent","ps_rrc_fail",
+        "ps_rab_ia_percent","ps_rab_fail","ps_s1_ia_percent","ps_s1_fail",
+        "ps_drop_dc_percent","ps_drop_abnrel",
+        "cs_traff_delta","cs_traff_erl","cs_rrc_ia_percent","cs_rrc_fail",
+        "cs_rab_ia_percent","cs_rab_fail","cs_drop_dc_percent","cs_drop_abnrel",
+    ]
+    for c in numeric_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
 def fetch_kpis(fecha=None, hora=None, vendors=None, clusters=None, limit=None):
     # columnas que mostraremos (amigables)
     friendly_cols = _resolve_columns(BASE_COLUMNS)
@@ -169,5 +190,65 @@ def fetch_kpis(fecha=None, hora=None, vendors=None, clusters=None, limit=None):
     with eng.connect() as conn:
         stmt = _prepare_stmt_with_expanding(sql, use_vendors, use_clusters)
         df = pd.read_sql(stmt, conn, params=params)
+
+        # ⬇️ NUEVO: optimiza dtypes 1 sola vez
+    df = optimize_kpi_df(df)
     return df
+
+def fetch_distinct_networks_tech(fecha, hora):
+    """
+    Devuelve listas de networks y technologies con SELECT DISTINCT (rápido y ligero).
+    """
+    eng = get_engine()
+    sql = """
+      SELECT DISTINCT Network AS network, Technology AS technology
+      FROM Dashboard_Master
+      WHERE Date = :fecha AND Time = :hora
+    """
+    with eng.connect() as c:
+        df = pd.read_sql(text(sql), c, params={"fecha": fecha, "hora": hora})
+    nets = sorted(df["network"].dropna().unique().tolist())
+    techs = sorted(df["technology"].dropna().unique().tolist())
+    return nets, techs
+
+
+def fetch_distinct_vendor_cluster(fecha, hora, networks=None, technologies=None):
+    """
+    Devuelve listas de vendors y clusters filtrando por Network/Technology si aplica.
+    """
+    networks = list(networks or [])
+    technologies = list(technologies or [])
+
+    clauses = ["Date = :fecha", "Time = :hora"]
+    params = {"fecha": fecha, "hora": hora}
+
+    if networks:
+        clauses.append("Network IN :nets")
+        params["nets"] = networks
+    if technologies:
+        clauses.append("Technology IN :techs")
+        params["techs"] = technologies
+
+    where = " AND ".join(clauses)
+    sql = f"""
+      SELECT DISTINCT Vendor AS vendor, Noc_Cluster AS noc_cluster
+      FROM Dashboard_Master
+      WHERE {where}
+    """
+
+    eng = get_engine()
+    stmt = text(sql)
+    # bindparams expanding solo si aplica
+    if networks:
+        stmt = stmt.bindparams(bindparam("nets", expanding=True))
+    if technologies:
+        stmt = stmt.bindparams(bindparam("techs", expanding=True))
+
+    with eng.connect() as c:
+        df = pd.read_sql(stmt, c, params=params)
+
+    vendors = sorted(df["vendor"].dropna().unique().tolist())
+    clusters = sorted(df["noc_cluster"].dropna().unique().tolist())
+    return vendors, clusters
+
 
