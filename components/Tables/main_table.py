@@ -2,6 +2,8 @@ from dash import html
 import math
 import dash_bootstrap_components as dbc
 import pandas as pd
+
+from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
 
 # =========================
@@ -341,8 +343,10 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
         for col in METRIC_ORDER:
             val = _safe_get(row, col)
             base_name = strip_net(col)
+            net = col.split("__", 1)[0] if "__" in col else None
+
             if col in PROGRESS_COLS:
-                cfg = progress_cfg(base_name)
+                cfg = progress_cfg(base_name, network=net)
                 cell = _progress_cell(
                     val,
                     vmin=cfg.get("min", 0.0),
@@ -355,7 +359,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
                 if (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
-                    cls = f"cell-{cell_severity(base_name, float(num_val))}"
+                    cls = f"cell-{cell_severity(base_name, float(num_val), network=net)}"
                 else:
                     cls = "cell-neutral"
                 cell = html.Div(_fmt_number(val), className=cls)

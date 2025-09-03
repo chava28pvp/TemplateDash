@@ -139,28 +139,111 @@ class UmbralesManager:
     def is_progress(self, metric: str) -> bool:
         return metric in self._config.get("progress", {})
 
-    def get_severity(self, metric: str) -> Optional[Dict[str, Any]]:
-        return self._config.get("severity", {}).get(metric)
+    def get_severity(self, metric: str, network: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        raw = self._config.get("severity", {}).get(metric)
+        if not raw:
+            return None
+        # v1 compat: si no tiene default/per_network, trátalo como default
+        if "default" not in raw and "per_network" not in raw:
+            return raw
 
-    def get_progress(self, metric: str) -> Optional[Dict[str, Any]]:
-        return self._config.get("progress", {}).get(metric)
+        default = raw.get("default", {})
+        if network:
+            per_net = (raw.get("per_network") or {}).get(network) or {}
+        else:
+            per_net = {}
 
-    def upsert_severity(self, metric: str, *, thresholds: Dict[str, float]) -> None:
-        ori = _orientation_for(metric)
-        self._config.setdefault("severity", {})[metric] = {
-            "orientation": ori,
-            "thresholds": thresholds,
+        # Orientación: si no se sobreescribe por network, usa la global
+        out = {
+            "orientation": per_net.get("orientation", default.get("orientation")),
+            "thresholds": (default.get("thresholds") or {}).copy()
         }
+        # Mezcla thresholds si vienen parciales por network
+        out["thresholds"].update(per_net.get("thresholds") or {})
+        return out
+
+    def get_progress(self, metric: str, network: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        raw = self._config.get("progress", {}).get(metric)
+        if not raw:
+            return None
+        if "default" not in raw and "per_network" not in raw:
+            return raw
+
+        default = raw.get("default", {})
+        per_net = (raw.get("per_network") or {}).get(network) or {}
+        out = default.copy()
+        out.update(per_net)  # min/max/decimals/label pueden venir parciales
+        return out
+
+    def upsert_severity(self, metric: str, *, thresholds: Dict[str, float],
+                        network: Optional[str] = None, orientation: Optional[str] = None) -> None:
+        self._config.setdefault("severity", {})
+        entry = self._config["severity"].setdefault(metric, {})
+
+        # Migración implícita si venía en formato v1
+        if "default" not in entry and "per_network" not in entry:
+            entry = {"default": entry, "per_network": {}}
+            self._config["severity"][metric] = entry
+
+        if network:
+            entry.setdefault("per_network", {})
+            tgt = entry["per_network"].setdefault(network, {})
+            if orientation is not None:
+                tgt["orientation"] = orientation
+            tgt.setdefault("thresholds", {}).update(thresholds)
+        else:
+            entry.setdefault("default", {})
+            tgt = entry["default"]
+            if orientation is not None:
+                tgt["orientation"] = orientation
+            tgt.setdefault("thresholds", {}).update(thresholds)
         self.save()
 
-    def upsert_progress(self, metric: str, *, min_v: float, max_v: float, decimals: int = 0, label: str = "{value:.0f}") -> None:
-        self._config.setdefault("progress", {})[metric] = {
-            "min": min_v,
-            "max": max_v,
-            "decimals": decimals,
-            "label": label,
-        }
+    def upsert_progress(self, metric: str, *, min_v: float, max_v: float,
+                        decimals: Optional[int] = None, label: Optional[str] = None,
+                        network: Optional[str] = None) -> None:
+        self._config.setdefault("progress", {})
+        entry = self._config["progress"].setdefault(metric, {})
+
+        if "default" not in entry and "per_network" not in entry:
+            entry = {"default": entry, "per_network": {}}
+            self._config["progress"][metric] = entry
+
+        target = None
+        if network:
+            entry.setdefault("per_network", {})
+            target = entry["per_network"].setdefault(network, {})
+        else:
+            entry.setdefault("default", {})
+            target = entry["default"]
+
+        target["min"] = min_v
+        target["max"] = max_v
+        if decimals is not None:
+            target["decimals"] = decimals
+        if label is not None:
+            target["label"] = label
         self.save()
+
+    # en UmbralesManager
+    def clear_network_override(self, metric: str, kind: str, network: str) -> bool:
+        """kind: 'severity' | 'progress'"""
+        if not network:
+            return False
+        sec = self._config.get(kind, {})
+        entry = sec.get(metric)
+        if not entry:
+            return False
+        # v1 compat: si no tiene estructura v2, no hay override per_network
+        per_net = (entry.get("per_network") or {})
+        if network in per_net:
+            per_net.pop(network, None)
+            # limpia contenedor vacío
+            if not per_net:
+                entry["per_network"] = {}
+            self.save()
+            return True
+        return False
 
 
 # Singleton-like convenience

@@ -29,27 +29,65 @@ def serve_layout():
             className="position-relative"  # ancla para el posicionamiento absoluto
         ),
         # Contenido principal
+        # Contenido principal
         html.Div(id="cards-row", children=[
+
+            # Tabla principal (scroll interno)
             dbc.Row([
-                dbc.Col(html.Div(id="table-container"), md=12, className="my-3")
+                dbc.Col(
+                    # Contenedor con altura fija y scroll; dentro va el mismo id="table-container"
+                    html.Div(
+                        className="kpi-table-wrap",
+                        children=dcc.Loading(
+                            type="default",
+                            children=html.Div(id="table-container", className="kpi-table-container")
+                        )
+                    ),
+                    md=12, className="my-3"
+                )
             ]),
 
+            # Gráficas
             dbc.Row([
-                dbc.Col(dbc.Card(dbc.CardBody([
-                    html.H4("Gráfica A (CS)", className="mb-3"),
-                    html.Div(id="line-chart-a")
-                ]), className="shadow-sm"), md=6, sm=12, className="my-3"),
-                dbc.Col(dbc.Card(dbc.CardBody([
-                    html.H4("Gráfica B (PS)", className="mb-3"),
-                    html.Div(id="line-chart-b")
-                ]), className="shadow-sm"), md=6, sm=12, className="my-3"),
+                dbc.Col(
+                    dbc.Card(dbc.CardBody([
+                        html.H4("Gráfica A (CS)", className="mb-3"),
+                        dcc.Loading(html.Div(id="line-chart-a"))
+                    ]), className="shadow-sm"),
+                    md=6, sm=12, className="my-3"
+                ),
+                dbc.Col(
+                    dbc.Card(dbc.CardBody([
+                        html.H4("Gráfica B (PS)", className="mb-3"),
+                        dcc.Loading(html.Div(id="line-chart-b"))
+                    ]), className="shadow-sm"),
+                    md=6, sm=12, className="my-3"
+                ),
             ]),
 
-            # Tablas inferiores
+            # Tablas inferiores (scroll interno en cada una)
             dbc.Row([
-                dbc.Col(html.Div(id="table-bottom-a"), md=6, className="my-3"),
-                dbc.Col(html.Div(id="table-bottom-b"), md=6, className="my-3"),
-            ])
+                dbc.Col(
+                    html.Div(
+                        className="kpi-table-wrap",
+                        children=dcc.Loading(
+                            type="default",
+                            children=html.Div(id="table-bottom-a", className="kpi-table-container")
+                        )
+                    ),
+                    md=6, className="my-3"
+                ),
+                dbc.Col(
+                    html.Div(
+                        className="kpi-table-wrap",
+                        children=dcc.Loading(
+                            type="default",
+                            children=html.Div(id="table-bottom-b", className="kpi-table-container")
+                        )
+                    ),
+                    md=6, className="my-3"
+                ),
+            ]),
         ]),
 
         # Stores e Intervalos

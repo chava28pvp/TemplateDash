@@ -4,9 +4,9 @@
     "ps_rrc_ia_percent": {
       "orientation": "higher_is_better",
       "thresholds": {
-        "excelente": 99.5,
-        "bueno": 98.5,
-        "regular": 97.5,
+        "excelente": 110.0,
+        "bueno": 99.0,
+        "regular": 98.0,
         "critico": 0.0
       }
     },
@@ -38,19 +38,39 @@
       }
     },
     "cs_rrc_ia_percent": {
-      "orientation": "higher_is_better",
-      "thresholds": {
-        "excelente": 90.0,
-        "bueno": 80.0,
-        "regular": 60.0,
-        "critico": -3.0
+      "default": {
+        "orientation": "higher_is_better",
+        "thresholds": {
+          "excelente": 99.0,
+          "bueno": 95.0,
+          "regular": 60.0,
+          "critico": -3.0
+        }
+      },
+      "per_network": {
+        "ATT": {
+          "thresholds": {
+            "excelente": 90.0,
+            "bueno": 80.0,
+            "regular": 70.0,
+            "critico": -3.0
+          }
+        },
+        "NET": {
+          "thresholds": {
+            "excelente": 100.0,
+            "bueno": 90.0,
+            "regular": 60.0,
+            "critico": -3.0
+          }
+        }
       }
     },
     "cs_rab_ia_percent": {
       "orientation": "higher_is_better",
       "thresholds": {
-        "excelente": 99.5,
-        "bueno": 98.5,
+        "excelente": 100.0,
+        "bueno": 99.0,
         "regular": 97.5,
         "critico": 0.0
       }
@@ -58,8 +78,8 @@
     "cs_drop_dc_percent": {
       "orientation": "lower_is_better",
       "thresholds": {
-        "excelente": 1.0,
-        "bueno": 2.0,
+        "excelente": 0.0,
+        "bueno": 1.0,
         "regular": 3.0,
         "critico": 100.0
       }
@@ -91,10 +111,22 @@
       "label": "{value:.0f}"
     },
     "cs_rrc_fail": {
-      "min": 0.0,
-      "max": 11.0,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0.0,
+        "max": 11.0,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "ATT": {
+          "min": 0.0,
+          "max": 30.0
+        },
+        "NET": {
+          "min": 0.0,
+          "max": 20.0
+        }
+      }
     },
     "cs_rab_fail": {
       "min": 0,
