@@ -67,13 +67,16 @@
       }
     },
     "cs_rab_ia_percent": {
-      "orientation": "higher_is_better",
-      "thresholds": {
-        "excelente": 100.0,
-        "bueno": 99.0,
-        "regular": 97.5,
-        "critico": 0.0
-      }
+      "default": {
+        "orientation": "higher_is_better",
+        "thresholds": {
+          "excelente": 100.0,
+          "bueno": 99.0,
+          "regular": 97.5,
+          "critico": 0.0
+        }
+      },
+      "per_network": {}
     },
     "cs_drop_dc_percent": {
       "orientation": "lower_is_better",

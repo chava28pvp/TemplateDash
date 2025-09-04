@@ -1,0 +1,7 @@
+/* Fuerza que el spinner esté arriba */
+.loading-top .dash-loading {
+  display: flex;
+  justify-content: center;  /* centrado horizontal */
+  align-items: flex-start;  /* pegado arriba */
+  height: 100%;
+}

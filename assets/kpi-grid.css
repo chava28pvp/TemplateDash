@@ -1,0 +1,55 @@
+/* assets/kpi-grid.css */
+.kb { position: relative; height: 18px; width: var(--kb-width, 120px); background: #eee; border-radius: 8px; overflow: hidden; }
+.kb__fill { height: 100%; display: flex; align-items: center; justify-content: center; white-space: nowrap; font-size: 11px; }
+.cell-good  { background-color: rgba(0, 160, 0, 0.12); }
+.cell-warn  { background-color: rgba(255, 165, 0, 0.18); }
+.cell-bad   { background-color: rgba(255, 0, 0, 0.15); }
+.cell-neutral {}
+.td-key { font-weight: 500; }
+
+/* 1) Subheaders (columnas individuales) */
+.ag-theme-quartz .ag-header-cell .ag-header-cell-label {
+  justify-content: center !important;   /* centra el contenido del header */
+  text-align: center !important;
+  width: 100%;
+}
+
+/* Si mantienes el botón de menú del header, colócalo absoluto para que no empuje el texto */
+.ag-theme-quartz .ag-header-cell .ag-header-cell-menu-button {
+  position: absolute !important;
+  right: 6px !important;
+  margin: 0 !important;
+}
+
+/* 2) Headers de GRUPO (Network y Base Group) */
+.ag-theme-quartz .ag-header-group-cell .ag-header-cell-comp-wrapper {
+  justify-content: center !important;   /* en lugar de desactivar flex, centramos */
+}
+
+.ag-theme-quartz .ag-header-group-cell .ag-header-group-cell-label {
+  justify-content: center !important;
+  text-align: center !important;
+  width: 100%;
+}
+
+.ag-theme-quartz .ag-header-group-cell .ag-header-group-text {
+  margin: 0 auto !important;            /* asegura centrado del texto del grupo */
+}
+
+/* 3) Opcional: compactar paddings */
+.ag-theme-quartz .ag-header-cell,
+.ag-theme-quartz .ag-header-group-cell {
+  padding: 4px 8px !important;
+  line-height: 1.2 !important;
+}
+
+
+/* progress bar simple */
+.kb{ width:var(--kb-width,120px); height:16px; background:#eee; border-radius:8px; overflow:hidden }
+.kb__fill{ height:100%; line-height:16px; font-size:11px; text-align:center; white-space:nowrap }
+
+/* colores de severidad, alinéalo con tu paleta en UM_MANAGER */
+.ag-theme-quartz .sev-excelente { background-color:#2ecc7122; }
+.ag-theme-quartz .sev-bueno     { background-color:#f1c40f22; }
+.ag-theme-quartz .sev-regular   { background-color:#e67e2222; }
+.ag-theme-quartz .sev-critico   { background-color:#e74c3c22; }

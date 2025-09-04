@@ -29,7 +29,6 @@ def serve_layout():
             className="position-relative"  # ancla para el posicionamiento absoluto
         ),
         # Contenido principal
-        # Contenido principal
         html.Div(id="cards-row", children=[
 
             # Tabla principal (scroll interno)
@@ -37,11 +36,16 @@ def serve_layout():
                 dbc.Col(
                     html.Div(
                         className="kpi-table-wrap",
-                        children=html.Div(id="table-container", className="kpi-table-container")
+                        children=dcc.Loading(
+                            type="circle",
+                            className="loading-top",
+                            children=html.Div(id="table-container", className="kpi-table-container")
+                        )
                     ),
                     md=12, className="my-3"
                 )
             ]),
+
 
             # Gráficas
             dbc.Row([

@@ -97,17 +97,13 @@ def create_umbral_config_modal(network_options=None):
                 # Panel de Severity (4 colores)
                 html.Div([
                     dbc.Badge("4 niveles", color="primary", className="me-2"),
-                    html.Span("Use valores de corte apropiados según la orientación."),
                     dbc.Row([
                         dbc.Col(_severity_card("excelente", "#2ecc71"), md=6),
                         dbc.Col(_severity_card("bueno", "#f1c40f"), md=6),
                         dbc.Col(_severity_card("regular", "#e67e22"), md=6),
                         dbc.Col(_severity_card("critico", "#e74c3c"), md=6),
                     ], className="g-3 mt-1"),
-                    html.Small(
-                        "Si 'mayor es mejor', estos son mínimos por categoría. Si 'menor es mejor', son máximos.",
-                        className="text-muted",
-                    ),
+
                 ], id="severity-panel", hidden=True, className="mb-3"),
 
                 # Panel de Progress (min/max)
@@ -117,10 +113,7 @@ def create_umbral_config_modal(network_options=None):
                         dbc.Col(dbc.Input(id="progress-min", type="number", placeholder="Mínimo", step="any"), md=6),
                         dbc.Col(dbc.Input(id="progress-max", type="number", placeholder="Máximo", step="any"), md=6),
                     ], className="g-3 mt-1"),
-                    html.Small(
-                        "El color del progress es fijo; aquí sólo se define el rango.",
-                        className="text-muted"
-                    ),
+
                 ], id="progress-panel", hidden=True, className="mb-3"),
 
                 # Área de errores

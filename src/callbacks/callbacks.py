@@ -1,4 +1,6 @@
 from dash import Input, Output, State, no_update
+
+from components.Grids.main_grid import build_grid
 from components.Tables.main_table import (
     render_kpi_table_multinet, strip_net, expand_groups_for_networks,
     pivot_by_network, _resolve_sort_col
@@ -27,10 +29,7 @@ def _ensure_list(x):
     return [x]
 
 def register_callbacks(app, cache):   # <-- recibe cache
-
-    # importa ctx/ALL aquí para usarlo en callbacks internos
     from dash import ALL, ctx
-
 
     @cache.memoize(timeout=600)  # 10 min o lo que definas
     def _read_hour_df(fecha, hora):
@@ -129,15 +128,17 @@ def register_callbacks(app, cache):   # <-- recibe cache
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("refresh-timer", "n_intervals"),
-        Input("sort-state", "data"),
     )
-    def refresh_outputs(fecha, hora, networks, technologies, vendors, clusters, _n, sort_state):
-        trig = ctx.triggered_id
-
+    def refresh_outputs(fecha, hora, networks, technologies, vendors, clusters, _n):
         # 1) Carga RAM por (fecha, hora)
         df = _read_hour_df(fecha, hora)
 
-        # 2) Filtros en memoria (rápidos)
+        # 2) Filtros en memoria (rápidos); opcional: empújalos a SQL si la tabla crece
+        def _ensure_list(x):
+            if x is None: return None
+            if isinstance(x, (list, tuple)): return list(x)
+            return [x]
+
         networks = _ensure_list(networks)
         technologies = _ensure_list(technologies)
         vendors = _ensure_list(vendors)
@@ -152,34 +153,12 @@ def register_callbacks(app, cache):   # <-- recibe cache
         if clusters:
             df = df[df["noc_cluster"].isin(clusters)]
 
-        nets = networks if networks else sorted(df["network"].dropna().unique().tolist())
-
-        # 3) Ordenamiento / Tabla / Gráficas
-        if trig == "sort-state" and sort_state:
-            # (Opcional) usa pivot cacheado
-            wide = _pivot_cached(fecha, hora, tuple(nets))
-            if wide is not None and not wide.empty:
-                _, METRIC_ORDER, _ = expand_groups_for_networks(nets)
-                sort_col_req = sort_state.get("column")
-                resolved = _resolve_sort_col(wide, METRIC_ORDER, sort_col_req)
-                if resolved and (resolved in wide.columns):
-                    wide = wide.sort_values(
-                        by=resolved,
-                        ascending=bool(sort_state.get("ascending", True)),
-                        na_position="last"
-                    )
-                table_children = render_kpi_table_multinet(wide, networks=nets)
-            else:
-                table_children = render_kpi_table_multinet(df, networks=nets)
-
-            chart_cs = no_update
-            chart_ps = no_update
-        else:
-            table_children = render_kpi_table_multinet(df, networks=nets)
-            chart_cs = line_by_time_multi(df, metrics_for_chart_cs)
-            chart_ps = line_by_time_multi(df, metrics_for_chart_ps)
-
-        return table_children, chart_cs, chart_ps
+        # 3) Grid + charts
+        nets_for_grid = networks if (networks and len(networks) > 0) else None
+        grid = build_grid(df, networks=nets_for_grid)
+        chart_cs = line_by_time_multi(df, metrics_for_chart_cs)
+        chart_ps = line_by_time_multi(df, metrics_for_chart_ps)
+        return grid, chart_cs, chart_ps
 
     # 3) (OJO) refresh-interval ↔ refresh-interval-global
     # Asegúrate de que ESTOS IDs existan en tu layout; si no, borra este callback.

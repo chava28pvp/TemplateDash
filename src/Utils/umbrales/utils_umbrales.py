@@ -84,3 +84,4 @@ def progress_cfg(column: str, network: Optional[str] = None) -> Dict[str, Any]:
         "decimals": int(cfg.get("decimals", 1)),
         "label": str(cfg.get("label", "{value:.1f}")),
     }
+
