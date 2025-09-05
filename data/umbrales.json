@@ -135,10 +135,13 @@
       "label": "{value:.0f}"
     },
     "cs_drop_abnrel": {
-      "min": 0,
-      "max": 30,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0.0,
+        "max": 10.0,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {}
     }
   },
   "colors": {

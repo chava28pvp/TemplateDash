@@ -14,10 +14,9 @@ def serve_layout():
             dbc.Col([
                 html.H2("Dashboard Master", className="my-3"),
             ], width=8),
-
         ], className="align-items-center"),
 
-        # Filtros
+        # Filtros + botón de configuración de umbrales
         html.Div(
             children=[
                 build_filters(),  # tu card/contenedor de filtros
@@ -28,23 +27,42 @@ def serve_layout():
             ],
             className="position-relative"  # ancla para el posicionamiento absoluto
         ),
-        # Contenido principal
+
         # Contenido principal
         html.Div(id="cards-row", children=[
 
-            # Tabla principal (scroll interno)
+            # Tabla principal + paginación
             dbc.Row([
-                dbc.Col(
-                    # Contenedor con altura fija y scroll; dentro va el mismo id="table-container"
+                dbc.Col([
+                    # Controles de paginación
+                    dbc.Card(dbc.CardBody([
+                        dbc.Row([
+                            dbc.Col(dbc.Button("« Anterior", id="page-prev", n_clicks=0), width="auto"),
+                            dbc.Col(html.Div(id="page-indicator", className="mx-2 fw-semibold"), width="auto"),
+                            dbc.Col(dbc.Button("Siguiente »", id="page-next", n_clicks=0), width="auto"),
+                            dbc.Col(
+                                dbc.Input(
+                                    id="page-size",
+                                    type="number",
+                                    min=10,
+                                    step=10,
+                                    value=50,
+                                    placeholder="Tamaño",
+                                    style={"width": "110px"}
+                                ),
+                                width="auto",
+                                className="ms-3"
+                            ),
+                            dbc.Col(html.Div(id="total-rows-banner", className="text-muted"), width=True),
+                        ], className="g-2 align-items-center"),
+                    ]), className="shadow-sm mb-2"),
+
+                    # Contenedor con altura fija y scroll para la tabla
                     html.Div(
-                        className="kpi-table-wrap",
-                        children=dcc.Loading(
-                            type="default",
-                            children=html.Div(id="table-container", className="kpi-table-container")
-                        )
+                        id="table-container",
+                        className="kpi-table-wrap kpi-table-container"
                     ),
-                    md=12, className="my-3"
-                )
+                ], md=12, className="my-3"),
             ]),
 
             # Gráficas
@@ -65,7 +83,7 @@ def serve_layout():
                 ),
             ]),
 
-            # Tablas inferiores (scroll interno en cada una)
+            # Tablas inferiores
             dbc.Row([
                 dbc.Col(
                     html.Div(
@@ -92,7 +110,7 @@ def serve_layout():
 
         # Stores e Intervalos
         dcc.Store(id="defaults-store", data={"fecha": default_date_str(), "hora": default_hour_str()}),
-        dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
+        dcc.Store(id="page-state", data={"page": 1, "page_size": 50}),  # ← estado de paginación
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
-
+        dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
     ], fluid=True)
