@@ -2,8 +2,6 @@ from dash import html
 import math
 import dash_bootstrap_components as dbc
 import pandas as pd
-
-from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
 
 # =========================
@@ -85,7 +83,7 @@ def strip_net(colname: str) -> str:
         return colname.split("__", 1)[1]
     return colname
 
-def _resolve_sort_col(df, metric_order, sort_col):
+def _resolve_sort_col(df: pd.DataFrame, metric_order: list[str], sort_col: str | None):
     if not sort_col:
         return None
     if sort_col in df.columns:
@@ -164,13 +162,7 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
 # Lógica multi-network
 # =========================
 
-def expand_groups_for_networks(networks):
-    """
-    Devuelve:
-      - groups_3lvl: [(net, group_title, [prefixed_cols])]
-      - visible_order: lista lineal de todas las columnas prefijadas
-      - end_of_group: set con la última col de cada (network, group)
-    """
+def expand_groups_for_networks(networks: list[str]):
     groups_3lvl, visible_order, end_of_group = [], [], set()
     for net in networks:
         for grp_title, base_cols in BASE_GROUPS:
@@ -180,29 +172,22 @@ def expand_groups_for_networks(networks):
             end_of_group.add(cols[-1])
     return groups_3lvl, visible_order, end_of_group
 
-def prefixed_progress_cols(networks):
+
+def prefixed_progress_cols(networks: list[str]):
     return {f"{net}__{c}" for net in networks for c in BASE_PROGRESS_COLS}
 
-def prefixed_severity_cols(networks):
+
+def prefixed_severity_cols(networks: list[str]):
     return {f"{net}__{c}" for net in networks for c in BASE_SEVERITY_COLS}
 
 def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
-    """
-    Si networks es None, usa todas las redes presentes en df_long['network'].
-    """
     if networks is None:
         networks = sorted(df_long["network"].dropna().unique().tolist())
-
     df = df_long[df_long["network"].isin(networks)].copy()
     if df.empty:
-        return df
+       return df
 
-    wide = df.pivot_table(
-        index=INDEX_KEYS,
-        columns="network",
-        values=VALUE_COLS,
-        aggfunc="first"
-    )
+    wide = df.pivot_table(index=INDEX_KEYS, columns="network", values=VALUE_COLS, aggfunc="first")
     wide.columns = [f"{net}__{val}" for (val, net) in wide.columns]
     wide = wide.reset_index()
     return wide

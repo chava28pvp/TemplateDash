@@ -2,6 +2,8 @@
 import pandas as pd
 from functools import lru_cache
 from sqlalchemy import create_engine, text, bindparam
+from typing import Dict, Tuple, Optional, List
+from .Utils.alarmados import alarm_threshold_for, load_threshold_cfg, excess_base_for
 from .config import SQLALCHEMY_URL
 
 # =========================================================
@@ -75,7 +77,14 @@ BASE_COLUMNS = [
 # Mínimo seguro si ninguna columna mapea (evita SELECT *)
 _MIN_SAFE_COLUMNS = ["fecha", "hora", "vendor", "noc_cluster", "network", "technology"]
 
-
+_ALARM_KPIS = [
+    "ps_rrc_fail",
+    "ps_rab_fail",
+    "ps_s1_fail",
+    "ps_drop_abnrel",
+    "cs_rrc_fail",
+    "cs_rab_fail",
+]
 # =========================================================
 # Helpers internos
 # =========================================================
@@ -227,7 +236,66 @@ def _filters_where_and_params(
         use_technologies,
     )
 
+def _build_flag_and_excess_cases(
+    kpi: str,
+    networks: Optional[List[str]],
+    cfg
+) -> Tuple[str, str, Dict[str, object]]:
+    """
+    Devuelve (flag_thr_expr, excess_thr_expr, params) donde:
+      - flag_thr_expr   = CASE por red usando alarm_threshold_for
+      - excess_thr_expr = CASE por red usando excess_base_for
+    Todos con fallback a default/max, sin hardcode.
+    """
+    params: Dict[str, object] = {}
 
+    # redes a considerar dentro del CASE
+    per_net_cfg = (cfg.get("progress", {}).get(kpi, {}).get("per_network") or {})
+    nets = networks or list(per_net_cfg.keys())
+
+    # defaults
+    flag_def = alarm_threshold_for(kpi, "", cfg)
+    exc_def  = excess_base_for(kpi, "", cfg)
+    if flag_def is None:
+        flag_def = 0.0
+    if exc_def is None:
+        # si no hay excess_base ni max en default, cae a flag_def como último recurso
+        exc_def = flag_def
+
+    params[f"{kpi}_flag_thr_def"] = flag_def
+    params[f"{kpi}_exc_thr_def"]  = exc_def
+
+    flag_parts, exc_parts = [], []
+    for i, net in enumerate(nets):
+        flag_thr = alarm_threshold_for(kpi, net or "", cfg)
+        exc_thr  = excess_base_for(kpi, net or "", cfg)
+
+        # si no hay específicos, omite rama; caerá al ELSE default
+        if flag_thr is not None:
+            p_net = f"{kpi}_net_{i}"
+            p_thr = f"{kpi}_flag_thr_{i}"
+            params[p_net] = net
+            params[p_thr] = flag_thr
+            flag_parts.append(f"WHEN {_quote(COLMAP['network'])} = :{p_net} THEN :{p_thr}")
+
+        if exc_thr is not None:
+            p_net_e = f"{kpi}_enet_{i}"
+            p_thr_e = f"{kpi}_exc_thr_{i}"
+            params[p_net_e] = net
+            params[p_thr_e] = exc_thr
+            exc_parts.append(f"WHEN {_quote(COLMAP['network'])} = :{p_net_e} THEN :{p_thr_e}")
+
+    if flag_parts:
+        flag_expr = f"(CASE {' '.join(flag_parts)} ELSE :{kpi}_flag_thr_def END)"
+    else:
+        flag_expr = f":{kpi}_flag_thr_def"
+
+    if exc_parts:
+        exc_expr = f"(CASE {' '.join(exc_parts)} ELSE :{kpi}_exc_thr_def END)"
+    else:
+        exc_expr = f":{kpi}_exc_thr_def"
+
+    return flag_expr, exc_expr, params
 # =========================================================
 # API pública
 # =========================================================
@@ -241,6 +309,7 @@ def fetch_kpis(
     technologies=None,
     limit=None,
     na_as_empty=False,
+
 ):
     """
     Consulta no paginada (útil para casos pequeños o descargas).
@@ -452,3 +521,104 @@ def fetch_kpis_paginated_global_sort(
         df_page = df_page.where(pd.notna(df_page), "")
 
     return df_page, int(total)
+
+#ALARMADOS DATA ACCESS
+
+def fetch_kpis_paginated_alarm_sort(
+    *,
+    fecha=None,
+    hora=None,
+    vendors=None,
+    clusters=None,
+    networks=None,        # puede ser 1 o varias; aplica CASE por fila
+    technologies=None,
+    page=1,
+    page_size=50,
+    na_as_empty=False,
+):
+    """
+    Ordena por:
+      1) número de KPIs en alarma (>= alarm del JSON por red),
+      2) exceso total sobre umbrales (col - excess_base del JSON por red),
+      3) Noc_Cluster (desempate).
+    Incluye solo filas con >=1 KPI en alarma.
+    """
+    page = max(1, int(page))
+    page_size = max(1, int(page_size))
+    offset = (page - 1) * page_size
+
+    cfg = load_threshold_cfg()  # cacheado
+
+    # WHERE base y params
+    where_sql, params, uv, uc, un, ut = _filters_where_and_params(
+        fecha, hora, vendors, clusters, networks, technologies
+    )
+
+    nets_list = _as_list(networks) or []
+
+    flag_terms: List[str] = []   # (col >= flag_thr_expr)
+    excess_terms: List[str] = [] # GREATEST(COALESCE(col,0) - exc_thr_expr, 0)
+    thr_params_all: Dict[str, object] = {}
+
+    for kpi in _ALARM_KPIS:
+        if kpi not in COLMAP:
+            continue
+        col_sql = _quote(COLMAP[kpi])
+
+        flag_thr_expr, exc_thr_expr, p = _build_flag_and_excess_cases(kpi, nets_list, cfg)
+        thr_params_all.update(p)
+
+        flag_terms.append(f"({col_sql} >= {flag_thr_expr})")
+        excess_terms.append(f"GREATEST(COALESCE({col_sql},0) - {exc_thr_expr}, 0)")
+
+    # si no hay KPIs válidos, cae al orden normal
+    if not flag_terms:
+        return fetch_kpis_paginated(
+            fecha=fecha, hora=hora, vendors=vendors, clusters=clusters,
+            networks=networks, technologies=technologies,
+            page=page, page_size=page_size, na_as_empty=na_as_empty
+        )
+
+    flags_sum  = " + ".join(flag_terms)
+    excess_sum = " + ".join(excess_terms)
+
+    # COUNT con al menos 1 alarma
+    count_sql = f"""
+        SELECT COUNT(*) AS total
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+          AND ( { " OR ".join(flag_terms) } )
+    """
+
+    # SELECT paginado aplicando el ORDER deseado
+    friendly_cols = _resolve_columns(BASE_COLUMNS)
+    select_cols = _select_list_with_aliases(friendly_cols)
+
+    sel_sql = f"""
+        SELECT {", ".join(select_cols)}
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+          AND ( { " OR ".join(flag_terms) } )
+        ORDER BY
+          ({flags_sum}) DESC,
+          ({excess_sum}) DESC,
+          {_quote(COLMAP['noc_cluster'])} ASC
+        LIMIT :_limit OFFSET :_offset
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        # COUNT
+        stmt_count = _prepare_stmt_with_expanding(count_sql, uv, uc, un, ut)
+        total = conn.execute(stmt_count, {**params, **thr_params_all}).scalar() or 0
+
+        # PAGE
+        sel_params = {**params, **thr_params_all, "_limit": page_size, "_offset": offset}
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, uv, uc, un, ut)
+        df = pd.read_sql(stmt_sel, conn, params=sel_params)
+
+    df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
+    if na_as_empty and not df.empty:
+        df = df.where(pd.notna(df), "")
+
+    return df, int(total)

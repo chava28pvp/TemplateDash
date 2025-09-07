@@ -1,10 +1,8 @@
 from dash import Input, Output, State, no_update
 
-from src.Utils.umbrales.umbrales_manager import UmbralesManager
 from dash.exceptions import PreventUpdate
 from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
-umbrales_manager = UmbralesManager()
 
 def _trigger_id():
     """Dash ctx compatibility across versions.

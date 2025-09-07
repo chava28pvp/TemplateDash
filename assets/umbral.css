@@ -9,3 +9,7 @@
 
 /* Progress bar container width is handled inline via --kb-width (already in your code) */
 """
+body {
+    background-color: #121212 !important;
+    color: #f1f1f1;
+}

@@ -69,14 +69,14 @@ def serve_layout():
             dbc.Row([
                 dbc.Col(
                     dbc.Card(dbc.CardBody([
-                        html.H4("Gráfica A (CS)", className="mb-3"),
+                        html.H4("Gráfica (CS)", className="mb-3"),
                         dcc.Loading(html.Div(id="line-chart-a"))
                     ]), className="shadow-sm"),
                     md=6, sm=12, className="my-3"
                 ),
                 dbc.Col(
                     dbc.Card(dbc.CardBody([
-                        html.H4("Gráfica B (PS)", className="mb-3"),
+                        html.H4("Gráfica (PS)", className="mb-3"),
                         dcc.Loading(html.Div(id="line-chart-b"))
                     ]), className="shadow-sm"),
                     md=6, sm=12, className="my-3"
@@ -84,33 +84,15 @@ def serve_layout():
             ]),
 
             # Tablas inferiores
-            dbc.Row([
-                dbc.Col(
-                    html.Div(
-                        className="kpi-table-wrap",
-                        children=dcc.Loading(
-                            type="default",
-                            children=html.Div(id="table-bottom-a", className="kpi-table-container")
-                        )
-                    ),
-                    md=6, className="my-3"
-                ),
-                dbc.Col(
-                    html.Div(
-                        className="kpi-table-wrap",
-                        children=dcc.Loading(
-                            type="default",
-                            children=html.Div(id="table-bottom-b", className="kpi-table-container")
-                        )
-                    ),
-                    md=6, className="my-3"
-                ),
-            ]),
+
         ]),
 
-        # Stores e Intervalos
+        # Stores
         dcc.Store(id="defaults-store", data={"fecha": default_date_str(), "hora": default_hour_str()}),
         dcc.Store(id="page-state", data={"page": 1, "page_size": 50}),  # ← estado de paginación
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
-    ], fluid=True)
+    ],
+        fluid=True,
+        style={"backgroundColor": "#121212", "color": "white"}  # 👈 fondo y texto
+    )

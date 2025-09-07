@@ -104,6 +104,23 @@ def build_filters(
 
             # (Opcional) Intervalo de refresco local
             # dcc.Interval(id="refresh-interval"),
+            # Fila 3: Modo de orden
+            dbc.Row([
+                dbc.Col([
+                    dbc.Label("Orden"),
+                    dcc.RadioItems(
+                        id="f-sort-mode",
+                        options=[
+                            {"label": "Alarmado", "value": "alarmado"},
+                            {"label": "Global", "value": "global"},
+                        ],
+                        value="alarmado",  # por defecto usa el orden de alarmas
+                        inline=True,
+                        persistence=True, persistence_type="session"
+                    ),
+                ], md=12),
+            ], className="g-3"),
+
         ]),
         className="shadow-sm"
     )

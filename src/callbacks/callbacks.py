@@ -3,16 +3,15 @@ from dash import Input, Output, State, ALL, no_update, ctx
 import math
 
 from components.Tables.main_table import (
-    expand_groups_for_networks,
     pivot_by_network,
-    _resolve_sort_col,
     render_kpi_table_multinet,
     strip_net,
 )
 from components.Tables.simple_tables import render_simple_table
 from components.charts import line_by_time_multi
 
-from src.data_access import fetch_kpis, fetch_kpis_paginated, COLMAP, fetch_kpis_paginated_global_sort
+from src.data_access import fetch_kpis, fetch_kpis_paginated, COLMAP, fetch_kpis_paginated_global_sort, \
+    fetch_kpis_paginated_alarm_sort
 from src.config import REFRESH_INTERVAL_MS
 from src.Utils.utils_tables import (
     cols_from_order,
@@ -169,12 +168,13 @@ def register_callbacks(app):
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
+        Input("f-sort-mode", "value"),  # 👈 nuevo
         Input("refresh-timer", "n_intervals"),
         Input("sort-state", "data"),
-        Input("page-state", "data"),  # ← era State/Output; ahora es Input
+        Input("page-state", "data"),
         prevent_initial_call=False,
     )
-    def refresh_outputs(fecha, hora, networks, technologies, vendors, clusters, _n, sort_state, page_state):
+    def refresh_outputs(fecha, hora, networks, technologies, vendors, clusters, sort_mode, _n, sort_state, page_state):
         networks = _as_list(networks)
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
@@ -184,14 +184,13 @@ def register_callbacks(app):
         page_size = int((page_state or {}).get("page_size", 50))
 
         # ----------------------------
-        # Orden global: detectar métrica y red (si viene prefijada)
+        # Detección de sort explícito
         # ----------------------------
         sort_by = None
         sort_net = None
         ascending = True
-
         if sort_state and sort_state.get("column"):
-            col = sort_state["column"]  # puede venir como "ATT__ps_rrc_fail" o "ps_rrc_fail"
+            col = sort_state["column"]
             ascending = bool(sort_state.get("ascending", True))
             if "__" in col:
                 sort_net, base = col.split("__", 1)
@@ -200,90 +199,73 @@ def register_callbacks(app):
                 sort_by = col
 
         # ----------------------------
-        # Consulta SOLO la página actual con (o sin) orden global en SQL
+        # Fuente de datos según MODO
         # ----------------------------
-        if sort_by in COLMAP:
-            # Ordenamiento global por la métrica solicitada
-            df, total = fetch_kpis_paginated_global_sort(
-                fecha=fecha,
-                hora=hora,
-                vendors=vendors or None,
-                clusters=clusters or None,
-                networks=networks or None,
-                technologies=technologies or None,
-                page=page,
-                page_size=page_size,
-                sort_by_friendly=sort_by,  # ej. "ps_rrc_fail"
-                sort_net=sort_net,  # ej. "ATT" si clic fue "ATT__ps_rrc_fail"
-                ascending=ascending,
+        if sort_mode == "alarmado":
+            safe_sort_state = None
+            # Ignora sort explícito y usa orden por alarmas del JSON
+            df, total = fetch_kpis_paginated_alarm_sort(
+                fecha=fecha, hora=hora,
+                vendors=vendors or None, clusters=clusters or None,
+                networks=networks or None, technologies=technologies or None,
+                page=page, page_size=page_size,
             )
-        else:
-            # Sin sort o sort inválido -> orden por fecha/hora (paginación normal)
-            df, total = fetch_kpis_paginated(
-                fecha=fecha,
-                hora=hora,
-                vendors=vendors or None,
-                clusters=clusters or None,
-                networks=networks or None,
-                technologies=technologies or None,
-                page=page,
-                page_size=page_size,
-            )
+        else:  # "global"
+            safe_sort_state = sort_state
+            if sort_by in COLMAP:
+                df, total = fetch_kpis_paginated_global_sort(
+                    fecha=fecha, hora=hora,
+                    vendors=vendors or None, clusters=clusters or None,
+                    networks=networks or None, technologies=technologies or None,
+                    page=page, page_size=page_size,
+                    sort_by_friendly=sort_by,
+                    sort_net=sort_net,
+                    ascending=ascending,
+                )
+            else:
+                df, total = fetch_kpis_paginated(
+                    fecha=fecha, hora=hora,
+                    vendors=vendors or None, clusters=clusters or None,
+                    networks=networks or None, technologies=technologies or None,
+                    page=page, page_size=page_size,
+                )
 
         # ----------------------------
-        # Networks efectivas para header multi-network
+        # Resto igual que antes (nets, pivot, render, charts, banners)
         # ----------------------------
         if networks:
             nets = networks
         else:
             nets = sorted(df["network"].dropna().unique().tolist()) if "network" in df.columns else []
 
-        # ----------------------------
-        # Pivot a wide y preserva el orden global proveniente de SQL
-        # ----------------------------
         if df is not None and not df.empty and nets:
-            # 1) Captura el orden global de las llaves tal como vinieron de SQL
             key_cols = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
-            # lista de tuplas únicas en el orden de aparición
             tuples_in_order = list(dict.fromkeys(
                 map(tuple, df[key_cols].itertuples(index=False, name=None))
             ))
             order_map = {t: i for i, t in enumerate(tuples_in_order)}
-
-            # 2) Pivot
             wide = pivot_by_network(df, networks=nets)
-
-            # 3) Reordena el wide según el orden global de llaves
             if wide is not None and not wide.empty:
                 wide["_ord"] = wide[key_cols].apply(lambda r: order_map.get(tuple(r.values.tolist()), 10 ** 9), axis=1)
                 wide = wide.sort_values("_ord").drop(columns=["_ord"])
         else:
-            wide = df  # puede ser None o vacío
+            wide = df
 
-        # ----------------------------
-        # Render de tabla (NO reordenes por métrica aquí; ya viene global desde SQL)
-        # ----------------------------
-        table = render_kpi_table_multinet(wide if (wide is not None and not wide.empty) else df,
-                                          networks=nets, sort_state=sort_state)
+        table = render_kpi_table_multinet(
+            wide if (wide is not None and not wide.empty) else df,
+            networks=nets,
+            sort_state=safe_sort_state,  # 👈 aquí
+        )
 
-        # Charts (con la página para mantener ligero; cambia a fetch_kpis si quieres historia completa)
         chart_cs = line_by_time_multi(df, metrics_for_chart_cs)
         chart_ps = line_by_time_multi(df, metrics_for_chart_ps)
 
-        # Indicadores de paginación
+        import math
         total_pages = max(1, math.ceil(total / max(1, page_size)))
         page_corrected = min(max(1, page), total_pages)
-
         indicator = f"Página {page_corrected} de {total_pages}"
-        if total == 0:
-            banner = "Sin resultados."
-        else:
-            start = (page_corrected - 1) * page_size + 1
-            end = min(page_corrected * page_size, total)
-            banner = f"Mostrando {start}–{end} de {total} registros"
+        banner = "Sin resultados." if total == 0 else f"Mostrando {(page_corrected - 1) * page_size + 1}–{min(page_corrected * page_size, total)} de {total} registros"
 
-        # ⚠️ Si tu decorador usa Input("page-state","data"),
-        # este callback DEBE devolver 5 outputs (sin regresar page-state).
         return table, chart_cs, chart_ps, indicator, banner
 
     # -------------------------------------------------
@@ -364,3 +346,20 @@ def register_callbacks(app):
             return no_update, no_update
 
         return hh, today
+
+    @app.callback(
+        Output("page-state", "data", allow_duplicate=True),
+        Input("f-fecha", "date"),
+        Input("f-hora", "value"),
+        Input("f-network", "value"),
+        Input("f-technology", "value"),
+        Input("f-vendor", "value"),
+        Input("f-cluster", "value"),
+        Input("page-size", "value"),
+        Input("f-sort-mode", "value"),  # 👈 nuevo
+        prevent_initial_call=True,
+    )
+    def reset_page_on_filters(_fecha, _hora, _net, _tech, _ven, _clu, page_size, _mode):
+        ps = max(1, int(page_size or 50))
+        return {"page": 1, "page_size": ps}
+

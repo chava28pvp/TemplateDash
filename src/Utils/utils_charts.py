@@ -1,14 +1,14 @@
 # A) Métricas para la gráfica (CS)
 metrics_for_chart_cs = [
-            "total_erlangs_nocperf",
-            "cs_failures_rrc_percent",
-            "cs_failures_rab_percent",
-            "lcs_cs_rate",
+            "cs_traff_erl",
+            "cs_rrc_ia_percent",
+            "cs_rab_ia_percent",
+            "cs_drop_dc_percent",
         ]
 # B) Métricas para la gráfica (PS)
 metrics_for_chart_ps = [
-            "total_mbytes_nocperf",
-            "ps_failure_rrc_percent",
-            "ps_failures_rab_percent",
-            "lcs_ps_rate",
+            "ps_traff_gb",
+            "ps_rrc_fail",
+            "ps_rab_ia_percent",
+            "ps_drop_dc_percen",
         ]

@@ -87,28 +87,60 @@
   },
   "progress": {
     "ps_rrc_fail": {
-      "min": 0,
-      "max": 30,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 9000.0
+        }
+      }
     },
     "ps_rab_fail": {
-      "min": 0,
-      "max": 30,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0.0,
+        "max": 13500.0,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 8000.0
+        }
+      }
     },
     "ps_s1_fail": {
-      "min": 0,
-      "max": 30,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 16000.0
+        }
+      }
     },
     "ps_drop_abnrel": {
-      "min": 0,
-      "max": 30,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 16000.0
+        }
+      }
     },
     "cs_rrc_fail": {
       "default": {
@@ -124,15 +156,23 @@
         },
         "NET": {
           "min": 0.0,
-          "max": 20.0
+          "max": 700.0
         }
       }
     },
     "cs_rab_fail": {
-      "min": 0,
-      "max": 30,
-      "decimals": 0,
-      "label": "{value:.0f}"
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 700.0
+        }
+      }
     },
     "cs_drop_abnrel": {
       "default": {
@@ -141,7 +181,12 @@
         "decimals": 0,
         "label": "{value:.0f}"
       },
-      "per_network": {}
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 80.0
+        }
+      }
     }
   },
   "colors": {
