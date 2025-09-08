@@ -124,5 +124,5 @@ def build_filters(
             ], className="g-3"),
 
         ]),
-        className="shadow-sm"
+        className="shadow-sm filtros-card"
     )

@@ -565,11 +565,20 @@ def fetch_kpis_paginated_alarm_sort(
             continue
         col_sql = _quote(COLMAP[kpi])
 
+        # Si hay posibilidad de texto, fuerza CAST:
+        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+
         flag_thr_expr, exc_thr_expr, p = _build_flag_and_excess_cases(kpi, nets_list, cfg)
         thr_params_all.update(p)
 
-        flag_terms.append(f"({col_sql} >= {flag_thr_expr})")
-        excess_terms.append(f"GREATEST(COALESCE({col_sql},0) - {exc_thr_expr}, 0)")
+        flag_terms.append(
+            f"(CASE WHEN COALESCE({num_col}, 0) >= {flag_thr_expr} THEN 1 ELSE 0 END)"
+        )
+
+        # 2) exceso truncado a 0
+        excess_terms.append(
+            f"GREATEST(COALESCE({num_col}, 0) - {exc_thr_expr}, 0)"
+        )
 
     # si no hay KPIs válidos, cae al orden normal
     if not flag_terms:
@@ -587,18 +596,23 @@ def fetch_kpis_paginated_alarm_sort(
         SELECT COUNT(*) AS total
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
-          AND ( { " OR ".join(flag_terms) } )
+          AND ( ({flags_sum}) >= 1 )
     """
 
     # SELECT paginado aplicando el ORDER deseado
     friendly_cols = _resolve_columns(BASE_COLUMNS)
     select_cols = _select_list_with_aliases(friendly_cols)
 
+    select_cols_debug = select_cols + [
+        f"({flags_sum}) AS kpis_alarmados",
+        f"({excess_sum}) AS exceso_total"
+    ]
+
     sel_sql = f"""
-        SELECT {", ".join(select_cols)}
+        SELECT {", ".join(select_cols_debug)}
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
-          AND ( { " OR ".join(flag_terms) } )
+          AND ( ({flags_sum}) >= 1 )
         ORDER BY
           ({flags_sum}) DESC,
           ({excess_sum}) DESC,

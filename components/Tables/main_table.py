@@ -13,16 +13,16 @@ ROW_KEYS = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
 
 # Grupos SOLO de métricas (sin fecha/hora/vendor/cluster/tech)
 BASE_GROUPS = [
-    ("INTEG",   ["integrity"]),
-    ("CS_TRAFF", ["cs_traff_delta", "cs_traff_erl"]),
-    ("CS_RRC",   ["cs_rrc_ia_percent", "cs_rrc_fail"]),
-    ("CS_RAB",   ["cs_rab_ia_percent", "cs_rab_fail"]),
-    ("CS_DROP",  ["cs_drop_dc_percent", "cs_drop_abnrel"]),
+    ("INTEG", ["integrity"]),
     ("PS_TRAFF", ["ps_traff_delta", "ps_traff_gb"]),
     ("PS_RRC",   ["ps_rrc_ia_percent", "ps_rrc_fail"]),
     ("PS_RAB",   ["ps_rab_ia_percent", "ps_rab_fail"]),
     ("PS_S1",    ["ps_s1_ia_percent", "ps_s1_fail"]),
     ("PS_DROP",  ["ps_drop_dc_percent", "ps_drop_abnrel"]),
+    ("CS_TRAFF", ["cs_traff_delta", "cs_traff_erl"]),
+    ("CS_RRC",   ["cs_rrc_ia_percent", "cs_rrc_fail"]),
+    ("CS_RAB",   ["cs_rab_ia_percent", "cs_rab_fail"]),
+    ("CS_DROP",  ["cs_drop_dc_percent", "cs_drop_abnrel"]),
 ]
 
 # Columnas base que llevan progress bar y severidad (sin prefijo de red)
@@ -98,17 +98,20 @@ def _resolve_sort_col(df: pd.DataFrame, metric_order: list[str], sort_col: str |
 def _label_base(base: str) -> str:
     return DISPLAY_NAME_BASE.get(base, base)
 
-def _fmt_number(v):
-    # vacío para None/NaN/inf
+def _fmt_number(v, colname=None):
     if v is None:
         return ""
     if isinstance(v, float):
         if pd.isna(v) or math.isinf(v):
             return ""
+        # Caso especial para ps_traff_gb → sin decimales
+        if colname == "ps_traff_gb":
+            return f"{int(v):,}"
         return f"{v:,.1f}"
     if isinstance(v, int):
         return f"{v:,}"
     return str(v)
+
 
 def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
                    color=None, striped=True, animated=True, decimals=1,
@@ -347,7 +350,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
                     cls = f"cell-{cell_severity(base_name, float(num_val), network=net)}"
                 else:
                     cls = "cell-neutral"
-                cell = html.Div(_fmt_number(val), className=cls)
+                cell = html.Div(_fmt_number(val, base_name), className=cls)
 
             td_cls = "td-cell" + (" td-end-of-group" if col in END_OF_GROUP else "")
             tds.append(html.Td(cell, className=td_cls))

@@ -6,7 +6,6 @@ from src.config import REFRESH_INTERVAL_MS
 from src.Utils.utils_time import default_date_str, default_hour_str
 from components.umbral_config_modal import create_umbral_config_modal
 
-
 def serve_layout():
     return dbc.Container([
         # Header principal
@@ -18,13 +17,16 @@ def serve_layout():
 
         # Filtros + botón de configuración de umbrales
         html.Div(
+
             children=[
+
                 build_filters(),  # tu card/contenedor de filtros
                 html.Div(
                     create_umbral_config_modal(),  # botón + modal
                     className="position-absolute top-0 end-0 mt-3 me-3 umbral-fab"
                 ),
             ],
+
             className="position-relative"  # ancla para el posicionamiento absoluto
         ),
 

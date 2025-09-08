@@ -12,7 +12,7 @@ cache = Cache(config={
 })
 external_stylesheets = [dbc.themes.LUX]
 
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
+app = Dash(__name__, external_stylesheets=[dbc.themes.DARKLY], suppress_callback_exceptions=True)
 cache.init_app(app.server)
 server = app.server  # para despliegue (gunicorn, etc.)
 app.config.suppress_callback_exceptions = True
