@@ -105,20 +105,22 @@ def build_filters(
             # (Opcional) Intervalo de refresco local
             # dcc.Interval(id="refresh-interval"),
             # Fila 3: Modo de orden
+            # Fila 3: Modo de orden (como dropdown)
             dbc.Row([
                 dbc.Col([
                     dbc.Label("Orden"),
-                    dcc.RadioItems(
+                    dcc.Dropdown(
                         id="f-sort-mode",
                         options=[
                             {"label": "Alarmado", "value": "alarmado"},
                             {"label": "Global", "value": "global"},
                         ],
-                        value="alarmado",  # por defecto usa el orden de alarmas
-                        inline=True,
+                        value="alarmado",  # por defecto
+                        clearable=False,
+                        placeholder="Selecciona orden",
                         persistence=True, persistence_type="session"
-                    ),
-                ], md=12),
+                    )
+                ], md=3),  # usa md=3 para alinearlo con otros filtros de la fila
             ], className="g-3"),
 
         ]),

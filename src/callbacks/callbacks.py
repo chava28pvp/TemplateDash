@@ -1,7 +1,5 @@
 # callbacks.py (o donde declares tus callbacks)
 from dash import Input, Output, State, ALL, no_update, ctx
-import math
-
 from components.Tables.main_table import (
     pivot_by_network,
     render_kpi_table_multinet,
