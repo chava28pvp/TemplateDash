@@ -1,0 +1,67 @@
+/* === Progress bar custom (independiente de Bootstrap) === */
+.kb {
+  /* Variables personalizables */
+  --kb-height: 16px;
+  --kb-radius: 8px;
+  --kb-track: #e9ecef;
+  --kb-fill: #0d6efd;         /* azul por defecto */
+  --kb-text: #fff;
+  --kb-font-size: 0.70rem;
+  --kb-font-weight: 700;
+  --kb-width: 140px;          /* << nuevo: ancho por defecto fijo */
+
+  position: relative;
+  width: var(--kb-width);     /* << antes: 100% */
+  height: var(--kb-height);
+  background: var(--kb-track);
+  border-radius: var(--kb-radius);
+  overflow: hidden;
+  display: inline-block;      /* << asegura que respete el ancho */
+  vertical-align: middle;
+}
+
+.kb__fill {
+  height: 100%;
+  background: var(--kb-fill);
+  color: var(--kb-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--kb-font-size);
+  font-weight: var(--kb-font-weight);
+  line-height: 1;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(0,0,0,.2);
+  min-width: 2.4rem;          /* que el número no desaparezca */
+  border-radius: var(--kb-radius) 0 0 var(--kb-radius);
+}
+
+/* Opcional: envoltorio para mostrar el valor a la derecha */
+.kb-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.kb-value {
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: .85;
+}
+
+/* Opcional: centrado dentro de celdas de la tabla */
+.td-cell .kb, .td-cell .kb-wrap {
+  margin: 0 auto;
+}
+
+/* (Opcional) Versión a ancho completo en pantallas chicas */
+@media (max-width: 768px) {
+  .kb { --kb-width: 100%; width: 100%; }
+}
+
+/* Modificadores de color (opcional) */
+.kb--primary { --kb-fill: #0d6efd; }
+.kb--success { --kb-fill: #198754; }
+.kb--warning { --kb-fill: #ffc107; }
+.kb--danger  { --kb-fill: #dc3545; }
+.kb--info    { --kb-fill: #0dcaf0; }

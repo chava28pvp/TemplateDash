@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "severity": {
+    "ps_rrc_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 110.0,
+        "bueno": 99.0,
+        "regular": 98.0,
+        "critico": 0.0
+      }
+    },
+    "ps_rab_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 99.5,
+        "bueno": 98.5,
+        "regular": 97.5,
+        "critico": 0.0
+      }
+    },
+    "ps_s1_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 99.5,
+        "bueno": 98.5,
+        "regular": 97.5,
+        "critico": 0.0
+      }
+    },
+    "ps_drop_dc_percent": {
+      "orientation": "lower_is_better",
+      "thresholds": {
+        "excelente": 1.0,
+        "bueno": 2.0,
+        "regular": 3.0,
+        "critico": 100.0
+      }
+    },
+    "cs_rrc_ia_percent": {
+      "default": {
+        "orientation": "higher_is_better",
+        "thresholds": {
+          "excelente": 99.0,
+          "bueno": 95.0,
+          "regular": 60.0,
+          "critico": -3.0
+        }
+      },
+      "per_network": {
+        "ATT": {
+          "thresholds": {
+            "excelente": 90.0,
+            "bueno": 80.0,
+            "regular": 70.0,
+            "critico": -3.0
+          }
+        },
+        "NET": {
+          "thresholds": {
+            "excelente": 100.0,
+            "bueno": 90.0,
+            "regular": 60.0,
+            "critico": -3.0
+          }
+        }
+      }
+    },
+    "cs_rab_ia_percent": {
+      "orientation": "higher_is_better",
+      "thresholds": {
+        "excelente": 100.0,
+        "bueno": 99.0,
+        "regular": 97.5,
+        "critico": 0.0
+      }
+    },
+    "cs_drop_dc_percent": {
+      "orientation": "lower_is_better",
+      "thresholds": {
+        "excelente": 0.0,
+        "bueno": 1.0,
+        "regular": 3.0,
+        "critico": 100.0
+      }
+    }
+  },
+  "progress": {
+    "ps_rrc_fail": {
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 9000.0
+        }
+      }
+    },
+    "ps_rab_fail": {
+      "default": {
+        "min": 0.0,
+        "max": 13500.0,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 8000.0
+        }
+      }
+    },
+    "ps_s1_fail": {
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 16000.0
+        }
+      }
+    },
+    "ps_drop_abnrel": {
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 16000.0
+        }
+      }
+    },
+    "cs_rrc_fail": {
+      "default": {
+        "min": 0.0,
+        "max": 11.0,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "ATT": {
+          "min": 0.0,
+          "max": 30.0
+        },
+        "NET": {
+          "min": 0.0,
+          "max": 700.0
+        }
+      }
+    },
+    "cs_rab_fail": {
+      "default": {
+        "min": 0,
+        "max": 30,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 700.0
+        }
+      }
+    },
+    "cs_drop_abnrel": {
+      "default": {
+        "min": 0.0,
+        "max": 10.0,
+        "decimals": 0,
+        "label": "{value:.0f}"
+      },
+      "per_network": {
+        "NET": {
+          "min": 0.0,
+          "max": 80.0
+        }
+      }
+    }
+  },
+  "colors": {
+    "excelente": "#2ecc71",
+    "bueno": "#f1c40f",
+    "regular": "#e67e22",
+    "critico": "#e74c3c"
+  }
+}
