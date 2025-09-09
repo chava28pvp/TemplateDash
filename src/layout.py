@@ -14,21 +14,43 @@ def serve_layout():
                 html.H2("Dashboard Master", className="my-3"),
             ], width=8),
         ], className="align-items-center"),
-
-        # Filtros + botón de configuración de umbrales
         html.Div(
-
+            create_umbral_config_modal(),
+            className="position-absolute top-0 end-0 mt-3 me-3 umbral-fab"
+        ),
+        # Filtros + botón de configuración de umbrales (colapsables)
+        html.Div(
             children=[
+                # Barra de acciones (toggler de filtros)
 
-                build_filters(),  # tu card/contenedor de filtros
-                html.Div(
-                    create_umbral_config_modal(),  # botón + modal
-                    className="position-absolute top-0 end-0 mt-3 me-3 umbral-fab"
+                dbc.Row([
+                    dbc.Col(
+                        dbc.Button(
+                            "Mostrar / Ocultar filtros",
+                            id="filters-toggle",
+                            color="secondary",
+                            size="sm",
+                            outline=True,
+                            className="mb-2"
+                        ),
+                        width="auto"
+                    ),
+
+                ], className="g-2 align-items-center"),
+
+                # Card de filtros colapsable
+                dbc.Collapse(
+                    id="filters-collapse",
+                    is_open=True,  # abiertos por defecto
+                    children=build_filters()
                 ),
-            ],
 
+                # Botón + modal de umbrales, flotando arriba a la derecha
+
+            ],
             className="position-relative"  # ancla para el posicionamiento absoluto
         ),
+
 
         # Contenido principal
         html.Div(id="cards-row", children=[

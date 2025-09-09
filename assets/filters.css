@@ -1,19 +1,36 @@
-/* Dropdowns oscuros con texto blanco dentro de la card de filtros */
-.filtros-card .Select-control {
+/* === Unificar estilo oscuro para TODOS los dropdowns en filtros === */
+.filtros-card .Select--single > .Select-control,
+.filtros-card .Select--multi  > .Select-control {
   background: #1f1f1f !important;
   color: #fff !important;
   border: 1px solid #444 !important;
   border-radius: 8px;
 }
 
+/* Texto (valor seleccionado y placeholder) */
 .filtros-card .Select-placeholder,
 .filtros-card .Select-value-label,
-.filtros-card .Select--single > .Select-control .Select-value .Select-value-label {
+.filtros-card .Select--single .Select-control .Select-value .Select-value-label {
   color: #eaeaea !important;
 }
 
+/* Single-select a veces mete un fondo raro en el value: lo limpiamos */
+.filtros-card .Select--single .Select-control .Select-value {
+  background: transparent !important;
+  border: 0 !important;
+}
+
+/* Input interno (cuando tecleas para filtrar) */
 .filtros-card .Select-input > input {
   color: #fff !important;
+}
+
+/* Hover / Focus coherentes */
+.filtros-card .is-focused > .Select-control,
+.filtros-card .is-open    > .Select-control {
+  background: #232323 !important;
+  border-color: #666 !important;
+  box-shadow: 0 0 0 2px rgba(102,175,233,0.15);
 }
 
 /* Menú desplegable */
@@ -21,8 +38,10 @@
   background: #2a2a2a !important;
   border: 1px solid #444 !important;
   color: #fff !important;
+  z-index: 4000; /* por si hay solapes */
 }
 
+/* Opciones del menú */
 .filtros-card .VirtualizedSelectOption {
   background: #2a2a2a;
   color: #fff;
@@ -32,7 +51,7 @@
   color: #fff;
 }
 
-/* Multi-select chips */
+/* Chips del multi-select */
 .filtros-card .Select-value {
   background: #333 !important;
   border: 1px solid #555 !important;
@@ -42,15 +61,15 @@
   color: #fff !important;
 }
 
-/* Flechita del dropdown */
-.filtros-card .Select-arrow {
-  border-top-color: #ddd !important;
-}
+/* Flecha del dropdown */
+.filtros-card .Select-arrow { border-top-color: #ddd !important; }
 
-/* DatePicker (por si lo usas en los filtros) */
+/* === DatePicker oscuro dentro de la card de filtros === */
+.filtros-card .SingleDatePickerInput,
 .filtros-card .DateInput_input {
   background: #1f1f1f !important;
   color: #fff !important;
   border: 1px solid #444 !important;
   border-radius: 8px;
 }
+

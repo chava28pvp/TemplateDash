@@ -361,3 +361,11 @@ def register_callbacks(app):
         ps = max(1, int(page_size or 50))
         return {"page": 1, "page_size": ps}
 
+    @app.callback(
+        Output("filters-collapse", "is_open"),
+        Input("filters-toggle", "n_clicks"),
+        State("filters-collapse", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_filters(n, is_open):
+        return not is_open
