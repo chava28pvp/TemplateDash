@@ -166,3 +166,41 @@
 .th-sub .th-label {
   white-space: nowrap;
 }
+
+/* Ancho fijo y compacto para Tech */
+.kpi-table .th-left.th-technology,
+.kpi-table .td-key.td-technology {
+  width: 72px;
+  min-width: 72px;
+  max-width: 72px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* (Opcional) también puedes recortar un poco Vendor si quieres */
+.kpi-table .th-left.th-vendor,
+.kpi-table .td-key.td-vendor {
+  width: 64px;
+  min-width: 64px;
+  max-width: 64px;
+}
+
+/* Centrar y “estilo badge” para la inicial de Vendor */
+.kpi-table .td-key.td-vendor .cell-key {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.kpi-table .td-key.td-vendor .cell-key > span {
+  display: inline-block;
+  width: 1.6rem;
+  height: 1.6rem;
+  line-height: 1.6rem;
+  text-align: center;
+  border-radius: 0.4rem;
+  font-weight: 700;
+  /* Colores adaptados a modo oscuro; ajusta a tu paleta */
+  background: #2f2f2f;
+  color: #eaeaea;
+}

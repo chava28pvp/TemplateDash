@@ -2,13 +2,16 @@
   "version": 1,
   "severity": {
     "ps_rrc_ia_percent": {
-      "orientation": "higher_is_better",
-      "thresholds": {
-        "excelente": 110.0,
-        "bueno": 99.0,
-        "regular": 98.0,
-        "critico": 0.0
-      }
+      "default": {
+        "orientation": "higher_is_better",
+        "thresholds": {
+          "excelente": 100.0,
+          "bueno": 99.0,
+          "regular": 98.0,
+          "critico": 0.0
+        }
+      },
+      "per_network": {}
     },
     "ps_rab_ia_percent": {
       "orientation": "higher_is_better",

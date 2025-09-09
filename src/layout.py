@@ -78,6 +78,11 @@ def serve_layout():
                                 className="ms-3"
                             ),
                             dbc.Col(html.Div(id="total-rows-banner", className="text-muted"), width=True),
+                            dbc.Col(
+                                dbc.Button("Exportar Excel", id="export-excel", color="primary", size="sm"),
+                                width="auto"
+                            ),
+
                         ], className="g-2 align-items-center"),
                     ]), className="shadow-sm mb-2"),
 
@@ -116,6 +121,8 @@ def serve_layout():
         dcc.Store(id="page-state", data={"page": 1, "page_size": 50}),  # ← estado de paginación
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
+        dcc.Store(id="table-page-data"),
+        dcc.Download(id="download-excel"),
     ],
         fluid=True,
         style={"backgroundColor": "#121212", "color": "white"}  # 👈 fondo y texto

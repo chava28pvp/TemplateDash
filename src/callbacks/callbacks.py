@@ -7,7 +7,7 @@ from components.Tables.main_table import (
 )
 from components.Tables.simple_tables import render_simple_table
 from components.charts import line_by_time_multi
-
+import dash_bootstrap_components as dbc
 from src.data_access import fetch_kpis, fetch_kpis_paginated, COLMAP, fetch_kpis_paginated_global_sort, \
     fetch_kpis_paginated_alarm_sort
 from src.config import REFRESH_INTERVAL_MS
@@ -160,6 +160,7 @@ def register_callbacks(app):
         Output("line-chart-b", "children"),
         Output("page-indicator", "children"),
         Output("total-rows-banner", "children"),
+        Output("table-page-data", "data"),  # 👈 añade esta si la vas a usar
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         Input("f-network", "value"),
@@ -264,7 +265,23 @@ def register_callbacks(app):
         indicator = f"Página {page_corrected} de {total_pages}"
         banner = "Sin resultados." if total == 0 else f"Mostrando {(page_corrected - 1) * page_size + 1}–{min(page_corrected * page_size, total)} de {total} registros"
 
-        return table, chart_cs, chart_ps, indicator, banner
+        if df is None or df.empty:
+            store_payload = {"columns": [], "rows": []}
+            return (
+                dbc.Alert("Sin datos para los filtros seleccionados.", color="warning"),
+                no_update, no_update,
+                "Página 1 de 1",
+                "Sin resultados.",
+                store_payload,  # 👈 6º valor
+            )
+
+            # cuando sí hay datos:
+        store_payload = {
+            "columns": list((wide if (wide is not None and not wide.empty) else df).columns),
+            "rows": (wide if (wide is not None and not wide.empty) else df).to_dict("records"),
+        }
+        return table, chart_cs, chart_ps, indicator, banner, store_payload
+
 
     # -------------------------------------------------
     # 5) Intervalo global → sincroniza el del card (si aplica)

@@ -207,7 +207,9 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
 
     # Nivel 1: keys fijos (igual que antes)
     left = [
-        html.Th(DISPLAY_NAME_BASE.get(k, k).title(), rowSpan=3, className="th-left")
+        html.Th(DISPLAY_NAME_BASE.get(k, k).title(),
+                rowSpan=3,
+                className=f"th-left th-{k}")  # 👈 clase específica por columna
         for k in ROW_KEYS
     ]
 
@@ -323,9 +325,22 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
         for key in ROW_KEYS:
             val = _safe_get(row, key)
             if val is None and key in df_in.columns:
-                # fallback por si el wide no las trae (casos edge)
                 val = df_in.iloc[0][key]
-            tds.append(html.Td(html.Div(_fmt_number(val), className="cell-key"), className="td-key"))
+
+            # Mostrar solo inicial en 'vendor' (y dejar el valor completo como tooltip)
+            if key == "vendor":
+                txt = (str(val)[0]).upper() if val not in (None, "") else ""
+                content = html.Span(txt, title=str(val) if val not in (None, "") else "")
+            else:
+                # Pasa el nombre de la columna para que _fmt_number pueda decidir formatos especiales
+                content = _fmt_number(val, key)
+
+            tds.append(
+                html.Td(
+                    html.Div(content, className="cell-key"),
+                    className=f"td-key td-{key}"  # 👈 clase específica por columna
+                )
+            )
 
         # métricas
         for col in METRIC_ORDER:
