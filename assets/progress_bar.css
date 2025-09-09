@@ -9,7 +9,7 @@
   --kb-font-size: 0.70rem;
   --kb-font-weight: 700;
   --kb-width: 140px;          /* << nuevo: ancho por defecto fijo */
-
+  --kb-label: #212529;
   position: relative;
   width: var(--kb-width);     /* << antes: 100% */
   height: var(--kb-height);
@@ -32,10 +32,22 @@
   line-height: 1;
   white-space: nowrap;
   text-shadow: 0 1px 0 rgba(0,0,0,.2);
-  min-width: 2.4rem;          /* que el número no desaparezca */
+  /* min-width: 2.4rem;  <-- QUITAR */
   border-radius: var(--kb-radius) 0 0 var(--kb-radius);
 }
 
+.kb__label {
+  position: absolute;
+  inset: 0;               /* ocupa todo el contenedor */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;   /* no bloquea clicks */
+  color: var(--kb-label);
+  font-size: var(--kb-font-size);
+  font-weight: var(--kb-font-weight);
+  text-shadow: 0 1px 0 rgba(0,0,0,.2);
+}
 /* Opcional: envoltorio para mostrar el valor a la derecha */
 .kb-wrap {
   display: inline-flex;
@@ -47,6 +59,7 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
   opacity: .85;
+  color: #212529;
 }
 
 /* Opcional: centrado dentro de celdas de la tabla */

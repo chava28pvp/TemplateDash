@@ -67,20 +67,30 @@ def cell_severity(column: str, value, network: Optional[str] = None) -> str:
 
 def progress_cfg(column: str, network: Optional[str] = None) -> Dict[str, Any]:
     """
-    Devuelve configuración de progress bar (min/max/decimals/label),
-    aplicando override por network si existe; si no, default global.
+    Devuelve configuración de progress bar.
+    Soporta:
+      - auto: bool -> si True, auto-rango por cuantiles (P05-P95) del dataset.
+      - scale: None | "log"
+      - min/max opcionales (si faltan y auto=True, se calculan por datos).
+      - decimals, label
     """
     cfg = UM_MANAGER.get_progress(column, network=network) or UM_MANAGER.get_progress(column) or {}
-    # Defaults seguros
-    min_v = float(cfg.get("min", 0.0))
-    max_v = float(cfg.get("max", 100.0))
-    # Evitar rango degenerado
-    if not (isinstance(min_v, float) and isinstance(max_v, float)) or max_v <= min_v:
-        max_v = min_v + 1.0
 
-    return {
-        "min": min_v,
-        "max": max_v,
+    out: Dict[str, Any] = {
+        "auto": bool(cfg.get("auto", False)),
+        "scale": cfg.get("scale"),  # None | "log"
         "decimals": int(cfg.get("decimals", 1)),
         "label": str(cfg.get("label", "{value:.1f}")),
     }
+
+    # Solo fija min/max si están definidos explícitamente en la config
+    if "min" in cfg:
+        out["min"] = float(cfg["min"])
+    if "max" in cfg:
+        out["max"] = float(cfg["max"])
+
+    # Sanity check si vienen ambos
+    if "min" in out and "max" in out and out["max"] <= out["min"]:
+        out["max"] = out["min"] + 1.0
+
+    return out

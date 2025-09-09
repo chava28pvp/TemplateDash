@@ -1,3 +1,5 @@
+from typing import Optional
+
 from dash import html
 import math
 import dash_bootstrap_components as dbc
@@ -113,25 +115,30 @@ def _fmt_number(v, colname=None):
     return str(v)
 
 
-def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
-                   color=None, striped=True, animated=True, decimals=1,
-                   width_px=140, show_value_right=False):
-    # Detecta faltantes/inválidos
+from dash import html
+
+def _progress_cell(value,
+                   *,
+                   vmin: float = 0.0,
+                   vmax: float = 100.0,
+                   scale: str | None = None,
+                   label_tpl: str = "{value:.1f}",
+                   color=None,
+                   striped=True,
+                   animated=True,
+                   decimals=1,
+                   width_px=140,
+                   show_value_right=False):
+
     try:
         real = float(value)
     except (TypeError, ValueError):
         real = None
 
     if real is None or pd.isna(real) or math.isinf(real):
-        # Celda vacía (sin barra ni label)
         return html.Div("", className="kb kb--empty", style={"--kb-width": f"{width_px}px"})
 
-    if vmax <= vmin:
-        vmax = vmin + 1.0
-
-    pct = (real - vmin) / (vmax - vmin) * 100.0
-    pct = max(0.0, min(pct, 100.0))
-
+    pct = _to_pct(real, vmin, vmax, scale=scale)
     label = label_tpl.format(value=real) if label_tpl else f"{real:.{decimals}f}"
 
     classes = ["kb", "kb--primary"]
@@ -144,10 +151,14 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
     if color:
         container_style["--kb-fill"] = color
 
+    bar_fill = html.Div(className="kb__fill", style={"width": f"{pct:.2f}%"})
+    overlay_label = html.Div(label, className="kb__label")  # << label superpuesto
+
     bar = html.Div(
-        html.Div(label, className="kb__fill", style={"width": f"{pct:.2f}%"}),
+        [bar_fill, overlay_label],
         className=" ".join(classes),
         style=container_style,
+        title=f"{real:.{decimals}f} (rango {vmin:.{decimals}f}-{vmax:.{decimals}f})",
         role="progressbar",
         **{
             "aria-valuemin": f"{vmin:.0f}",
@@ -160,6 +171,36 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
         return html.Div([bar, html.Div(label, className="kb-value")], className="kb-wrap")
     return bar
 
+
+def _to_pct(real: float, vmin: float, vmax: float, scale: Optional[str] = None) -> float:
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+    if scale == "log":
+        eps = 1e-9
+        real = max(real, vmin + eps)
+        vmin = max(vmin, eps)
+        vmax = max(vmax, vmin + 1.0)
+        a = math.log(real)
+        b0 = math.log(vmin)
+        b1 = math.log(vmax)
+        pct = (a - b0) / (b1 - b0) * 100.0
+    else:
+        pct = (real - vmin) / (vmax - vmin) * 100.0
+    return max(0.0, min(pct, 100.0))
+
+
+def _auto_range(series: pd.Series) -> tuple[float, float]:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if s.empty:
+        return (0.0, 1.0)
+    vmin = float(s.quantile(0.05))
+    vmax = float(s.quantile(0.95))
+    if not math.isfinite(vmin) or not math.isfinite(vmax) or vmax <= vmin:
+        vmin = float(s.min()) if math.isfinite(float(s.min())) else 0.0
+        vmax = float(s.max()) if math.isfinite(float(s.max())) else vmin + 1.0
+        if vmax <= vmin:
+            vmax = vmin + 1.0
+    return (vmin, vmax)
 
 # =========================
 # Lógica multi-network
@@ -264,23 +305,19 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     if df_in is None or df_in.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
 
-    # 1) Detectar si es long o wide
-    is_long = "network" in df_in.columns  # long si tiene esta columna
+    is_long = "network" in df_in.columns
     df_long = df_in.copy()
 
-    # 2) Derivar networks si no se especifican explícitamente
     if networks is None:
         if is_long:
             networks = sorted(df_long["network"].dropna().unique().tolist())
         else:
-            # inferir de columnas wide: prefijo antes de "__"
             nets = set()
             for c in df_in.columns:
                 if "__" in c:
                     nets.add(c.split("__", 1)[0])
             networks = sorted(nets)
 
-    # 3) Conseguir wide
     if is_long:
         df_wide = pivot_by_network(df_long, networks=networks)
     else:
@@ -289,12 +326,11 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     if df_wide is None or df_wide.empty:
         return dbc.Alert("Sin datos para las redes seleccionadas.", color="warning", className="my-3")
 
-    # 4) Construir grupos/orden y aplicar sort si procede
     groups_3lvl, METRIC_ORDER, END_OF_GROUP = expand_groups_for_networks(networks)
     PROGRESS_COLS = prefixed_progress_cols(networks)
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
-    # ↓↓↓ APLICAR ORDEN ↓↓↓
+    # (opcional) ordenamiento
     if sort_state:
         sort_col_req = (sort_state or {}).get("column")
         resolved = _resolve_sort_col(df_wide, METRIC_ORDER, sort_col_req)
@@ -302,10 +338,15 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
             asc = bool((sort_state or {}).get("ascending", True))
             df_wide = df_wide.sort_values(by=resolved, ascending=asc, na_position="last")
 
-    # 5) Header (pasa sort_state para flecha)
     header = build_header_3lvl(groups_3lvl, END_OF_GROUP, sort_state=sort_state)
     VISIBLE_ORDER = ROW_KEYS + METRIC_ORDER
     idx_map = {c: i for i, c in enumerate(df_wide.columns)}
+
+    # === NUEVO: pre-cálculo de auto-rangos (por columna de barra) ===
+    auto_ranges: dict[str, tuple[float, float]] = {}
+    for col in METRIC_ORDER:
+        if col in PROGRESS_COLS and col in df_wide.columns:
+            auto_ranges[col] = _auto_range(df_wide[col])
 
     def _safe_get(row_tuple, col):
         i = idx_map.get(col)
@@ -316,31 +357,21 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
         except Exception:
             return None
 
-    # 6) Body
     body_rows = []
     for row in df_wide.itertuples(index=False, name=None):
         tds = []
 
-        # keys a la izquierda (si no existen en wide, intenta buscarlas en df_in)
+        # keys
         for key in ROW_KEYS:
             val = _safe_get(row, key)
             if val is None and key in df_in.columns:
                 val = df_in.iloc[0][key]
-
-            # Mostrar solo inicial en 'vendor' (y dejar el valor completo como tooltip)
             if key == "vendor":
                 txt = (str(val)[0]).upper() if val not in (None, "") else ""
                 content = html.Span(txt, title=str(val) if val not in (None, "") else "")
             else:
-                # Pasa el nombre de la columna para que _fmt_number pueda decidir formatos especiales
                 content = _fmt_number(val, key)
-
-            tds.append(
-                html.Td(
-                    html.Div(content, className="cell-key"),
-                    className=f"td-key td-{key}"  # 👈 clase específica por columna
-                )
-            )
+            tds.append(html.Td(html.Div(content, className="cell-key"), className=f"td-key td-{key}"))
 
         # métricas
         for col in METRIC_ORDER:
@@ -350,12 +381,23 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
 
             if col in PROGRESS_COLS:
                 cfg = progress_cfg(base_name, network=net)
+                # ¿usar auto-rango?
+                use_auto = cfg.get("auto", False) or ("min" not in cfg and "max" not in cfg)
+                if use_auto and col in auto_ranges:
+                    vmin, vmax = auto_ranges[col]
+                else:
+                    vmin = float(cfg.get("min", 0.0))
+                    vmax = float(cfg.get("max", 100.0))
+                    if vmax <= vmin:
+                        vmax = vmin + 1.0
+
                 cell = _progress_cell(
                     val,
-                    vmin=cfg.get("min", 0.0),
-                    vmax=cfg.get("max", 100.0),
+                    vmin=vmin,
+                    vmax=vmax,
+                    scale=cfg.get("scale"),
                     label_tpl=cfg.get("label", "{value:.1f}"),
-                    decimals=cfg.get("decimals", 1),
+                    decimals=int(cfg.get("decimals", 1)),
                     width_px=140,
                     show_value_right=False,
                 )
@@ -376,4 +418,5 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     table = dbc.Table([header, body], bordered=False, hover=True, responsive=True, striped=True, size="sm",
                       className="kpi-table compact")
     return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
+
 
