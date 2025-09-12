@@ -83,7 +83,11 @@ def serve_layout():
                                 width="auto"
                             ),
 
+
                         ], className="g-2 align-items-center"),
+
+
+
                     ]), className="shadow-sm mb-2"),
 
                     # Contenedor con altura fija y scroll para la tabla
@@ -91,7 +95,19 @@ def serve_layout():
                         id="table-container",
                         className="kpi-table-wrap kpi-table-container"
                     ),
+
                 ], md=12, className="my-3"),
+            ]),
+            # NUEVO: grid fuera de la card de la tabla principal
+            dbc.Row([
+                dbc.Col(
+                    dcc.Loading(
+                        html.Div(id="grid-table-container"),  # <- aquí voy a inyectar el grid
+                        type="default",
+                        className="mt-2"
+                    ),
+                    md=12, className="my-2"
+                )
             ]),
 
             # Gráficas

@@ -1,5 +1,14 @@
 # callbacks.py (o donde declares tus callbacks)
-from dash import Input, Output, State, ALL, no_update, ctx
+import math
+
+import pandas as pd
+from dash import Input, Output, State, ALL, no_update, ctx, dcc
+from numpy import empty
+import plotly.graph_objs as go
+from datetime import datetime, timedelta
+
+from components.Tables.grid_table_valores import build_heatmap_figure, \
+    build_heatmap_payloads
 from components.Tables.main_table import (
     pivot_by_network,
     render_kpi_table_multinet,
@@ -32,6 +41,26 @@ def _as_list(x):
 def round_down_to_hour(dt):
     return dt.replace(minute=0, second=0, microsecond=0)
 
+def _build_heatmap_figure(payload):
+    if not payload:  # None
+        return go.Figure()
+    z = payload["z"]; x = payload["x"]; y = payload["y"]
+    zmin = payload["zmin"]; zmax = payload["zmax"]
+    title = payload.get("title","")
+    fig = go.Figure(data=go.Heatmap(
+        z=z, x=x, y=y,
+        zmin=zmin, zmax=zmax,
+        colorbar=dict(title=title),
+        hovertemplate="Fila %{y}<br>%{x}: %{z}<extra></extra>",
+        xgap=0.5, ygap=0.5
+    ))
+    fig.update_layout(
+        margin=dict(l=80, r=10, t=10, b=40),
+        xaxis=dict(title="Horas (Ay | Hoy)"),
+        yaxis=dict(title="Registro / Net / Valor", automargin=True),
+        uirevision="keep",
+    )
+    return fig
 
 def register_callbacks(app):
 
@@ -154,26 +183,28 @@ def register_callbacks(app):
     # 4) Tabla + Charts + Indicadores de paginación (UN SOLO callback)
     #    ← Este callback es el ÚNICO que escribe en table-container y charts
     # -------------------------------------------------
+    # ... (resto de imports iguales)
     @app.callback(
-        Output("table-container", "children"),
-        Output("line-chart-a", "children"),
-        Output("line-chart-b", "children"),
+        Output("table-container", "children"),  # tabla principal (se mantiene)
+        Output("line-chart-a", "children"),  # Heatmap %
+        Output("line-chart-b", "children"),  # Heatmap UNIT
         Output("page-indicator", "children"),
         Output("total-rows-banner", "children"),
-        Output("table-page-data", "data"),  # 👈 añade esta si la vas a usar
+        Output("table-page-data", "data"),
         Input("f-fecha", "date"),
-        Input("f-hora", "value"),
+        Input("f-hora", "value"),  # <- sigue para la tabla principal
         Input("f-network", "value"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
-        Input("f-sort-mode", "value"),  # 👈 nuevo
+        Input("f-sort-mode", "value"),
         Input("refresh-timer", "n_intervals"),
         Input("sort-state", "data"),
         Input("page-state", "data"),
         prevent_initial_call=False,
     )
     def refresh_outputs(fecha, hora, networks, technologies, vendors, clusters, sort_mode, _n, sort_state, page_state):
+        # ---------- normaliza filtros ----------
         networks = _as_list(networks)
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
@@ -182,9 +213,7 @@ def register_callbacks(app):
         page = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", 50))
 
-        # ----------------------------
-        # Detección de sort explícito
-        # ----------------------------
+        # ---------- orden explícito ----------
         sort_by = None
         sort_net = None
         ascending = True
@@ -197,23 +226,20 @@ def register_callbacks(app):
             else:
                 sort_by = col
 
-        # ----------------------------
-        # Fuente de datos según MODO
-        # ----------------------------
+        # ---------- fuente de datos (paginada) para TABLA PRINCIPAL ----------
         if sort_mode == "alarmado":
             safe_sort_state = None
-            # Ignora sort explícito y usa orden por alarmas del JSON
             df, total = fetch_kpis_paginated_alarm_sort(
-                fecha=fecha, hora=hora,
+                fecha=fecha, hora=hora,  # 👈 la tabla principal sí respeta 'hora'
                 vendors=vendors or None, clusters=clusters or None,
                 networks=networks or None, technologies=technologies or None,
                 page=page, page_size=page_size,
             )
-        else:  # "global"
+        else:
             safe_sort_state = sort_state
             if sort_by in COLMAP:
                 df, total = fetch_kpis_paginated_global_sort(
-                    fecha=fecha, hora=hora,
+                    fecha=fecha, hora=hora,  # 👈 la tabla principal sí respeta 'hora'
                     vendors=vendors or None, clusters=clusters or None,
                     networks=networks or None, technologies=technologies or None,
                     page=page, page_size=page_size,
@@ -223,65 +249,108 @@ def register_callbacks(app):
                 )
             else:
                 df, total = fetch_kpis_paginated(
-                    fecha=fecha, hora=hora,
+                    fecha=fecha, hora=hora,  # 👈 la tabla principal sí respeta 'hora'
                     vendors=vendors or None, clusters=clusters or None,
                     networks=networks or None, technologies=technologies or None,
                     page=page, page_size=page_size,
                 )
 
-        # ----------------------------
-        # Resto igual que antes (nets, pivot, render, charts, banners)
-        # ----------------------------
+        # ---------- networks detect ----------
         if networks:
             nets = networks
         else:
-            nets = sorted(df["network"].dropna().unique().tolist()) if "network" in df.columns else []
+            nets = sorted(df["network"].dropna().unique().tolist()) if (
+                    df is not None and not df.empty and "network" in df.columns
+            ) else []
 
-        if df is not None and not df.empty and nets:
-            key_cols = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
-            tuples_in_order = list(dict.fromkeys(
-                map(tuple, df[key_cols].itertuples(index=False, name=None))
-            ))
-            order_map = {t: i for i, t in enumerate(tuples_in_order)}
-            wide = pivot_by_network(df, networks=nets)
-            if wide is not None and not wide.empty:
-                wide["_ord"] = wide[key_cols].apply(lambda r: order_map.get(tuple(r.values.tolist()), 10 ** 9), axis=1)
-                wide = wide.sort_values("_ord").drop(columns=["_ord"])
-        else:
-            wide = df
-
+        # ---------- render TABLA PRINCIPAL (la de siempre) ----------
+        # (usa tu función existente de render: render_kpi_table_multinet / etc.)
         table = render_kpi_table_multinet(
-            wide if (wide is not None and not wide.empty) else df,
+            df,  # o 'wide' si haces pivot antes
             networks=nets,
-            sort_state=safe_sort_state,  # 👈 aquí
+            sort_state=safe_sort_state,
         )
 
-        chart_cs = line_by_time_multi(df, metrics_for_chart_cs)
-        chart_ps = line_by_time_multi(df, metrics_for_chart_ps)
+        # ========== HOY & AYER (24h completas) para HEATMAPS ==========
+        try:
+            today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
+        except Exception:
+            today_dt = datetime.utcnow()
+        yday_dt = today_dt - timedelta(days=1)
+        today_str = today_dt.strftime("%Y-%m-%d")
+        yday_str = yday_dt.strftime("%Y-%m-%d")
 
-        import math
-        total_pages = max(1, math.ceil(total / max(1, page_size)))
-        page_corrected = min(max(1, page), total_pages)
-        indicator = f"Página {page_corrected} de {total_pages}"
-        banner = "Sin resultados." if total == 0 else f"Mostrando {(page_corrected - 1) * page_size + 1}–{min(page_corrected * page_size, total)} de {total} registros"
+        df_today = fetch_kpis(
+            fecha=today_str, hora=None,  # 👈 SIN filtro de hora
+            vendors=vendors or None, clusters=clusters or None,
+            networks=nets or None, technologies=technologies or None,
+            limit=None,
+        )
+        df_yday = fetch_kpis(
+            fecha=yday_str, hora=None,  # 👈 SIN filtro de hora
+            vendors=vendors or None, clusters=clusters or None,
+            networks=nets or None, technologies=technologies or None,
+            limit=None,
+        )
+        if df_today is None: df_today = pd.DataFrame()
+        if df_yday is None: df_yday = pd.DataFrame()
+        df_ts = pd.concat([df_today, df_yday], ignore_index=True, sort=False)
 
-        if df is None or df.empty:
-            store_payload = {"columns": [], "rows": []}
-            return (
-                dbc.Alert("Sin datos para los filtros seleccionados.", color="warning"),
-                no_update, no_update,
-                "Página 1 de 1",
-                "Sin resultados.",
-                store_payload,  # 👈 6º valor
+        # ---------- payloads y figuras de HEATMAP ----------
+        if df is None or df.empty or not nets:
+            pct_payload = unit_payload = None
+        else:
+            df_meta = df.copy()  # snapshot visible/paginado que quieres en el eje Y
+            pct_payload, unit_payload = build_heatmap_payloads(
+                df_meta=df_meta,
+                df_ts=df_ts,
+                networks=nets,
+                valores_order=("PS_RCC", "CS_RCC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
             )
 
-            # cuando sí hay datos:
-        store_payload = {
-            "columns": list((wide if (wide is not None and not wide.empty) else df).columns),
-            "rows": (wide if (wide is not None and not wide.empty) else df).to_dict("records"),
-        }
-        return table, chart_cs, chart_ps, indicator, banner, store_payload
+        if pct_payload:
+            fig_pct = build_heatmap_figure(pct_payload, height=760, colorscale="Inferno")
+            hm_pct = dcc.Graph(figure=fig_pct, config={"displayModeBar": False},
+                               style={"height": "760px", "width": "100%"})
+        else:
+            hm_pct = dbc.Alert("Sin datos para el mapa de calor (%).", color="secondary")
 
+        if unit_payload:
+            fig_unit = build_heatmap_figure(unit_payload, height=760, colorscale="Inferno")
+            hm_unit = dcc.Graph(figure=fig_unit, config={"displayModeBar": False},
+                                style={"height": "760px", "width": "100%"})
+        else:
+            hm_unit = dbc.Alert("Sin datos para el mapa de calor (UNIT).", color="secondary")
+
+        # ---------- banners ----------
+        total_pages = max(1, math.ceil((total or 0) / max(1, page_size)))
+        page_corrected = min(max(1, page), total_pages)
+        indicator = f"Página {page_corrected} de {total_pages}"
+        banner = "Sin resultados." if (
+                                                  total or 0) == 0 else f"Mostrando {(page_corrected - 1) * page_size + 1}–{min(page_corrected * page_size, total)} de {total} registros"
+
+        # ---------- store ----------
+        if df is None or df.empty:
+            store_payload = {"columns": [], "rows": []}
+            empty_alert = dbc.Alert("Sin datos para los filtros seleccionados.", color="warning")
+            return (
+                empty_alert,  # table-container
+                dbc.Alert("—", color="secondary"),  # line-chart-a
+                dbc.Alert("—", color="secondary"),  # line-chart-b
+                "Página 1 de 1",
+                "Sin resultados.",
+                store_payload,
+            )
+
+        store_payload = {"columns": list(df.columns), "rows": df.to_dict("records")}
+        return (
+            table,
+            hm_pct,
+            hm_unit,
+            indicator,
+            banner,
+            store_payload,
+        )
 
     # -------------------------------------------------
     # 5) Intervalo global → sincroniza el del card (si aplica)

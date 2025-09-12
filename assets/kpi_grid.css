@@ -1,0 +1,151 @@
+.kpi-grid { display: grid; gap: 2px; }
+.kpi-grid-header { display: grid; align-items: stretch; }
+.kpi-grid-row { display: grid; align-items: center; border-bottom: 1px solid #e9ecef; }
+
+.grid-h1, .grid-h2, .grid-h3 { font-weight: 600; text-align: center; padding: 6px 8px; background: #f8f9fa; border: 1px solid #e9ecef; }
+.grid-h1 { font-size: 0.95rem; }
+.grid-h2 { font-size: 0.9rem; }
+.grid-h3 { font-size: 0.85rem; }
+
+.grid-key { padding: 6px 8px; font-weight: 500; background: #ffffff; border: 1px solid #eef0f2; }
+.grid-metric { padding: 6px 8px; text-align: right; border: 1px solid #f1f3f5; background: #fff; font-variant-numeric: tabular-nums; }
+
+.grid-row-even .grid-key, .grid-row-even .grid-metric { background: #fcfcfd; }
+
+.sticky-top { position: sticky; top: 0; z-index: 5; }
+
+/* ======= Grid KPI (modo oscuro) ======= */
+.kpi-grid-viewport {
+  /* tamaño/scroll */
+  max-height: 480px;          /* ajusta a tu gusto */
+  max-width: 100%;
+  overflow-x: auto;           /* 👈 scroll horizontal */
+  overflow-y: auto;           /* 👈 scroll vertical */
+  -webkit-overflow-scrolling: touch;
+
+  /* look & feel oscuro similar a tu tabla */
+  border: 1px solid #333;
+  border-radius: 8px;
+  background: #1e1e1e;
+  padding: 0.25rem;
+}
+
+.kpi-grid {
+  width: max-content;         /*  fuerza a que el grid “crezca” según columnas */
+  background: #1e1e1e;
+  color: #f1f1f1;
+}
+
+/* Opcional: versión compacta (aplica si le pones .compact al contenedor) */
+.kpi-grid.compact, .kpi-grid .kpi-grid-row.compact {
+  font-size: 0.85rem;
+}
+
+/* Envoltura con scroll (si deseas igual que la tabla) */
+.kpi-grid-wrap {
+  max-height: 480px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid #333;
+  border-radius: 8px;
+  background: #1e1e1e;
+  padding: 0.25rem;
+}
+
+/* ======= Header (3 niveles) ======= */
+.kpi-grid-header {
+  /* ya viene con display:grid y gridTemplateColumns inline desde Python */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.kpi-grid-header .grid-h1,
+.kpi-grid-header .grid-h2,
+.kpi-grid-header .grid-h3 {
+  text-align: center;
+  padding: 6px 8px;
+  font-weight: 600;
+  border: 1px solid #2d2d2d;
+  background: #2a2a2a;
+  color: #f1f1f1;
+  min-height: 28px; /* similar a --hdr-hX */
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* Nivel 1 (Networks) */
+.kpi-grid-header .grid-h1 {
+  background: #333;
+  font-weight: 700;
+  border-bottom: 2px solid #444;
+}
+
+/* Nivel 2 (Grupos) */
+.kpi-grid-header .grid-h2 {
+  background: #2f2f2f;
+  font-weight: 700;
+  border-top: 1px solid #444;
+  border-bottom: 2px solid #444;
+  border-right: 2px solid #444;
+}
+
+/* Nivel 3 (Sub-headers) */
+.kpi-grid-header .grid-h3 {
+  background: #2a2a2a;
+  font-weight: 600;
+  border-bottom: 1px solid #444;
+  border-right: 1px solid #444;
+}
+
+/* ======= Body ======= */
+.kpi-grid .kpi-grid-row {
+  /* cada fila es también display:grid con el template inline */
+}
+
+.kpi-grid .kpi-grid-row .grid-key,
+.kpi-grid .kpi-grid-row .grid-metric {
+  padding: 6px 8px;
+  border: 1px solid #333;
+  background: #151515;         /* fondo base oscuro */
+  color: #f1f1f1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Rayado suave */
+.kpi-grid .kpi-grid-row.grid-row-even .grid-key,
+.kpi-grid .kpi-grid-row.grid-row-even .grid-metric {
+  background: #1b1b1b;
+}
+
+/* Hover fila */
+.kpi-grid .kpi-grid-row:hover .grid-key,
+.kpi-grid .kpi-grid-row:hover .grid-metric {
+  background: #2b2b2b;
+}
+
+/* “Fin de grupo” visual: si quieres marcar cortes verticales */
+.kpi-grid .grid-metric.th-end-of-group,
+.kpi-grid .grid-key.th-end-of-group {
+  border-right: 2px solid #555 !important;
+}
+
+/* Badge de Vendor (inicial) */
+.kpi-grid .grid-key > span {
+  display: inline-block;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  line-height: 1.6rem;
+  text-align: center;
+  border-radius: 0.4rem;
+  font-weight: 700;
+  background: #2f2f2f;
+  color: #eaeaea;
+}
+
+/* (Opcional) Ajustes de ancho para columnas clave, análogos a tu tabla */
+.kpi-grid .key-fecha   { min-width: 110px; }
+.kpi-grid .key-hora    { min-width: 70px; }
+.kpi-grid .key-vendor  { min-width: 70px; text-align: center; }
+.kpi-grid .key-cluster { min-width: 160px; }
+.kpi-grid .key-tech    { min-width: 90px; }
