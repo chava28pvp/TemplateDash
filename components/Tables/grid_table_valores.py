@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
+import plotly.graph_objs as go
 
 # =========================
 # Config
@@ -252,6 +253,7 @@ def build_heatmap_payloads_fast(
             metric_arrays[metric] = (np.full((0, 24), np.nan), np.full((0, 24), np.nan))
 
     # === Construye z de la página (solo filas visibles) ===
+    x_dt = [f"{yday}T{h:02d}:00:00" for h in range(24)] + [f"{today}T{h:02d}:00:00" for h in range(24)]
     x_labels = [f"Ay {h:02d}" for h in range(24)] + [f"Hoy {h:02d}" for h in range(24)]
     z_pct, z_unit, y_labels, row_detail = [], [], [], []
 
@@ -282,7 +284,7 @@ def build_heatmap_payloads_fast(
 
     # % fijo
     pct_payload = {
-        "z": z_pct, "x": x_labels, "y": y_labels,
+        "z": z_pct, "x": x_labels, "x_dt": x_dt, "y": y_labels,
         "zmin": 0, "zmax": 100, "title": "% IA / % DC",
         "row_detail": row_detail,
     }
@@ -293,7 +295,7 @@ def build_heatmap_payloads_fast(
     if umin == umax:
         umax = (umin or 1)
     unit_payload = {
-        "z": z_unit, "x": x_labels, "y": y_labels,
+        "z": z_unit, "x": x_labels, "x_dt": x_dt, "y": y_labels,
         "zmin": umin, "zmax": umax, "title": "Unidades (fails / abnrel)",
         "row_detail": row_detail,
     }
@@ -316,46 +318,137 @@ def build_heatmap_figure(
     height=720,
     colorscale="Inferno",
     decimals=2,
-    hover_mode="detail"   # "detail" | "numeric"
 ):
     import plotly.graph_objs as go
+    import numpy as np
+
     if not payload:
         return go.Figure()
 
-    z = payload["z"]; x = payload["x"]; y = payload["y"]
-    zmin = payload["zmin"]; zmax = payload["zmax"]
-    title = payload.get("title","")
+    # Usa x_dt (ISO datetime) si está presente
+    x = payload.get("x_dt") or payload["x"]
+    z = payload["z"]
+    y = payload["y"]
+    zmin = payload["zmin"]
+    zmax = payload["zmax"]
+    title = payload.get("title", "")
     row_detail = payload.get("row_detail") or y  # fallback
 
-    # Construye hovertext 2D solo si quieres detalle completo
-    text = None
-    if hover_mode == "detail":
-        # Repite el detalle de la fila en las 48 columnas (ligero con page_size pequeño)
-        text = [[row_detail[i]] * len(x) for i in range(len(y))]
-        hover_tmpl = f"%{{text}}<br>%{{x}}: %{{z:.{decimals}f}}<extra></extra>"
-    else:
-        # Solo el número
-        hover_tmpl = f"%{{z:.{decimals}f}}<extra></extra>"
+    # --- customdata por fila (como ya lo tenías, con Net, Máx, Mín, etc.) ---
+    customdata = []
+    for i, row in enumerate(z):
+        arr = np.array([v if isinstance(v, (int, float)) else np.nan for v in row], dtype=float)
 
-    heatmap_args = dict(
+        if np.isfinite(arr).any():
+            rmax = np.nanmax(arr); rmin = np.nanmin(arr)
+            valid_idx = np.where(np.isfinite(arr))[0]
+            last_idx = int(valid_idx[-1])
+            # Si usamos x_dt, podemos obtener directamente la etiqueta desde x[last_idx]
+            last_label = (x[last_idx] if isinstance(x[last_idx], str) else str(x[last_idx]))
+            # normaliza a 'YYYY-MM-DD HH:MM'
+            last_label = last_label.replace("T", " ")[:16]
+        else:
+            rmax = np.nan; rmin = np.nan; last_label = "—"
+
+        det = row_detail[i] if i < len(row_detail) else str(y[i])
+        parts = det.split("/", 4)  # [tech, vendor, cluster, net, valor]
+        tech    = parts[0] if len(parts) > 0 else ""
+        vendor  = parts[1] if len(parts) > 1 else ""
+        cluster = parts[2] if len(parts) > 2 else ""
+        net     = parts[3] if len(parts) > 3 else ""
+        valor   = parts[4] if len(parts) > 4 else ""
+
+        def _fmt(v):
+            if not np.isfinite(v): return ""
+            return f"{v:,.{decimals}f}" if decimals > 0 else f"{v:,.0f}"
+
+        rmax_s = _fmt(rmax)
+        rmin_s = _fmt(rmin)
+
+        # [0] tech [1] vendor [2] cluster [3] net [4] valor [5] last_label [6] max [7] min
+        row_cd = [[tech, vendor, cluster, net, valor, last_label, rmax_s, rmin_s] for _ in x]
+        customdata.append(row_cd)
+
+    # Formato del valor de la celda (sin notación científica)
+    z_fmt = f",.{decimals}f" if decimals > 0 else ",.0f"
+
+    # Hover: x como fecha/hora con formato
+    hover_tmpl = (
+        "DETALLE<br>"
+        "<b>Tech:</b> %{customdata[0]}<br>"
+        "<b>Vendor:</b> %{customdata[1]}<br>"
+        "<b>Cluster:</b> %{customdata[2]}<br>"
+        "<b>Net:</b> %{customdata[3]}<br>"
+        "<b>Valor:</b> %{customdata[4]}<br>"
+        "<b>Última hora con registro:</b> %{customdata[5]}<br>"
+        "<b>Máx:</b> %{customdata[6]}<br>"
+        "<b>Mín:</b> %{customdata[7]}<br>"
+        "<b>%{x|%Y-%m-%d %H:%M}:</b> %{z:" + z_fmt + "}<extra></extra>"
+    )
+
+    fig = go.Figure(data=go.Heatmap(
         z=z, x=x, y=y,
         zmin=zmin, zmax=zmax,
         colorscale=colorscale,
         colorbar=dict(title=title),
+        customdata=customdata,
         hovertemplate=hover_tmpl,
         hoverongaps=False,
         xgap=0.2, ygap=0.2,
-    )
-    if text is not None:
-        heatmap_args["text"] = text
+    ))
 
-    fig = go.Figure(data=go.Heatmap(**heatmap_args))
+    # Eje X como fecha: cada 3 horas, rotado, con formato compacto
+    # dtick en ms: 3 horas = 3 * 3600 * 1000
+    THREE_H_MS = 3 * 3600 * 1000
+    fig.update_xaxes(
+        type="date",
+        dtick=THREE_H_MS,
+        tickformat="%b %d %H:%M",   # Ej. "Sep 15 03:00"
+        tickangle=-45,
+        ticklabelmode="instant",
+        ticks="outside",
+        ticklen=5,
+    )
+
+    # Línea vertical en el corte entre días (columna 24 = hoy 00:00)
+    if isinstance(x, (list, tuple)) and len(x) >= 25:
+        try:
+            boundary_x = x[24]  # hoy 00:00
+            fig.add_vline(x=boundary_x, line_dash="dot", line_color="rgba(255,255,255,0.5)", line_width=1)
+        except Exception:
+            pass
+
     fig.update_layout(
         height=height,
-        margin=dict(l=70, r=16, t=10, b=40),
-        xaxis=dict(title="Horas (Ayer | Hoy)", tickangle=0, automargin=True, fixedrange=True),
-        # Oculta etiquetas Y para no renderizar textos largos
-        yaxis=dict(title="", showticklabels=False, fixedrange=True),
+        margin=dict(l=70, r=16, t=10, b=60),
+        xaxis_title="Fecha y hora",
+        # 👉 fondos transparentes para que herede el color del contenedor (Card)
+        paper_bgcolor="rgba(0,0,0,0)",
+
+        # 👉 tipografías claras
+        font=dict(color="#eaeaea"),
+        xaxis=dict(
+            title="Fecha y hora",
+            tickangle=-45,
+            ticklabelmode="instant",
+            ticks="outside",
+            ticklen=5,
+            titlefont=dict(color="#eaeaea"),
+            tickfont=dict(color="#eaeaea"),
+            fixedrange=True,
+        ),
+        yaxis=dict(
+            title="",
+            showticklabels=False,
+            titlefont=dict(color="#eaeaea"),
+            tickfont=dict(color="#eaeaea"),
+            fixedrange=True,
+        ),
+        # 👉 hover estilo dark
+        hoverlabel=dict(bgcolor="#222", bordercolor="#444", font=dict(color="#fff")),
         uirevision="keep",
     )
     return fig
+
+
+

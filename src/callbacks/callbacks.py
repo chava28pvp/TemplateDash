@@ -506,18 +506,14 @@ def register_callbacks(app):
 
         # --- Figuras (con hover detallado) ---
         if pct_payload:
-            fig_pct = build_heatmap_figure(
-                pct_payload, height=760, colorscale="Inferno",
-                decimals=2, hover_mode="detail"
-            )
+            fig_pct = build_heatmap_figure(pct_payload, height=760, colorscale="Inferno", decimals=2)
+
         else:
             fig_pct = go.Figure()
 
         if unit_payload:
-            fig_unit = build_heatmap_figure(
-                unit_payload, height=760, colorscale="Inferno",
-                decimals=0, hover_mode="detail"
-            )
+            fig_unit = build_heatmap_figure(unit_payload, height=760, colorscale="Inferno", decimals=0)
+
         else:
             fig_unit = go.Figure()
 

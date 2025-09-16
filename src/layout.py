@@ -123,7 +123,7 @@ def serve_layout():
                             ),
                             dbc.Col(html.Small(id="hm-total-rows-banner", className="text-muted"), width=True),
                         ], className="g-2 align-items-center"),
-                    ]), className="shadow-sm mb-2"),
+                    ]), className="bg-dark text-white border-0 shadow-sm mb-2"),
                 ], md=12),
             ]),
 
