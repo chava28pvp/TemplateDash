@@ -14,15 +14,16 @@ def serve_layout():
                 html.H2("Dashboard Master", className="my-3"),
             ], width=8),
         ], className="align-items-center"),
+
         html.Div(
             create_umbral_config_modal(),
             className="position-absolute top-0 end-0 mt-3 me-3 umbral-fab"
         ),
+
         # Filtros + botón de configuración de umbrales (colapsables)
         html.Div(
             children=[
                 # Barra de acciones (toggler de filtros)
-
                 dbc.Row([
                     dbc.Col(
                         dbc.Button(
@@ -35,7 +36,6 @@ def serve_layout():
                         ),
                         width="auto"
                     ),
-
                 ], className="g-2 align-items-center"),
 
                 # Card de filtros colapsable
@@ -44,13 +44,9 @@ def serve_layout():
                     is_open=True,  # abiertos por defecto
                     children=build_filters()
                 ),
-
-                # Botón + modal de umbrales, flotando arriba a la derecha
-
             ],
-            className="position-relative"  # ancla para el posicionamiento absoluto
+            className="position-relative"
         ),
-
 
         # Contenido principal
         html.Div(id="cards-row", children=[
@@ -82,12 +78,7 @@ def serve_layout():
                                 dbc.Button("Exportar Excel", id="export-excel", color="primary", size="sm"),
                                 width="auto"
                             ),
-
-
                         ], className="g-2 align-items-center"),
-
-
-
                     ]), className="shadow-sm mb-2"),
 
                     # Contenedor con altura fija y scroll para la tabla
@@ -95,51 +86,95 @@ def serve_layout():
                         id="table-container",
                         className="kpi-table-wrap kpi-table-container"
                     ),
-
                 ], md=12, className="my-3"),
             ]),
-            # NUEVO: grid fuera de la card de la tabla principal
+
+            # (Opcional) Elimina por completo el grid si ya no lo usas
+            # dbc.Row([
+            #     dbc.Col(
+            #         dcc.Loading(
+            #             html.Div(id="grid-table-container"),
+            #             type="default",
+            #             className="mt-2"
+            #         ),
+            #         md=12, className="my-2"
+            #     )
+            # ]),
+
+            # Heatmaps (envueltos en Loading; se disparan después de la tabla)
             dbc.Row([
-                dbc.Col(
-                    dcc.Loading(
-                        html.Div(id="grid-table-container"),  # <- aquí voy a inyectar el grid
-                        type="default",
-                        className="mt-2"
-                    ),
-                    md=12, className="my-2"
-                )
+                dbc.Col([
+                    dbc.Card(dbc.CardBody([
+                        dbc.Row([
+                            dbc.Col(dbc.Button("« Anterior", id="hm-page-prev", n_clicks=0, size="sm"), width="auto"),
+                            dbc.Col(html.Div(id="hm-page-indicator", className="mx-2 fw-semibold"), width="auto"),
+                            dbc.Col(dbc.Button("Siguiente »", id="hm-page-next", n_clicks=0, size="sm"), width="auto"),
+                            dbc.Col(
+                                dbc.Input(
+                                    id="hm-page-size",
+                                    type="number",
+                                    min=5, step=5, value=5,
+                                    placeholder="Tamaño",
+                                    size="sm",
+                                    style={"width": "110px"}
+                                ),
+                                width="auto",
+                                className="ms-3"
+                            ),
+                            dbc.Col(html.Small(id="hm-total-rows-banner", className="text-muted"), width=True),
+                        ], className="g-2 align-items-center"),
+                    ]), className="shadow-sm mb-2"),
+                ], md=12),
             ]),
 
-            # Gráficas
             dbc.Row([
                 dbc.Col(
                     dbc.Card(dbc.CardBody([
-                        html.H4("Gráfica (CS)", className="mb-3"),
-                        dcc.Loading(html.Div(id="line-chart-a"))
+                        html.H4("%", className="mb-3"),
+                        dcc.Loading(
+                            dcc.Graph(
+                                id="hm-pct",
+                                config={"displayModeBar": False},
+                                style={"height": "760px", "width": "100%"}
+                            ),
+                            type="default"
+                        ),
                     ]), className="shadow-sm"),
                     md=6, sm=12, className="my-3"
                 ),
                 dbc.Col(
                     dbc.Card(dbc.CardBody([
-                        html.H4("Gráfica (PS)", className="mb-3"),
-                        dcc.Loading(html.Div(id="line-chart-b"))
+                        html.H4("UNIT", className="mb-3"),
+                        dcc.Loading(
+                            dcc.Graph(
+                                id="hm-unit",
+                                config={"displayModeBar": False},
+                                style={"height": "760px", "width": "100%"}
+                            ),
+                            type="default"
+                        ),
                     ]), className="shadow-sm"),
                     md=6, sm=12, className="my-3"
                 ),
             ]),
-
-            # Tablas inferiores
 
         ]),
 
         # Stores
         dcc.Store(id="defaults-store", data={"fecha": default_date_str(), "hora": default_hour_str()}),
-        dcc.Store(id="page-state", data={"page": 1, "page_size": 50}),  # ← estado de paginación
+        dcc.Store(id="page-state", data={"page": 1, "page_size": 5}),
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
-        dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Store(id="table-page-data"),
+
+        # 👇 NUEVO: señal para encadenar callbacks (tabla -> heatmaps)
+        dcc.Store(id="heatmap-trigger", data=None),
+        dcc.Store(id="heatmap-page-state", data={"page": 1, "page_size": 5}),
+        dcc.Store(id="heatmap-page-info"),
+        dcc.Store(id="heatmap-params"),
+
+        dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Download(id="download-excel"),
     ],
         fluid=True,
-        style={"backgroundColor": "#121212", "color": "white"}  # 👈 fondo y texto
+        style={"backgroundColor": "#121212", "color": "white"}
     )

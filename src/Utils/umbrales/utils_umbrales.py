@@ -56,11 +56,11 @@ def cell_severity(column: str, value, network: Optional[str] = None) -> str:
     else:
         # Umbrales como LÍMITES SUPERIORES por categoría
         # (excelente ≤ bueno ≤ regular ≤ …)
-        if v <= e:
+        if  b >= v <= e:
             return "excelente"
-        if v <= b:
+        if b <= v < r:
             return "bueno"
-        if v <= r:
+        if v >= r:
             return "regular"
         return "critico"
 

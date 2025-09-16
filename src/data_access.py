@@ -1,4 +1,6 @@
 # src/data_access.py
+from datetime import datetime, timedelta
+
 import pandas as pd
 from functools import lru_cache
 from sqlalchemy import create_engine, text, bindparam
@@ -636,3 +638,89 @@ def fetch_kpis_paginated_alarm_sort(
         df = df.where(pd.notna(df), "")
 
     return df, int(total)
+
+#ALARMADOS HEADMAP
+def fetch_alarm_meta_for_heatmap(
+    *,
+    fecha: str,                # fecha seleccionada en el filtro
+    vendors=None,
+    clusters=None,
+    networks=None,
+    technologies=None,
+):
+    """
+    Devuelve:
+      - df_meta_heat: filas únicas (technology, vendor, noc_cluster) que tienen >=1 KPI alarmado
+        en AYER u HOY (24h completas, ignorando 'hora')
+      - alarm_keys_set: set de tuplas (technology, vendor, noc_cluster, network) que están alarmadas
+        (sirve para filtrar por red a nivel heatmap)
+    """
+    # Día base + ayer
+    try:
+        base_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
+    except Exception:
+        base_dt = datetime.utcnow()
+    yday_dt = base_dt - timedelta(days=1)
+    today_str = base_dt.strftime("%Y-%m-%d")
+    yday_str  = yday_dt.strftime("%Y-%m-%d")
+
+    cfg = load_threshold_cfg()  # cacheado
+    nets_list = _as_list(networks) or []
+
+    # WHERE base SIN fecha/hora; armamos fechas manualmente (IN)
+    where_sql, params, uv, uc, un, ut = _filters_where_and_params(
+        fecha=None, hora=None, vendors=vendors, clusters=clusters,
+        networks=networks, technologies=technologies
+    )
+    where_sql = f"({where_sql}) AND {_quote(COLMAP['fecha'])} IN (:f1, :f2)"
+    params = {**params, "f1": yday_str, "f2": today_str}
+
+    # Construye términos de alarma por KPI (mismo criterio que tu orden “alarmado”)
+    flag_terms = []
+    thr_params_all = {}
+    for kpi in _ALARM_KPIS:
+        if kpi not in COLMAP:
+            continue
+        col_sql = _quote(COLMAP[kpi])
+        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"  # por si hay strings
+        flag_thr_expr, _exc_thr_expr, p = _build_flag_and_excess_cases(kpi, nets_list, cfg)
+        thr_params_all.update(p)
+        flag_terms.append(f"(CASE WHEN COALESCE({num_col}, 0) >= {flag_thr_expr} THEN 1 ELSE 0 END)")
+
+    # Si no hay KPIs configurados, regresamos vacío
+    if not flag_terms:
+        return pd.DataFrame(columns=["technology","vendor","noc_cluster"]), set()
+
+    flags_sum = " + ".join(flag_terms)
+
+    # Distintos keys alarmados por network
+    sql_alarm_keys = f"""
+        SELECT DISTINCT
+            {_quote(COLMAP['technology'])} AS technology,
+            {_quote(COLMAP['vendor'])}     AS vendor,
+            {_quote(COLMAP['noc_cluster'])} AS noc_cluster,
+            {_quote(COLMAP['network'])}    AS network
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+          AND ( ({flags_sum}) >= 1 )
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(sql_alarm_keys, uv, uc, un, ut)
+        df_alarm_keys = pd.read_sql(stmt, conn, params={**params, **thr_params_all})
+
+    # df_meta_heat = únicas por (tech, vendor, cluster) -> lo que usarás como “base”
+    if df_alarm_keys is None or df_alarm_keys.empty:
+        return pd.DataFrame(columns=["technology","vendor","noc_cluster"]), set()
+
+    df_meta_heat = (
+        df_alarm_keys[["technology","vendor","noc_cluster"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+
+    alarm_keys_set = set(
+        tuple(x) for x in df_alarm_keys[["technology","vendor","noc_cluster","network"]].itertuples(index=False, name=None)
+    )
+    return df_meta_heat, alarm_keys_set

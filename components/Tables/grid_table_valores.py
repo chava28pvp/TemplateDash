@@ -1,4 +1,5 @@
 # === grid_valores_heatmaps_only.py ===
+import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -43,6 +44,16 @@ def _max_date_str(series: pd.Series) -> str | None:
     except Exception:
         return None
 
+def _hora_to_int(series) -> pd.Series:
+    """
+    Convierte 'HH:MM:SS' o enteros/strings a 0..23; inválidos -> NaN.
+    """
+    s = series.astype(str).str.split(":", n=1, expand=True)[0]
+    s = pd.to_numeric(s, errors="coerce")
+    s = s.where((s >= 0) & (s <= 23))
+    return s
+
+
 def _key_label(tech, vend, clus, net, valores):
     return f"{tech}/{vend}/{clus}/{net}/{valores}"
 
@@ -53,7 +64,7 @@ def build_series_index(df_ts: pd.DataFrame, metrics: set[str]) -> dict:
     if df_ts is None or df_ts.empty:
         return {}
 
-    need_cols = {"fecha","hora","technology","vendor","noc_cluster","network"} | metrics
+    need_cols = {"fecha","hora","technology","vendor","noc_cluster","network"} | set(metrics)
     miss = [c for c in need_cols if c not in df_ts.columns]
     if miss:
         return {}
@@ -77,29 +88,33 @@ def build_series_index(df_ts: pd.DataFrame, metrics: set[str]) -> dict:
     return index
 
 # =========================
-# Payloads de heatmap (48 columnas: Ayer 0–23 | Hoy 24–47)
+# Payloads de heatmap (48 columnas: Ayer 0–23 | Hoy 24–47) con paginado
 # =========================
-def build_heatmap_payloads(
+def build_heatmap_payloads_fast(
     df_meta: pd.DataFrame,
     df_ts: pd.DataFrame,
     *,
     networks=None,
     valores_order=("PS_RCC","CS_RCC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
     today=None,
-    yday=None
+    yday=None,
+    alarm_keys=None,
+    alarm_only=False,
+    offset=0,
+    limit=5,
 ):
     """
-    Devuelve (pct_payload, unit_payload) para graficar dos heatmaps.
-    NOTA: df_meta define qué filas aparecen (normalmente tu snapshot paginado).
+    Ultrafast: filtra df_ts a las filas visibles y asigna por vectorización.
+    Devuelve (pct_payload, unit_payload, page_info).
     """
     if df_meta is None or df_meta.empty:
-        return None, None
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-    # redes
+    # Redes
     if networks is None or not networks:
         networks = _infer_networks(df_ts if df_ts is not None else df_meta)
     if not networks:
-        return None, None
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
     # Fechas
     if today is None:
@@ -107,62 +122,171 @@ def build_heatmap_payloads(
     if yday is None:
         yday = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Métricas requeridas
+    # Métricas necesarias
     metrics_needed = set()
     for v in valores_order:
         pm, um = VALORES_MAP.get(v, (None, None))
         if pm: metrics_needed.add(pm)
         if um: metrics_needed.add(um)
+    if not metrics_needed:
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-    # Index
-    series_index = build_series_index(df_ts, metrics_needed)
-    def _series(fecha, tech, vend, clus, net, metric):
-        return series_index.get((fecha, tech, vend, clus, net, metric), _empty24())
-
-    # Ejes
-    x_labels = [f"Ay {h:02d}" for h in range(24)] + [f"Hoy {h:02d}" for h in range(24)]
-    z_pct, z_unit, y_labels = [], [], []
-
-    # Filas de df_meta (visible)
+    # Meta base sin duplicados
     meta_cols = ["technology", "vendor", "noc_cluster"]
-    meta = df_meta.drop_duplicates(subset=meta_cols)[meta_cols].reset_index(drop=True)
+    base = df_meta.drop_duplicates(subset=meta_cols)[meta_cols].reset_index(drop=True)
 
-    for _, r in meta.iterrows():
-        tech = r["technology"]; vend = r["vendor"]; clus = r["noc_cluster"]
-        for valores in valores_order:
-            percent_metric, unit_metric = VALORES_MAP.get(valores, (None, None))
-            for net in networks:
-                label = _key_label(tech, vend, clus, net, valores)
-                # % (48)
-                if percent_metric:
-                    s_t = _series(today, tech, vend, clus, net, percent_metric) or []
-                    s_y = _series(yday,  tech, vend, clus, net, percent_metric) or []
-                    row48_pct = [None]*48
-                    for h in range(24):
-                        row48_pct[h]      = s_y[h] if s_y[h] is not None else None
-                        row48_pct[24 + h] = s_t[h] if s_t[h] is not None else None
-                    z_pct.append(row48_pct)
-                else:
-                    z_pct.append([None]*48)
-                # UNIT (48)
-                if unit_metric:
-                    s_tu = _series(today, tech, vend, clus, net, unit_metric) or []
-                    s_yu = _series(yday,  tech, vend, clus, net, unit_metric) or []
-                    row48_unit = [None]*48
-                    for h in range(24):
-                        row48_unit[h]      = s_yu[h] if s_yu[h] is not None else None
-                        row48_unit[24 + h] = s_tu[h] if s_tu[h] is not None else None
-                    z_unit.append(row48_unit)
-                else:
-                    z_unit.append([None]*48)
-                y_labels.append(label)
+    # Cross con networks y valores_order (todas las filas posibles)
+    rows_full = (
+        base.assign(_tmp=1)
+        .merge(pd.DataFrame({"network": networks, "_tmp": 1}), on="_tmp", how="left")
+        .drop(columns=["_tmp"])
+    )
+    rows_full = rows_full.assign(key5=rows_full[["technology","vendor","noc_cluster","network"]].astype(str).agg("/".join, axis=1))
 
-    # %: 0–100 fijo
+    rows_all = []
+    for v in valores_order:
+        rf = rows_full.copy()
+        rf["valores"] = v
+        if alarm_only and alarm_keys is not None:
+            # alarm_keys son tuplas (tech, vend, clus, net)
+            keys_ok = set(alarm_keys)
+            mask = list(zip(rf["technology"], rf["vendor"], rf["noc_cluster"], rf["network"]))
+            rf = rf[[m in keys_ok for m in mask]]
+        rows_all.append(rf)
+    if not rows_all:
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+    rows_all = pd.concat(rows_all, ignore_index=True)
+
+    total_rows = len(rows_all)
+    if total_rows == 0:
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+
+    # Paginado de filas visibles
+    start = max(0, int(offset))
+    end   = start + max(1, int(limit))
+    rows_page = rows_all.iloc[start:end].reset_index(drop=True)
+
+    # === Filtra df_ts SOLO a las combinaciones visibles y fechas relevantes ===
+    if df_ts is None or df_ts.empty:
+        df_small = pd.DataFrame()
+    else:
+        # Claves visibles (technology, vendor, noc_cluster, network)
+        keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
+        keys_df["rid"] = np.arange(len(keys_df), dtype=int)
+
+        # Filter por fecha y merge a claves visibles (esto reduce drásticamente el tamaño)
+        df_small = df_ts.loc[
+            df_ts["fecha"].astype(str).isin([yday, today]) &
+            df_ts["network"].astype(str).isin(keys_df["network"].astype(str))
+        ].copy()
+
+        # Join para obtener 'rid' por combinación visible
+        df_small = df_small.merge(
+            keys_df,
+            on=["technology","vendor","noc_cluster","network"],
+            how="inner",
+            copy=False,
+            validate="many_to_one"
+        )
+
+        # Hora como 0..23
+        df_small["h"] = _hora_to_int(df_small["hora"])
+        df_small = df_small.loc[df_small["h"].notna()].copy()
+        df_small["h"] = df_small["h"].astype(int)
+
+        # Filtra a solo columnas que interesan (reduce memoria)
+        keep_cols = {"fecha","h","rid"} | set(metrics_needed)
+        df_small = df_small[[c for c in keep_cols if c in df_small.columns]]
+
+    # === Construye arrays por métrica y por día (vectorizado) ===
+    N = len(rows_page)  # filas visibles (por valores), pero arrays por key 4D requieren map filas->rid
+    # OJO: 'rid' está por combinación (tech,vend,clus,net). Varias filas pueden compartir rid (distinto 'valores').
+    # Calculamos arrays por 'rid' y luego elegimos por fila según su 'rid'.
+
+    # Map de fila->rid
+    # Unimos rows_page con keys_df para conocer el rid de cada fila
+    if not df_small.empty:
+        rows_page = rows_page.merge(
+            keys_df,
+            on=["technology","vendor","noc_cluster","network"],
+            how="left",
+            validate="many_to_one"
+        )
+        rid_per_row = rows_page["rid"].to_numpy()
+    else:
+        rows_page["rid"] = -1
+        rid_per_row = rows_page["rid"].to_numpy()
+
+    # Prepara dict de arrays por métrica
+    metric_arrays = {}  # metric -> (arr_y[RID,24], arr_t[RID,24])
+    if not df_small.empty:
+        for metric in metrics_needed:
+            if metric not in df_small.columns:
+                # métrica ausente -> arrays NaN
+                metric_arrays[metric] = (np.full((len(keys_df), 24), np.nan), np.full((len(keys_df), 24), np.nan))
+                continue
+
+            # Para AYER
+            sub_y = df_small.loc[(df_small["fecha"].astype(str) == yday) & df_small[metric].notna(), ["rid","h",metric]]
+            arr_y = np.full((len(keys_df), 24), np.nan, dtype=float)
+            if not sub_y.empty:
+                r = sub_y["rid"].to_numpy()
+                h = sub_y["h"].to_numpy()
+                v = sub_y[metric].astype(float).to_numpy()
+                # Asignación vectorizada
+                arr_y[r, h] = v
+
+            # Para HOY
+            sub_t = df_small.loc[(df_small["fecha"].astype(str) == today) & df_small[metric].notna(), ["rid","h",metric]]
+            arr_t = np.full((len(keys_df), 24), np.nan, dtype=float)
+            if not sub_t.empty:
+                r = sub_t["rid"].to_numpy()
+                h = sub_t["h"].to_numpy()
+                v = sub_t[metric].astype(float).to_numpy()
+                arr_t[r, h] = v
+
+            metric_arrays[metric] = (arr_y, arr_t)
+    else:
+        # Sin datos: todo NaN
+        for metric in metrics_needed:
+            metric_arrays[metric] = (np.full((0, 24), np.nan), np.full((0, 24), np.nan))
+
+    # === Construye z de la página (solo filas visibles) ===
+    x_labels = [f"Ay {h:02d}" for h in range(24)] + [f"Hoy {h:02d}" for h in range(24)]
+    z_pct, z_unit, y_labels, row_detail = [], [], [], []
+
+    for i, r in rows_page.iterrows():
+        valores = r["valores"]
+        pm, um = VALORES_MAP.get(valores, (None, None))
+        rid = int(r.get("rid", -1))
+
+        # Etiqueta corta + detalle completo
+        y_labels.append(f"r{i+1:03d}")
+        row_detail.append(f'{r["technology"]}/{r["vendor"]}/{r["noc_cluster"]}/{r["network"]}/{valores}')
+
+        # % (48)
+        if pm and pm in metric_arrays and rid >= 0:
+            arr_y, arr_t = metric_arrays[pm]
+            row48 = np.concatenate([arr_y[rid], arr_t[rid]]).tolist()
+        else:
+            row48 = [None]*48
+        z_pct.append(row48)
+
+        # UNIT (48)
+        if um and um in metric_arrays and rid >= 0:
+            arr_y, arr_t = metric_arrays[um]
+            row48u = np.concatenate([arr_y[rid], arr_t[rid]]).tolist()
+        else:
+            row48u = [None]*48
+        z_unit.append(row48u)
+
+    # % fijo
     pct_payload = {
         "z": z_pct, "x": x_labels, "y": y_labels,
-        "zmin": 0, "zmax": 100, "title": "% IA / % DC"
+        "zmin": 0, "zmax": 100, "title": "% IA / % DC",
+        "row_detail": row_detail,
     }
-    # UNIT: rango dinámico
+    # UNIT dinámico (página)
     flat_unit = [v for row in z_unit for v in row if isinstance(v,(int,float))]
     umin = (min(flat_unit) if flat_unit else 0)
     umax = (max(flat_unit) if flat_unit else 1)
@@ -170,34 +294,68 @@ def build_heatmap_payloads(
         umax = (umin or 1)
     unit_payload = {
         "z": z_unit, "x": x_labels, "y": y_labels,
-        "zmin": umin, "zmax": umax, "title": "Unidades (fails / abnrel)"
+        "zmin": umin, "zmax": umax, "title": "Unidades (fails / abnrel)",
+        "row_detail": row_detail,
     }
-    return pct_payload, unit_payload
+
+    page_info = {
+        "total_rows": total_rows,
+        "offset": start,
+        "limit": limit,
+        "showing": len(rows_page),
+    }
+    return pct_payload, unit_payload, page_info
 
 
 # =========================
-# Figura de Heatmap (Plotly)
+# Figura de Heatmap (Plotly) — detalle en hover, eje Y ligero
 # =========================
-def build_heatmap_figure(payload, *, height=720, colorscale="Inferno"):
+def build_heatmap_figure(
+    payload,
+    *,
+    height=720,
+    colorscale="Inferno",
+    decimals=2,
+    hover_mode="detail"   # "detail" | "numeric"
+):
     import plotly.graph_objs as go
     if not payload:
         return go.Figure()
+
     z = payload["z"]; x = payload["x"]; y = payload["y"]
     zmin = payload["zmin"]; zmax = payload["zmax"]
     title = payload.get("title","")
-    fig = go.Figure(data=go.Heatmap(
+    row_detail = payload.get("row_detail") or y  # fallback
+
+    # Construye hovertext 2D solo si quieres detalle completo
+    text = None
+    if hover_mode == "detail":
+        # Repite el detalle de la fila en las 48 columnas (ligero con page_size pequeño)
+        text = [[row_detail[i]] * len(x) for i in range(len(y))]
+        hover_tmpl = f"%{{text}}<br>%{{x}}: %{{z:.{decimals}f}}<extra></extra>"
+    else:
+        # Solo el número
+        hover_tmpl = f"%{{z:.{decimals}f}}<extra></extra>"
+
+    heatmap_args = dict(
         z=z, x=x, y=y,
         zmin=zmin, zmax=zmax,
         colorscale=colorscale,
         colorbar=dict(title=title),
-        hovertemplate="Fila %{y}<br>%{x}: %{z}<extra></extra>",
+        hovertemplate=hover_tmpl,
+        hoverongaps=False,
         xgap=0.2, ygap=0.2,
-    ))
+    )
+    if text is not None:
+        heatmap_args["text"] = text
+
+    fig = go.Figure(data=go.Heatmap(**heatmap_args))
     fig.update_layout(
         height=height,
-        margin=dict(l=90, r=16, t=10, b=40),
-        xaxis=dict(title="Horas (Ayer | Hoy)", tickangle=0, automargin=True),
-        yaxis=dict(title="Registro / Net / Valor", automargin=True),
+        margin=dict(l=70, r=16, t=10, b=40),
+        xaxis=dict(title="Horas (Ayer | Hoy)", tickangle=0, automargin=True, fixedrange=True),
+        # Oculta etiquetas Y para no renderizar textos largos
+        yaxis=dict(title="", showticklabels=False, fixedrange=True),
         uirevision="keep",
     )
     return fig
