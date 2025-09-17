@@ -5,6 +5,8 @@ import pandas as pd
 from functools import lru_cache
 from sqlalchemy import create_engine, text, bindparam
 from typing import Dict, Tuple, Optional, List
+
+from components.Tables.heatmap import VALORES_MAP
 from .Utils.alarmados import alarm_threshold_for, load_threshold_cfg, excess_base_for
 from .config import SQLALCHEMY_URL
 
@@ -83,6 +85,13 @@ _ALARM_KPIS = [
     "ps_rrc_fail",
     "ps_rab_fail",
     "ps_s1_fail",
+    "ps_drop_abnrel",
+    "cs_rrc_fail",
+    "cs_rab_fail",
+]
+_ALARM_KPIS_heatmap = [
+    "ps_rrc_fail",
+    "ps_rab_fail",
     "ps_drop_abnrel",
     "cs_rrc_fail",
     "cs_rab_fail",
@@ -642,7 +651,7 @@ def fetch_kpis_paginated_alarm_sort(
 #ALARMADOS HEADMAP
 def fetch_alarm_meta_for_heatmap(
     *,
-    fecha: str,                # fecha seleccionada en el filtro
+    fecha: str,
     vendors=None,
     clusters=None,
     networks=None,
@@ -650,12 +659,10 @@ def fetch_alarm_meta_for_heatmap(
 ):
     """
     Devuelve:
-      - df_meta_heat: filas únicas (technology, vendor, noc_cluster) que tienen >=1 KPI alarmado
-        en AYER u HOY (24h completas, ignorando 'hora')
-      - alarm_keys_set: set de tuplas (technology, vendor, noc_cluster, network) que están alarmadas
-        (sirve para filtrar por red a nivel heatmap)
+      - df_meta_heat: (technology, vendor, noc_cluster) ORDENADO por #KPIs alarmados (desc) y flag_hits (desc)
+      - alarm_keys_set: {(technology, vendor, noc_cluster, network)} con ≥1 KPI alarmado (ayer u hoy)
     """
-    # Día base + ayer
+    # Fechas
     try:
         base_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
     except Exception:
@@ -667,7 +674,7 @@ def fetch_alarm_meta_for_heatmap(
     cfg = load_threshold_cfg()  # cacheado
     nets_list = _as_list(networks) or []
 
-    # WHERE base SIN fecha/hora; armamos fechas manualmente (IN)
+    # WHERE sin fecha/hora; fechas via IN
     where_sql, params, uv, uc, un, ut = _filters_where_and_params(
         fecha=None, hora=None, vendors=vendors, clusters=clusters,
         networks=networks, technologies=technologies
@@ -675,52 +682,145 @@ def fetch_alarm_meta_for_heatmap(
     where_sql = f"({where_sql}) AND {_quote(COLMAP['fecha'])} IN (:f1, :f2)"
     params = {**params, "f1": yday_str, "f2": today_str}
 
-    # Construye términos de alarma por KPI (mismo criterio que tu orden “alarmado”)
-    flag_terms = []
+    # KPIs a evaluar como "alarmados"
+    try:
+        alarm_kpis = list(_ALARM_KPIS_heatmap)  # si ya tienes lista global
+    except NameError:
+        # Fallback: toma todos los percent de VALORES_MAP
+        alarm_kpis = sorted({pm for (_name, (pm, _um)) in VALORES_MAP.items() if pm and pm in COLMAP})
+
+    if not alarm_kpis:
+        return pd.DataFrame(columns=["technology","vendor","noc_cluster"]), set()
+
+    # Construye expresiones CASE por KPI y parámetros de umbrales
+    flag_cols_sql = []
     thr_params_all = {}
-    for kpi in _ALARM_KPIS:
-        if kpi not in COLMAP:
-            continue
+
+    # Esta función devuelve un SQL que probablemente use el nombre físico de columna (p.ej. `Network`).
+    # Para este nivel (SELECT desde CTE base) debemos comparar contra el ALIAS 'network'.
+    def _flag_expr_for(kpi: str) -> str:
         col_sql = _quote(COLMAP[kpi])
-        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"  # por si hay strings
+        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
         flag_thr_expr, _exc_thr_expr, p = _build_flag_and_excess_cases(kpi, nets_list, cfg)
         thr_params_all.update(p)
-        flag_terms.append(f"(CASE WHEN COALESCE({num_col}, 0) >= {flag_thr_expr} THEN 1 ELSE 0 END)")
+        # Fuerza a usar el alias 'network' en el CASE, no el nombre físico:
+        flag_thr_expr_alias = flag_thr_expr.replace(_quote(COLMAP['network']), "network")
+        return f"(CASE WHEN COALESCE({num_col}, 0) >= {flag_thr_expr_alias} THEN 1 ELSE 0 END)"
 
-    # Si no hay KPIs configurados, regresamos vacío
-    if not flag_terms:
+    for kpi in alarm_kpis:
+        if kpi not in COLMAP:
+            continue
+        alias = f"f_{kpi}"
+        flag_cols_sql.append(f"{_flag_expr_for(kpi)} AS {alias}")
+
+    if not flag_cols_sql:
         return pd.DataFrame(columns=["technology","vendor","noc_cluster"]), set()
 
-    flags_sum = " + ".join(flag_terms)
+    flags_list_sql = ",\n            ".join(flag_cols_sql)
+    sum_row_flags = " + ".join([f"COALESCE(f_{k},0)" for k in alarm_kpis])
 
-    # Distintos keys alarmados por network
-    sql_alarm_keys = f"""
-        SELECT DISTINCT
-            {_quote(COLMAP['technology'])} AS technology,
-            {_quote(COLMAP['vendor'])}     AS vendor,
-            {_quote(COLMAP['noc_cluster'])} AS noc_cluster,
-            {_quote(COLMAP['network'])}    AS network
-        FROM {_quote_table(_TABLE_NAME)}
+    # Nombres SQL
+    tbl    = _quote_table(_TABLE_NAME)
+    f_tech = _quote(COLMAP["technology"])
+    f_vend = _quote(COLMAP["vendor"])
+    f_clus = _quote(COLMAP["noc_cluster"])
+    f_net  = _quote(COLMAP["network"])
+
+    # Construcción con CTEs; nota el paso intermedio flags_raw → flags
+    sql = f"""
+    WITH base AS (
+        SELECT
+            {f_tech} AS technology,
+            {f_vend} AS vendor,
+            {f_clus} AS noc_cluster,
+            {f_net}  AS network,
+            {", ".join(_quote(COLMAP[k]) for k in alarm_kpis)}
+        FROM {tbl}
         WHERE {where_sql}
-          AND ( ({flags_sum}) >= 1 )
+    ),
+    flags_raw AS (
+        SELECT
+            technology, vendor, noc_cluster, network,
+            {flags_list_sql}
+        FROM base
+    ),
+    flags AS (
+        SELECT
+            fr.*,
+            ({sum_row_flags}) AS row_flag_sum
+        FROM flags_raw fr
+    ),
+    agg_trio AS (
+        SELECT
+            noc_cluster, vendor, technology,
+            {", ".join([f"MAX(f_{k}) AS mx_{k}" for k in alarm_kpis])},
+            SUM(row_flag_sum) AS flag_hits
+        FROM flags
+        GROUP BY noc_cluster, vendor, technology
+    ),
+    ranked AS (
+        SELECT
+            noc_cluster, vendor, technology,
+            ({' + '.join([f"COALESCE(mx_{k},0)" for k in alarm_kpis])}) AS alarm_score,
+            flag_hits
+        FROM agg_trio
+    )
+    SELECT
+        noc_cluster AS noc_cluster,
+        vendor      AS vendor,
+        technology  AS technology,
+        alarm_score,
+        flag_hits
+    FROM ranked
+    ORDER BY alarm_score DESC, flag_hits DESC, vendor ASC, technology ASC
     """
 
+    # Consulta principal (ordenado)
     eng = get_engine()
     with eng.connect() as conn:
-        stmt = _prepare_stmt_with_expanding(sql_alarm_keys, uv, uc, un, ut)
-        df_alarm_keys = pd.read_sql(stmt, conn, params={**params, **thr_params_all})
+        stmt1 = _prepare_stmt_with_expanding(sql, uv, uc, un, ut)
+        df_meta_heat = pd.read_sql(stmt1, conn, params={**params, **thr_params_all})
 
-    # df_meta_heat = únicas por (tech, vendor, cluster) -> lo que usarás como “base”
-    if df_alarm_keys is None or df_alarm_keys.empty:
+        # Consulta de keys por network (reutiliza mismo patrón flags_raw → flags)
+        sql_keys_full = f"""
+        WITH base AS (
+            SELECT
+                {f_tech} AS technology,
+                {f_vend} AS vendor,
+                {f_clus} AS noc_cluster,
+                {f_net}  AS network,
+                {", ".join(_quote(COLMAP[k]) for k in alarm_kpis)}
+            FROM {tbl}
+            WHERE {where_sql}
+        ),
+        flags_raw AS (
+            SELECT
+                technology, vendor, noc_cluster, network,
+                {flags_list_sql}
+            FROM base
+        ),
+        flags AS (
+            SELECT
+                fr.*,
+                ({sum_row_flags}) AS row_flag_sum
+            FROM flags_raw fr
+        )
+        SELECT DISTINCT technology, vendor, noc_cluster, network
+        FROM flags
+        WHERE row_flag_sum >= 1
+        """
+        stmt2 = _prepare_stmt_with_expanding(sql_keys_full, uv, uc, un, ut)
+        df_alarm_keys = pd.read_sql(stmt2, conn, params={**params, **thr_params_all})
+
+    if df_meta_heat is None or df_meta_heat.empty:
         return pd.DataFrame(columns=["technology","vendor","noc_cluster"]), set()
-
-    df_meta_heat = (
-        df_alarm_keys[["technology","vendor","noc_cluster"]]
-        .drop_duplicates()
-        .reset_index(drop=True)
-    )
 
     alarm_keys_set = set(
         tuple(x) for x in df_alarm_keys[["technology","vendor","noc_cluster","network"]].itertuples(index=False, name=None)
     )
-    return df_meta_heat, alarm_keys_set
+
+    # Devuelve sólo columnas base (pero ya vienen en orden)
+    df_out = df_meta_heat[["technology","vendor","noc_cluster"]].drop_duplicates().reset_index(drop=True)
+    return df_out, alarm_keys_set
+
+

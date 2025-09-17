@@ -1,5 +1,7 @@
 import pandas as pd
 from datetime import datetime, timedelta
+import numpy as np
+
 # =========================
 # Config
 # =========================
@@ -168,13 +170,14 @@ def build_heatmap_payloads_fast(
     limit=5,
 ):
     """
-    Igual que el ULTRA, pero:
-      - %: clasifica 0..3 según umbrales (verde→rojo).
-      - UNIT: normaliza 0..1 según min/max por (métrica, red).
-      - En customdata guarda el valor real por celda y máx/mín por fila.
-    Devuelve (pct_payload, unit_payload, page_info).
+    Construye payloads de heatmap (% y UNIT) paginados, agrupando por cluster y
+    manteniendo el orden por 'alarmados' (vía alarm_keys o el orden de df_meta).
+    - %: clasifica 0..3 (excelente→crítico) usando UMBRAL_CFG (severity).
+    - UNIT: normaliza 0..1 con min/max por (métrica, red) usando UMBRAL_CFG (progress).
+    Devuelve: (pct_payload, unit_payload, page_info).
     """
     import numpy as np
+
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
@@ -203,14 +206,17 @@ def build_heatmap_payloads_fast(
     meta_cols = ["technology", "vendor", "noc_cluster"]
     base = df_meta.drop_duplicates(subset=meta_cols)[meta_cols].reset_index(drop=True)
 
+    # --- Construir todas las filas (antes de ordenar/paginar) ---
     rows_full = (
         base.assign(_tmp=1)
         .merge(pd.DataFrame({"network": networks, "_tmp": 1}), on="_tmp", how="left")
         .drop(columns=["_tmp"])
     )
-    rows_full = rows_full.assign(key5=rows_full[["technology","vendor","noc_cluster","network"]].astype(str).agg("/".join, axis=1))
+    rows_full = rows_full.assign(
+        key5=rows_full[["technology","vendor","noc_cluster","network"]].astype(str).agg("/".join, axis=1)
+    )
 
-    rows_all = []
+    rows_all_list = []
     for v in valores_order:
         rf = rows_full.copy()
         rf["valores"] = v
@@ -218,20 +224,46 @@ def build_heatmap_payloads_fast(
             keys_ok = set(alarm_keys)
             mask = list(zip(rf["technology"], rf["vendor"], rf["noc_cluster"], rf["network"]))
             rf = rf[[m in keys_ok for m in mask]]
-        rows_all.append(rf)
-    if not rows_all:
-        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
-    rows_all = pd.concat(rows_all, ignore_index=True)
+        rows_all_list.append(rf)
 
+    if not rows_all_list:
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+
+    rows_all = pd.concat(rows_all_list, ignore_index=True)
+
+    # --- Rank de alarmados + orden por cluster ---
+    if alarm_keys:
+        order_df = pd.DataFrame(list(alarm_keys), columns=["technology","vendor","noc_cluster","network"])
+        order_df = order_df.drop_duplicates().reset_index(drop=True)
+    else:
+        order_cols = [c for c in ["technology","vendor","noc_cluster","network"] if c in df_meta.columns]
+        if order_cols:
+            order_df = df_meta[order_cols].drop_duplicates().reset_index(drop=True)
+        else:
+            order_df = rows_all[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
+
+    order_df = order_df.assign(alarm_rank=lambda d: np.arange(len(d), dtype=int))
+    val_rank = {name: i for i, name in enumerate(valores_order)}
+    merge_cols = [c for c in ["technology","vendor","noc_cluster","network"] if c in rows_all.columns and c in order_df.columns]
+
+    rows_all = rows_all.merge(order_df, on=merge_cols, how="left")
+    rows_all["alarm_rank"] = rows_all["alarm_rank"].fillna(10**9).astype(int)
+    rows_all["val_order"]  = rows_all["valores"].map(val_rank).astype(int)
+
+    # Orden final: cluster → alarm_rank → valor → tech/vendor/net
+    rows_all = rows_all.sort_values(
+        by=["noc_cluster", "alarm_rank", "val_order", "technology", "vendor", "network"],
+        kind="stable"
+    ).reset_index(drop=True)
+
+
+
+    # --- paginado
     total_rows = len(rows_all)
-    if total_rows == 0:
-        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
-
-    # paginado
     start = max(0, int(offset)); end = start + max(1, int(limit))
     rows_page = rows_all.iloc[start:end].reset_index(drop=True)
 
-    # reduce df_ts a visibles
+    # --- reducir df_ts a visibles
     if df_ts is None or df_ts.empty:
         df_small = pd.DataFrame()
         keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
@@ -239,10 +271,12 @@ def build_heatmap_payloads_fast(
     else:
         keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
         keys_df["rid"] = np.arange(len(keys_df), dtype=int)
+
         df_small = df_ts.loc[
             df_ts["fecha"].astype(str).isin([yday, today]) &
             df_ts["network"].astype(str).isin(keys_df["network"].astype(str))
         ].copy()
+
         df_small = df_small.merge(
             keys_df,
             on=["technology","vendor","noc_cluster","network"],
@@ -257,30 +291,29 @@ def build_heatmap_payloads_fast(
         df_small = df_small[[c for c in keep_cols if c in df_small.columns]].dropna(subset=["h"])
         df_small["h"] = df_small["h"].astype(int)
 
-    # map fila -> rid
+    # --- map fila -> rid
     rows_page = rows_page.merge(
         keys_df,
         on=["technology","vendor","noc_cluster","network"],
         how="left",
         validate="many_to_one"
     )
+
+    # --- construir matrices
     x_dt = [f"{yday}T{h:02d}:00:00" for h in range(24)] + [f"{today}T{h:02d}:00:00" for h in range(24)]
     z_pct, z_unit = [], []
     z_pct_raw, z_unit_raw = [], []
     y_labels, row_detail = [], []
 
-    for i, r in rows_page.iterrows():
+    for _, r in rows_page.iterrows():
         tech = r["technology"]; vend = r["vendor"]; clus = r["noc_cluster"]; net = r["network"]; valores = r["valores"]
         pm, um = VALORES_MAP.get(valores, (None, None))
         rid = int(r.get("rid", -1))
-        # Etiqueta visible en el eje Y (orden que pediste)
-        y_label = f"{tech}/{vend}/{valores}/{clus}"
-        y_labels.append(y_label)
 
-        # Detalle completo para el hover (si lo necesitas con net)
+        # Etiqueta Y (ponemos cluster adelante para reforzar el grupo)
+        y_labels.append(f"{clus} | {tech}/{vend}/{valores}")
         row_detail.append(f"{tech}/{vend}/{clus}/{net}/{valores}")
 
-        # Helper para tomar serie (ayer+hoy) del df_small por métrica
         def _row48_raw(metric):
             if metric is None or df_small.empty or rid < 0 or metric not in df_small.columns:
                 return [None]*48
@@ -295,14 +328,12 @@ def build_heatmap_payloads_fast(
                     v = rr[metric]; arr_t[int(rr["h"])] = (float(v) if pd.notna(v) else None)
             return arr_y + arr_t
 
-        # %: clasifica 0..3; guarda también crudos para hover/máx/mín
+        # %: clasifica 0..3; guarda crudos para hover/máx/mín
         if pm:
             row_raw = _row48_raw(pm)
-            # thresholds por (pm, net)
             orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
-            row_color = [ _sev_bucket(v, orient, thr) if v is not None else None for v in row_raw ]
-            z_pct.append(row_color)
-            z_pct_raw.append(row_raw)
+            row_color = [_sev_bucket(v, orient, thr) if v is not None else None for v in row_raw]
+            z_pct.append(row_color); z_pct_raw.append(row_raw)
         else:
             z_pct.append([None]*48); z_pct_raw.append([None]*48)
 
@@ -310,36 +341,30 @@ def build_heatmap_payloads_fast(
         if um:
             row_raw_u = _row48_raw(um)
             mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
-            row_norm = [ _normalize(v, mn, mx) if v is not None else None for v in row_raw_u ]
-            z_unit.append(row_norm)
-            z_unit_raw.append(row_raw_u)
+            row_norm = [_normalize(v, mn, mx) if v is not None else None for v in row_raw_u]
+            z_unit.append(row_norm); z_unit_raw.append(row_raw_u)
         else:
             z_unit.append([None]*48); z_unit_raw.append([None]*48)
 
-    # payloads
+    # --- payloads
     pct_payload = {
         "z": z_pct, "z_raw": z_pct_raw, "x_dt": x_dt, "y": y_labels,
-        "color_mode": "severity",    # 👈 importante
-        "zmin": -0.5, "zmax": 3.5,   # buckets 0..3
+        "color_mode": "severity",
+        "zmin": -0.5, "zmax": 3.5,
         "title": "% IA / % DC (color por umbral)",
         "row_detail": row_detail,
     }
-    # UNIT: rango 0..1
     unit_payload = {
         "z": z_unit, "z_raw": z_unit_raw, "x_dt": x_dt, "y": y_labels,
-        "color_mode": "progress",   # 👈 importante
+        "color_mode": "progress",
         "zmin": 0.0, "zmax": 1.0,
         "title": "Unidades (intensidad por Fail/Abnrel)",
         "row_detail": row_detail,
     }
 
-    page_info = {
-        "total_rows": total_rows,
-        "offset": start,
-        "limit": limit,
-        "showing": len(rows_page),
-    }
+    page_info = {"total_rows": total_rows, "offset": start, "limit": limit, "showing": len(rows_page)}
     return pct_payload, unit_payload, page_info
+
 
 
 
@@ -471,9 +496,12 @@ def build_heatmap_figure(
         automargin=True,
     )
     fig.update_yaxes(
-        showticklabels=True,  # si estás mostrando las etiquetas Y
-        automargin=True,  # 👈 idem para la izquierda
+        showticklabels=True,
+        automargin=True,
         fixedrange=True,
+        categoryorder="array",
+        categoryarray=y,
+        autorange="reversed",
     )
     # Línea del corte entre días
     if isinstance(x, (list, tuple)) and len(x) >= 25:
@@ -499,18 +527,17 @@ def build_heatmap_figure(
         ),
         yaxis=dict(
             title="",
-            showticklabels=True,  # 👈 antes estaba False
-            automargin=True,  # 👈 deja que Plotly ajuste el margen si hace falta
+            showticklabels=True,
+            automargin=True,
             tickfont=dict(size=11, color="#eaeaea"),
-            categoryorder="array",  # 👈 respeta el orden que mandaste
-            categoryarray=y,  # (usa la lista y)
+            categoryorder="array",
+            categoryarray=y,
             fixedrange=True,
         ),
         uirevision="keep",
     )
 
     return fig
-
 
 
 
