@@ -273,7 +273,11 @@ def build_heatmap_payloads_fast(
         tech = r["technology"]; vend = r["vendor"]; clus = r["noc_cluster"]; net = r["network"]; valores = r["valores"]
         pm, um = VALORES_MAP.get(valores, (None, None))
         rid = int(r.get("rid", -1))
-        y_labels.append(f"r{i+1:03d}")
+        # Etiqueta visible en el eje Y (orden que pediste)
+        y_label = f"{tech}/{vend}/{valores}/{clus}"
+        y_labels.append(y_label)
+
+        # Detalle completo para el hover (si lo necesitas con net)
         row_detail.append(f"{tech}/{vend}/{clus}/{net}/{valores}")
 
         # Helper para tomar serie (ayer+hoy) del df_small por métrica
@@ -459,9 +463,16 @@ def build_heatmap_figure(
         dtick=THREE_H_MS,
         tickformat="%b %d %H:%M",
         tickangle=-45,
+        tickfont=dict(size=10),
         ticklabelmode="instant",
         ticks="outside",
         ticklen=5,
+        fixedrange=True,
+        automargin=True,
+    )
+    fig.update_yaxes(
+        showticklabels=True,  # si estás mostrando las etiquetas Y
+        automargin=True,  # 👈 idem para la izquierda
         fixedrange=True,
     )
     # Línea del corte entre días
@@ -474,11 +485,27 @@ def build_heatmap_figure(
     # Dark look & feel
     fig.update_layout(
         height=height,
-        margin=dict(l=70, r=16, t=10, b=60),
+        margin=dict(l=180, r=16, t=10, b=120), # más espacio abajo e izquierda
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#eaeaea"),
         hoverlabel=dict(bgcolor="#222", bordercolor="#444", font=dict(color="#fff", size=13)),
-        yaxis=dict(title="", showticklabels=False, fixedrange=True),
+        xaxis=dict(
+            type="date",
+            tickangle=-45,
+            ticklabelmode="instant",
+            ticks="outside",
+            ticklen=5,
+            fixedrange=True,
+        ),
+        yaxis=dict(
+            title="",
+            showticklabels=True,  # 👈 antes estaba False
+            automargin=True,  # 👈 deja que Plotly ajuste el margen si hace falta
+            tickfont=dict(size=11, color="#eaeaea"),
+            categoryorder="array",  # 👈 respeta el orden que mandaste
+            categoryarray=y,  # (usa la lista y)
+            fixedrange=True,
+        ),
         uirevision="keep",
     )
 

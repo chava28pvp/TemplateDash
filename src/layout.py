@@ -126,31 +126,41 @@ def serve_layout():
                                 ),
                             ], className="g-3 justify-content-center text-center mb-2"),
 
-                            # Heatmaps lado a lado
+                            # Heatmaps apilados (uno debajo del otro) con contenedor que recorta overflow
                             dbc.Row([
                                 dbc.Col(
-                                    dcc.Loading(
-                                        dcc.Graph(
-                                            id="hm-pct",
-                                            config={"displayModeBar": False},
-                                            style={"height": "760px", "width": "100%"}
+                                    html.Div(
+                                        dcc.Loading(
+                                            dcc.Graph(
+                                                id="hm-pct",
+                                                config={"displayModeBar": False},
+                                                style={"height": "700px", "width": "100%"}
+                                            ),
+                                            type="default"
                                         ),
-                                        type="default"
+                                        className="hm-wrap",
+                                        style={"overflow": "hidden", "marginBottom": "28px"}
+                                        # 👈 recorta y separa del siguiente
                                     ),
-                                    md=6, sm=12, className="my-2"
+                                    width=12, className="my-2"
                                 ),
                                 dbc.Col(
-                                    dcc.Loading(
-                                        dcc.Graph(
-                                            id="hm-unit",
-                                            config={"displayModeBar": False},
-                                            style={"height": "760px", "width": "100%"}
+                                    html.Div(
+                                        dcc.Loading(
+                                            dcc.Graph(
+                                                id="hm-unit",
+                                                config={"displayModeBar": False},
+                                                style={"height": "700px", "width": "100%"}
+                                            ),
+                                            type="default"
                                         ),
-                                        type="default"
+                                        className="hm-wrap",
+                                        style={"overflow": "hidden"}  # 👈 recorta overflow
                                     ),
-                                    md=6, sm=12, className="my-2"
+                                    width=12, className="my-2"
                                 ),
-                            ]),
+                            ])
+
                         ]),
                     ], className="bg-dark text-white border-0 shadow-sm"),
                     md=12, className="my-3"
