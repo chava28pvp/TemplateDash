@@ -1,12 +1,12 @@
 import math
 import pandas as pd
-from dash import Input, Output, State, ALL, no_update, ctx, dcc
+from dash import Input, Output, State, ALL, no_update, ctx
 from hashlib import md5
 import json
 import time
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
-from components.Tables.grid_table_valores import build_heatmap_figure, \
+from components.Tables.heatmap import build_heatmap_figure, \
     build_heatmap_payloads_fast
 from components.Tables.main_table import (
     pivot_by_network,
@@ -14,6 +14,8 @@ from components.Tables.main_table import (
     strip_net,
 )
 import dash_bootstrap_components as dbc
+
+from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 from src.data_access import fetch_kpis, fetch_kpis_paginated, COLMAP, fetch_kpis_paginated_global_sort, \
     fetch_kpis_paginated_alarm_sort, fetch_alarm_meta_for_heatmap
 from src.config import REFRESH_INTERVAL_MS
@@ -492,6 +494,7 @@ def register_callbacks(app):
             pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
                 df_meta=df_meta_heat,
                 df_ts=df_ts,
+                UMBRAL_CFG=UM_MANAGER.config(),
                 networks=nets_heat,
                 valores_order=("PS_RCC", "CS_RCC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
                 today=today_str, yday=yday_str,
@@ -506,13 +509,13 @@ def register_callbacks(app):
 
         # --- Figuras (con hover detallado) ---
         if pct_payload:
-            fig_pct = build_heatmap_figure(pct_payload, height=760, colorscale="Inferno", decimals=2)
+            fig_pct = build_heatmap_figure(pct_payload, height=760, decimals=2)
 
         else:
             fig_pct = go.Figure()
 
         if unit_payload:
-            fig_unit = build_heatmap_figure(unit_payload, height=760, colorscale="Inferno", decimals=0)
+            fig_unit = build_heatmap_figure(unit_payload, height=760, decimals=0)
 
         else:
             fig_unit = go.Figure()
@@ -540,7 +543,7 @@ def register_callbacks(app):
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
-        Input("heatmap-page-state", "data"),  # 👈 ahora dispara por paginado del heatmap
+        Input("heatmap-page-state", "data"),  # dispara por paginado del heatmap
         prevent_initial_call=False,  # permite “bootstrap” al cargar
     )
     def heatmap_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state):

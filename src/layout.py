@@ -54,7 +54,6 @@ def serve_layout():
             # Tabla principal + paginación
             dbc.Row([
                 dbc.Col([
-                    # Controles de paginación
                     dbc.Card(dbc.CardBody([
                         dbc.Row([
                             dbc.Col(dbc.Button("« Anterior", id="page-prev", n_clicks=0), width="auto"),
@@ -81,7 +80,6 @@ def serve_layout():
                         ], className="g-2 align-items-center"),
                     ]), className="shadow-sm mb-2"),
 
-                    # Contenedor con altura fija y scroll para la tabla
                     html.Div(
                         id="table-container",
                         className="kpi-table-wrap kpi-table-container"
@@ -89,75 +87,75 @@ def serve_layout():
                 ], md=12, className="my-3"),
             ]),
 
-            # (Opcional) Elimina por completo el grid si ya no lo usas
-            # dbc.Row([
-            #     dbc.Col(
-            #         dcc.Loading(
-            #             html.Div(id="grid-table-container"),
-            #             type="default",
-            #             className="mt-2"
-            #         ),
-            #         md=12, className="my-2"
-            #     )
-            # ]),
-
-            # Heatmaps (envueltos en Loading; se disparan después de la tabla)
+            # === Heatmaps agrupados en un solo Card ===
             dbc.Row([
-                dbc.Col([
-                    dbc.Card(dbc.CardBody([
-                        dbc.Row([
-                            dbc.Col(dbc.Button("« Anterior", id="hm-page-prev", n_clicks=0, size="sm"), width="auto"),
-                            dbc.Col(html.Div(id="hm-page-indicator", className="mx-2 fw-semibold"), width="auto"),
-                            dbc.Col(dbc.Button("Siguiente »", id="hm-page-next", n_clicks=0, size="sm"), width="auto"),
-                            dbc.Col(
-                                dbc.Input(
-                                    id="hm-page-size",
-                                    type="number",
-                                    min=5, step=5, value=5,
-                                    placeholder="Tamaño",
-                                    size="sm",
-                                    style={"width": "110px"}
+                dbc.Col(
+                    dbc.Card([
+                        dbc.CardHeader(
+                            dbc.Row([
+                                dbc.Col(html.H4("Degradados", className="m-0"), width="auto"),
+                            ], className="g-2 align-items-center justify-content-center"),
+                            className="bg-transparent border-0"
+                        ),
+                        dbc.CardBody([
+                            # Controles compactos centrados
+                            dbc.Row([
+                                dbc.Col(
+                                    dbc.ButtonGroup([
+                                        dbc.Button("«", id="hm-page-prev", n_clicks=0, size="sm", color="secondary"),
+                                        dbc.Button(id="hm-page-indicator", size="sm", disabled=True,
+                                                   color="secondary", className="px-2"),
+                                        dbc.Button("»", id="hm-page-next", n_clicks=0, size="sm", color="secondary"),
+                                    ], size="sm"),
+                                    width="auto", className="d-flex justify-content-center"
                                 ),
-                                width="auto",
-                                className="ms-3"
-                            ),
-                            dbc.Col(html.Small(id="hm-total-rows-banner", className="text-muted"), width=True),
-                        ], className="g-2 align-items-center"),
-                    ]), className="bg-dark text-white border-0 shadow-sm mb-2"),
-                ], md=12),
-            ]),
+                                dbc.Col(
+                                    dbc.InputGroup([
+                                        dbc.InputGroupText("Tamaño", className="py-0"),
+                                        dbc.Input(
+                                            id="hm-page-size",
+                                            type="number", min=5, step=5, value=5, size="sm",
+                                            style={"width": "80px"}
+                                        ),
+                                    ], size="sm"),
+                                    width="auto", className="d-flex justify-content-center"
+                                ),
+                                dbc.Col(
+                                    html.Small(id="hm-total-rows-banner", className="text-muted"),
+                                    width="auto", className="d-flex align-items-center"
+                                ),
+                            ], className="g-3 justify-content-center text-center mb-2"),
 
-            dbc.Row([
-                dbc.Col(
-                    dbc.Card(dbc.CardBody([
-                        html.H4("%", className="mb-3"),
-                        dcc.Loading(
-                            dcc.Graph(
-                                id="hm-pct",
-                                config={"displayModeBar": False},
-                                style={"height": "760px", "width": "100%"}
-                            ),
-                            type="default"
-                        ),
-                    ]), className="shadow-sm"),
-                    md=6, sm=12, className="my-3"
-                ),
-                dbc.Col(
-                    dbc.Card(dbc.CardBody([
-                        html.H4("UNIT", className="mb-3"),
-                        dcc.Loading(
-                            dcc.Graph(
-                                id="hm-unit",
-                                config={"displayModeBar": False},
-                                style={"height": "760px", "width": "100%"}
-                            ),
-                            type="default"
-                        ),
-                    ]), className="shadow-sm"),
-                    md=6, sm=12, className="my-3"
+                            # Heatmaps lado a lado
+                            dbc.Row([
+                                dbc.Col(
+                                    dcc.Loading(
+                                        dcc.Graph(
+                                            id="hm-pct",
+                                            config={"displayModeBar": False},
+                                            style={"height": "760px", "width": "100%"}
+                                        ),
+                                        type="default"
+                                    ),
+                                    md=6, sm=12, className="my-2"
+                                ),
+                                dbc.Col(
+                                    dcc.Loading(
+                                        dcc.Graph(
+                                            id="hm-unit",
+                                            config={"displayModeBar": False},
+                                            style={"height": "760px", "width": "100%"}
+                                        ),
+                                        type="default"
+                                    ),
+                                    md=6, sm=12, className="my-2"
+                                ),
+                            ]),
+                        ]),
+                    ], className="bg-dark text-white border-0 shadow-sm"),
+                    md=12, className="my-3"
                 ),
             ]),
-
         ]),
 
         # Stores
@@ -166,7 +164,7 @@ def serve_layout():
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
         dcc.Store(id="table-page-data"),
 
-        # 👇 NUEVO: señal para encadenar callbacks (tabla -> heatmaps)
+        # Señales/estado Heatmap
         dcc.Store(id="heatmap-trigger", data=None),
         dcc.Store(id="heatmap-page-state", data={"page": 1, "page_size": 5}),
         dcc.Store(id="heatmap-page-info"),
