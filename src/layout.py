@@ -125,6 +125,24 @@ def serve_layout():
                                     width="auto", className="d-flex align-items-center"
                                 ),
                             ], className="g-3 justify-content-center text-center mb-2"),
+                            # --- Resumen (tabla) arriba de los heatmaps ---
+                            # --- Tabla (resumen de las filas visibles del heatmap) ---
+                            dbc.Row([
+                                dbc.Col(
+                                    dbc.Card(dbc.CardBody([
+                                        html.H4("Detalle (tabla)", className="mb-3"),
+                                        html.Div(
+                                            id="hm-table-container",
+                                            style={
+                                                "maxHeight": "360px",  # 👈 alto máximo
+                                                "overflowY": "auto",  # 👈 scroll vertical
+                                                "overflowX": "auto",  # 👈 por si hay columnas largas
+                                            }
+                                        ),
+                                    ]), className="shadow-sm bg-dark text-white border-0"),
+                                    md=12, className="my-3"
+                                ),
+                            ]),
 
                             # Heatmaps apilados (uno debajo del otro) con contenedor que recorta overflow
                             dbc.Row([

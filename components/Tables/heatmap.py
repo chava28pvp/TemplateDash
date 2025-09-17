@@ -539,5 +539,57 @@ def build_heatmap_figure(
 
     return fig
 
+def build_heatmap_table_df(pct_payload, unit_payload, *, pct_decimals=2, unit_decimals=0) -> pd.DataFrame:
+    """
+    Construye una tabla con las filas visibles (página actual) del heatmap.
+    Columnas: Cluster, Tech, Vendor, Valor, Max %, Min %, Max UNIT, Min UNIT
+    Se alinea 1:1 con el orden del eje Y (y_labels) del heatmap.
+    """
+    # Selecciona la fuente de "detalle" y etiquetas Y (orden de filas)
+    src = pct_payload or unit_payload
+    if not src:
+        return pd.DataFrame(columns=["Cluster","Tech","Vendor","Valor","Max %","Min %","Max UNIT","Min UNIT"])
+
+    y = src.get("y") or []
+    detail = src.get("row_detail") or y  # "tech/vendor/cluster/net/valores"
+    n = len(y)
+
+    # Prepara helpers para obtener min/máx por fila
+    def _minmax_from(payload, i, decimals):
+        if not payload:
+            return "", ""
+        z_raw = payload.get("z_raw")
+        if not z_raw or i >= len(z_raw):
+            return "", ""
+        arr = [v for v in (z_raw[i] or []) if isinstance(v, (int, float, np.floating))]
+        if not arr:
+            return "", ""
+        return (f"{max(arr):,.{decimals}f}", f"{min(arr):,.{decimals}f}")
+
+    rows = []
+    for i in range(n):
+        parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 4)
+        tech   = parts[0] if len(parts) > 0 else ""
+        vendor = parts[1] if len(parts) > 1 else ""
+        cluster= parts[2] if len(parts) > 2 else ""
+        # net   = parts[3] if len(parts) > 3 else ""   # si luego quieres añadirlo a la tabla
+        valor  = parts[4] if len(parts) > 4 else ""
+
+        max_pct, min_pct   = _minmax_from(pct_payload,  i, pct_decimals)
+        max_unit, min_unit = _minmax_from(unit_payload, i, unit_decimals)
+
+        rows.append({
+            "Cluster": cluster,
+            "Tech": tech,
+            "Vendor": vendor,
+            "Valor": valor,
+            "Max %": max_pct,
+            "Min %": min_pct,
+            "Max UNIT": max_unit,
+            "Min UNIT": min_unit,
+        })
+
+    df = pd.DataFrame(rows, columns=["Cluster","Tech","Vendor","Valor","Max %","Min %","Max UNIT","Min UNIT"])
+    return df
 
 

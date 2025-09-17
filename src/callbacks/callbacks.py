@@ -7,7 +7,7 @@ import time
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
 from components.Tables.heatmap import build_heatmap_figure, \
-    build_heatmap_payloads_fast
+    build_heatmap_payloads_fast, build_heatmap_table_df
 from components.Tables.main_table import (
     pivot_by_network,
     render_kpi_table_multinet,
@@ -428,6 +428,7 @@ def register_callbacks(app):
     # 8) HeatMap render (optimizado)
     # -------------------------------------------------
     @app.callback(
+        Output("hm-table-container", "children"),  # 👈 NUEVA salida (tabla)
         Output("hm-pct", "figure"),
         Output("hm-unit", "figure"),
         Output("hm-page-indicator", "children"),
@@ -443,7 +444,7 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def refresh_heatmaps(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state):
-        """Render ultra-rápido del heatmap: figura % y UNIT + indicadores de paginado."""
+        """Render ultra-rápido del heatmap + tabla: figuras % y UNIT, indicadores de paginado y tabla resumen."""
         global _LAST_HEATMAP_KEY
 
         # --- Normaliza filtros ---
@@ -461,7 +462,7 @@ def register_callbacks(app):
         # --- Clave de estado: evita re-render idéntico ---
         state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
         if _LAST_HEATMAP_KEY == state_key:
-            return no_update, no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update, no_update, no_update
 
         # --- Fechas HOY/AYER (sin hora) ---
         try:
@@ -489,7 +490,7 @@ def register_callbacks(app):
             networks=nets_heat or None, technologies=technologies or None,
         )
 
-        # --- Construcción de payloads (ULTRA) ---
+        # --- Construcción de payloads ---
         if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
             pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
                 df_meta=df_meta_heat,
@@ -507,18 +508,31 @@ def register_callbacks(app):
             pct_payload = unit_payload = None
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-        # --- Figuras (con hover detallado) ---
+        # --- Figuras ---
         if pct_payload:
             fig_pct = build_heatmap_figure(pct_payload, height=760, decimals=2)
-
         else:
             fig_pct = go.Figure()
 
         if unit_payload:
             fig_unit = build_heatmap_figure(unit_payload, height=760, decimals=0)
-
         else:
             fig_unit = go.Figure()
+
+        # --- Tabla (misma página/orden) ---
+        if pct_payload or unit_payload:
+            df_tbl = build_heatmap_table_df(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
+            if df_tbl.empty:
+                table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
+            else:
+                table_component = dbc.Table.from_dataframe(
+                    df_tbl,
+                    striped=True, bordered=False, hover=True,
+                    size="sm",
+                    className="mb-0 table-dark"  # dark theme
+                )
+        else:
+            table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
 
         # --- Indicadores de página ---
         total = int(page_info.get("total_rows", 0))
@@ -533,7 +547,7 @@ def register_callbacks(app):
         # --- Memoriza última clave renderizada ---
         _LAST_HEATMAP_KEY = state_key
 
-        return fig_pct, fig_unit, hm_indicator, hm_banner, page_info
+        return table_component, fig_pct, fig_unit, hm_indicator, hm_banner, page_info
 
 
     @app.callback(
