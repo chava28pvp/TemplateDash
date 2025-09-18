@@ -513,7 +513,7 @@ def build_heatmap_figure(
     # Dark look & feel
     fig.update_layout(
         height=height,
-        margin=dict(l=180, r=16, t=10, b=120), # más espacio abajo e izquierda
+        margin=dict(l=200, r=16, t=10, b=140), # más espacio abajo e izquierda
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#eaeaea"),
         hoverlabel=dict(bgcolor="#222", bordercolor="#444", font=dict(color="#fff", size=13)),
