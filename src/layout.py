@@ -130,13 +130,13 @@ def serve_layout():
                             dbc.Row([
                                 dbc.Col(
                                     dbc.Card(dbc.CardBody([
-                                        html.H4("Detalle (tabla)", className="mb-3"),
+                                        html.H4("Tabla detalle", className="mb-3"),
                                         html.Div(
                                             id="hm-table-container",
                                             style={
-                                                "maxHeight": "360px",  # 👈 alto máximo
-                                                "overflowY": "auto",  # 👈 scroll vertical
-                                                "overflowX": "auto",  # 👈 por si hay columnas largas
+                                                "maxHeight": "360px",
+                                                "overflowY": "auto",
+                                                "overflowX": "auto",
                                             }
                                         ),
                                     ]), className="shadow-sm bg-dark text-white border-0"),
@@ -158,7 +158,6 @@ def serve_layout():
                                         ),
                                         className="hm-wrap",
                                         style={"overflow": "hidden", "marginBottom": "28px"}
-                                        # 👈 recorta y separa del siguiente
                                     ),
                                     width=12, className="my-2"
                                 ),

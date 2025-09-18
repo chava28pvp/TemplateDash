@@ -513,7 +513,7 @@ def build_heatmap_figure(
     # Dark look & feel
     fig.update_layout(
         height=height,
-        margin=dict(l=180, r=16, t=10, b=120), # más espacio abajo e izquierda
+        margin=dict(l=200, r=16, t=10, b=140), # más espacio abajo e izquierda
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#eaeaea"),
         hoverlabel=dict(bgcolor="#222", bordercolor="#444", font=dict(color="#fff", size=13)),
@@ -548,7 +548,7 @@ def build_heatmap_table_df(pct_payload, unit_payload, *, pct_decimals=2, unit_de
     # Selecciona la fuente de "detalle" y etiquetas Y (orden de filas)
     src = pct_payload or unit_payload
     if not src:
-        return pd.DataFrame(columns=["Cluster","Tech","Vendor","Valor","Max %","Min %","Max UNIT","Min UNIT"])
+        return pd.DataFrame(columns=["Cluster","Tech","Vendor","Valor","Max %","Max UNIT"])
 
     y = src.get("y") or []
     detail = src.get("row_detail") or y  # "tech/vendor/cluster/net/valores"
@@ -584,12 +584,10 @@ def build_heatmap_table_df(pct_payload, unit_payload, *, pct_decimals=2, unit_de
             "Vendor": vendor,
             "Valor": valor,
             "Max %": max_pct,
-            "Min %": min_pct,
             "Max UNIT": max_unit,
-            "Min UNIT": min_unit,
         })
 
-    df = pd.DataFrame(rows, columns=["Cluster","Tech","Vendor","Valor","Max %","Min %","Max UNIT","Min UNIT"])
+    df = pd.DataFrame(rows, columns=["Cluster","Tech","Vendor","Valor","Max %","Max UNIT"])
     return df
 
 
