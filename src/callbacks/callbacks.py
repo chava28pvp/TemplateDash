@@ -6,8 +6,8 @@ import json
 import time
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
-from components.Tables.heatmap import build_heatmap_figure, \
-    build_heatmap_payloads_fast, build_heatmap_table_df
+from components.Tables.histograma import \
+    build_histo_payloads_fast, build_histo_table_df, build_overlay_waves_figure
 from components.Tables.main_table import (
     pivot_by_network,
     render_kpi_table_multinet,
@@ -492,7 +492,7 @@ def register_callbacks(app):
 
         # --- Construcción de payloads ---
         if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
-            pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
+            pct_payload, unit_payload, page_info = build_histo_payloads_fast(
                 df_meta=df_meta_heat,
                 df_ts=df_ts,
                 UMBRAL_CFG=UM_MANAGER.config(),
@@ -509,19 +509,39 @@ def register_callbacks(app):
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
         # --- Figuras ---
+        # % (severity)
         if pct_payload:
-            fig_pct = build_heatmap_figure(pct_payload, height=760, decimals=2)
+            fig_pct = build_overlay_waves_figure(
+                pct_payload,
+                UMBRAL_CFG=UM_MANAGER.config(),
+                mode="severity",
+                height=420,  # más compacto que antes
+                smooth_win=3,
+                opacity=0.28,
+                line_width=1.2,
+                decimals=2
+            )
         else:
             fig_pct = go.Figure()
 
+        # UNIT (progress)
         if unit_payload:
-            fig_unit = build_heatmap_figure(unit_payload, height=760, decimals=0)
+            fig_unit = build_overlay_waves_figure(
+                unit_payload,
+                UMBRAL_CFG=UM_MANAGER.config(),
+                mode="progress",
+                height=400,  # aún más compacto
+                smooth_win=3,
+                opacity=0.25,
+                line_width=1.2,
+                decimals=0
+            )
         else:
             fig_unit = go.Figure()
 
         # --- Tabla (misma página/orden) ---
         if pct_payload or unit_payload:
-            df_tbl = build_heatmap_table_df(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
+            df_tbl = build_histo_table_df(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
             if df_tbl.empty:
                 table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
             else:

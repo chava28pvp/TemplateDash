@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import datetime, timedelta
+import plotly.graph_objs as go
 import numpy as np
 
 # =========================
@@ -48,49 +49,6 @@ def _max_date_str(series: pd.Series) -> str | None:
         return max(pd.to_datetime(series).dt.date).strftime("%Y-%m-%d")
     except Exception:
         return None
-
-def _hora_to_int(series) -> pd.Series:
-    """
-    Convierte 'HH:MM:SS' o enteros/strings a 0..23; inválidos -> NaN.
-    """
-    s = series.astype(str).str.split(":", n=1, expand=True)[0]
-    s = pd.to_numeric(s, errors="coerce")
-    s = s.where((s >= 0) & (s <= 23))
-    return s
-
-
-def _key_label(tech, vend, clus, net, valores):
-    return f"{tech}/{vend}/{clus}/{net}/{valores}"
-
-def build_series_index(df_ts: pd.DataFrame, metrics: set[str]) -> dict:
-    """
-    Indexa df_ts por (fecha, technology, vendor, cluster, network, metric) -> lista 24
-    """
-    if df_ts is None or df_ts.empty:
-        return {}
-
-    need_cols = {"fecha","hora","technology","vendor","noc_cluster","network"} | set(metrics)
-    miss = [c for c in need_cols if c not in df_ts.columns]
-    if miss:
-        return {}
-
-    df = df_ts.copy()
-    df["fecha"] = pd.to_datetime(df["fecha"]).dt.strftime("%Y-%m-%d")
-
-    index = {}
-    cols_key = ["fecha","technology","vendor","noc_cluster","network"]
-    for (fecha, tech, vend, clus, net), grp in df.groupby(cols_key, sort=False):
-        for metric in metrics:
-            out = _empty24()
-            if metric in grp.columns:
-                for _, r in grp.iterrows():
-                    idx = _safe_hour_to_idx(r["hora"])
-                    if idx is None:
-                        continue
-                    val = r.get(metric, None)
-                    out[idx] = (val if isinstance(val,(int,float)) else None)
-            index[(fecha, tech, vend, clus, net, metric)] = out
-    return index
 
 def _sev_cfg(metric: str, net: str | None, cfg: dict):
     """Obtiene thresholds y orientación para métricas de % (severity)."""
@@ -152,10 +110,55 @@ def _normalize(v: float | None, vmin: float, vmax: float) -> float | None:
         return 0.0
     x = (float(v) - vmin) / (vmax - vmin)
     return 0.0 if x < 0 else (1.0 if x > 1 else x)
+
+def _interp_nan(v):
+    """Interpola NaN/None en 1D; si todo es NaN devuelve ceros."""
+    arr = np.array([
+        np.nan if (vv is None or not isinstance(vv, (int, float, np.floating))) else float(vv)
+        for vv in (v or [])
+    ], dtype=float)
+    n = arr.size
+    if n == 0:
+        return arr
+    mask = np.isfinite(arr)
+    if not mask.any():
+        return np.zeros_like(arr)
+    x = np.arange(n, dtype=float)
+    arr[~mask] = np.interp(x[~mask], x[mask], arr[mask])
+    return arr
+
+def _smooth_1d(y, win=3):
+    """Media móvil simple."""
+    y = np.asarray(y, dtype=float)
+    win = max(1, int(win))
+    if win == 1 or y.size == 0:
+        return y
+    k = np.ones(win, dtype=float) / win
+    return np.convolve(y, k, mode="same")
+
+def _bucket_for_value(v, orient, thr):
+    """Devuelve etiqueta de bucket para un valor dado."""
+    v = float(v)
+    if orient == "higher_is_better":
+        if v >= thr["excelente"]: return "excelente"
+        elif v >= thr["bueno"]:   return "bueno"
+        elif v >= thr["regular"]: return "regular"
+        else:                     return "critico"
+    else:
+        if v <= thr["excelente"]: return "excelente"
+        elif v <= thr["bueno"]:   return "bueno"
+        elif v <= thr["regular"]: return "regular"
+        else:                     return "critico"
+
+def _hex_to_rgba(hex_color, alpha):
+    r = int(hex_color[1:3], 16)
+    g = int(hex_color[3:5], 16)
+    b = int(hex_color[5:7], 16)
+    return f"rgba({r},{g},{b},{alpha})"
 # =========================
-# Payloads de heatmap (48 columnas: Ayer 0–23 | Hoy 24–47) con paginado
+# Payloads de histograma (48 columnas: Ayer 0–23 | Hoy 24–47) con paginado
 # =========================
-def build_heatmap_payloads_fast(
+def build_histo_payloads_fast(
     df_meta: pd.DataFrame,
     df_ts: pd.DataFrame,
     *,
@@ -369,177 +372,219 @@ def build_heatmap_payloads_fast(
 
 
 # =========================
-# Figura de Heatmap (Plotly) — detalle en hover, eje Y ligero
+# Figura de Histograma (Plotly) — detalle en hover, eje Y ligero
 # =========================
-def build_heatmap_figure(
+
+
+def build_overlay_waves_figure(
     payload,
     *,
-    height=720,
-    decimals=2,
+    UMBRAL_CFG: dict,
+    mode="severity",       # "severity" = usa % y umbrales; "progress" = usa UNIT
+    height=460,            # altura total de la figura (compacta)
+    smooth_win=3,          # suavizado
+    opacity=0.28,          # opacidad del relleno
+    line_width=1.25,       # grosor de línea
+    decimals=2
 ):
-    import plotly.graph_objs as go
-    import numpy as np
-
+    """
+    Ondas superpuestas: todas parten de baseline=0.
+    - X = payload['x_dt'] (fechas/horas)
+    - Y = amplitud normalizada (sin eje Y)
+    - Hover con detalle (fila + valor crudo + metadatos)
+    - %: color por bucket del pico (SEV_COLORS)
+    - UNIT: onda azul; SOLO el pico en rojo si es 'critico' (si no, pico azul)
+    """
     if not payload:
         return go.Figure()
 
-    z       = payload["z"]                 # z para COLOR (clase 0..3 o 0..1)
-    z_raw   = payload.get("z_raw") or z    # valores reales para hover
-    x       = payload.get("x_dt") or payload.get("x")  # usamos datetime si existe
-    y       = payload["y"]
-    zmin    = payload["zmin"]
-    zmax    = payload["zmax"]
-    title   = payload.get("title", "")
-    mode    = payload.get("color_mode", "severity")
-    detail  = payload.get("row_detail") or y
+    x = payload.get("x_dt") or payload.get("x") or []
+    y_labels = payload.get("y") or []
+    detail   = payload.get("row_detail") or y_labels
+    z_raw    = payload.get("z_raw") or payload.get("z") or []
+    n = len(y_labels)
+    if n == 0:
+        return go.Figure()
 
-    # ----- Colores según modo -----
-    if mode == "severity":
-        # 0..3 -> verde, amarillo, naranja, rojo
-        colorscale = [
-            [0/3, SEV_COLORS["excelente"]],
-            [1/3, SEV_COLORS["bueno"]],
-            [2/3, SEV_COLORS["regular"]],
-            [3/3, SEV_COLORS["critico"]],
-        ]
-        colorbar = dict(
-            title=title,
-            tickmode="array",
-            tickvals=[0,1,2,3],
-            ticktext=["Excelente","Bueno","Regular","Crítico"],
-        )
-    else:  # progress
-        # 0..1 -> blanco a azul
-        colorscale = [
-            [0.0, "#f8f9fa"],
-            [1.0, "#0d6efd"],
-        ]
-        colorbar = dict(title=title)
+    fig = go.Figure()
+    val_fmt = f",.{decimals}f" if decimals > 0 else ",.0f"
 
-    # ----- customdata por celda: detalle + máx/mín de la fila + valor crudo -----
-    customdata = []
-    for i, row in enumerate(z_raw):
-        arr = np.array([v if isinstance(v,(int,float)) else np.nan for v in row], dtype=float)
-        if np.isfinite(arr).any():
-            rmax = np.nanmax(arr); rmin = np.nanmin(arr)
-            valid_idx = np.where(np.isfinite(arr))[0]
-            last_idx = int(valid_idx[-1])
-            last_label = (x[last_idx] if isinstance(x[last_idx], str) else str(x[last_idx]))
-            last_label = last_label.replace("T", " ")[:16]
-        else:
-            rmax = np.nan; rmin = np.nan; last_label = "—"
+    for i in range(n):
+        row_vals = z_raw[i] if i < len(z_raw) else []
+        raw = _interp_nan(row_vals)  # valores crudos por hora (48)
 
-        parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 4)
-        tech   = parts[0] if len(parts) > 0 else ""
-        vendor = parts[1] if len(parts) > 1 else ""
-        clus   = parts[2] if len(parts) > 2 else ""
-        net    = parts[3] if len(parts) > 3 else ""
-        valor  = parts[4] if len(parts) > 4 else ""
+        # Parse detail para net/valores/labels
+        parts   = (detail[i] if i < len(detail) else "").split("/", 4)
+        tech    = parts[0] if len(parts) > 0 else ""
+        vendor  = parts[1] if len(parts) > 1 else ""
+        cluster = parts[2] if len(parts) > 2 else ""
+        net     = parts[3] if len(parts) > 3 else ""
+        valores = parts[4] if len(parts) > 4 else ""
 
-        def _fmt(v):
-            if not np.isfinite(v): return ""
-            return f"{v:,.{decimals}f}" if decimals > 0 else f"{v:,.0f}"
-        rmax_s = _fmt(rmax); rmin_s = _fmt(rmin)
+        if mode == "severity":
+            # Normaliza por min-max de la fila para formar onda (visual)
+            rmin = float(np.nanmin(raw)) if raw.size else 0.0
+            rmax = float(np.nanmax(raw)) if raw.size else 1.0
+            if not np.isfinite(rmin) or not np.isfinite(rmax) or rmin == rmax:
+                amp = np.zeros_like(raw)
+            else:
+                amp = (raw - rmin) / (rmax - rmin)
+            amp = _smooth_1d(np.clip(amp, 0, 1), win=smooth_win)
 
-        # customdata por celda: [0]tech [1]vend [2]clus [3]net [4]valor [5]last [6]max [7]min [8]raw_cell
-        row_cd = []
-        for j in range(len(x)):
-            raw_cell = arr[j] if j < len(arr) else np.nan
-            raw_s = _fmt(raw_cell)
-            row_cd.append([tech, vendor, clus, net, valor, last_label, rmax_s, rmin_s, raw_s])
-        customdata.append(row_cd)
+            # Color por bucket del pico
+            pm, _um = VALORES_MAP.get(valores, (None, None))
+            orient, thr = _sev_cfg(pm or "", net, UMBRAL_CFG)
+            pk = int(np.nanargmax(amp)) if amp.size else 0
+            bucket = _bucket_for_value(raw[pk] if raw.size else 0.0, orient, thr)
+            color_hex = SEV_COLORS.get(bucket, "#999")
+            line_color = color_hex
+            fill_color = _hex_to_rgba(color_hex, opacity)
+            legend_name = y_labels[i]
 
-    # d3 format para raw en hover (aunque ya viene formateado, por si decides usar %{z} crudo)
-    # z_fmt = f",.{decimals}f" if decimals > 0 else ",.0f"
+            # --- Onda (baseline=0) ---
+            fig.add_trace(go.Scatter(
+                x=x,
+                y=amp,
+                mode="lines",
+                line=dict(width=line_width, color=line_color),
+                fill="tozeroy",
+                fillcolor=fill_color,
+                name=legend_name,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "%{x|%Y-%m-%d %H:%M}<br>"
+                    f"Valor: %{{customdata[1]:{val_fmt}}}"
+                    "<br><span style='opacity:0.85'>Bucket:</span> %{customdata[7]}"
+                    "<br><span style='opacity:0.85'>Tech:</span> %{customdata[2]} | "
+                    "<span style='opacity:0.85'>Vendor:</span> %{customdata[3]} | "
+                    "<span style='opacity:0.85'>Cluster:</span> %{customdata[4]} | "
+                    "<span style='opacity:0.85'>Net:</span> %{customdata[5]} | "
+                    "<span style='opacity:0.85'>Valor:</span> %{customdata[6]}<extra></extra>"
+                ),
+                customdata=np.column_stack([
+                    np.full(len(x), y_labels[i], dtype=object),  # 0
+                    raw if raw.size else np.zeros(len(x)),       # 1
+                    np.full(len(x), tech, dtype=object),         # 2
+                    np.full(len(x), vendor, dtype=object),       # 3
+                    np.full(len(x), cluster, dtype=object),      # 4
+                    np.full(len(x), net, dtype=object),          # 5
+                    np.full(len(x), valores, dtype=object),      # 6
+                    np.full(len(x), bucket, dtype=object),       # 7
+                ])
+            ))
 
-    hover_tmpl = (
-        # Valor destacado (arriba)
-        "<span style='font-size:120%; font-weight:700'>%{customdata[8]}</span><br>"
-        # Fecha/hora en línea aparte
-        "<span style='opacity:0.85'>%{x|%Y-%m-%d %H:%M}</span><br>"
-        "──────────<br>"
-        "DETALLE<br>"
-        "<b>Tech:</b> %{customdata[0]}<br>"
-        "<b>Vendor:</b> %{customdata[1]}<br>"
-        "<b>Cluster:</b> %{customdata[2]}<br>"
-        "<b>Net:</b> %{customdata[3]}<br>"
-        "<b>Valor:</b> %{customdata[4]}<br>"
-        "<b>Última hora con registro:</b> %{customdata[5]}<br>"
-        "<b>Máx:</b> %{customdata[6]}<br>"
-        "<b>Mín:</b> %{customdata[7]}<br>"
-        "<extra></extra>"
-    )
+            # (Opcional) marcador del pico con mismo color de la onda
+            fig.add_trace(go.Scatter(
+                x=[x[pk] if len(x) else None],
+                y=[amp[pk] if amp.size else None],
+                mode="markers",
+                marker=dict(size=7, color=line_color, symbol="diamond"),
+                hovertemplate=(
+                    "<b>Pico</b><br>"
+                    "%{x|%Y-%m-%d %H:%M}<br>"
+                    f"Valor: %{{customdata:{val_fmt}}}<extra></extra>"
+                ),
+                customdata=[raw[pk] if raw.size else np.nan],
+                showlegend=False
+            ))
 
-    fig = go.Figure(data=go.Heatmap(
-        z=z, x=x, y=y,
-        zmin=zmin, zmax=zmax,
-        colorscale=colorscale,
-        colorbar=colorbar,
-        customdata=customdata,
-        hovertemplate=hover_tmpl,
-        hoverongaps=False,
-        xgap=0.2, ygap=0.2,
-    ))
+        else:  # progress (UNIT)
+            # Normaliza con min/max de umbrales UNIT (como en tu payload UNIT)
+            _pm, um = VALORES_MAP.get(valores, (None, None))
+            vmin, vmax = _prog_cfg(um or "", net, UMBRAL_CFG)
+            norm = np.array([_normalize(v, vmin, vmax) if np.isfinite(v) else 0.0 for v in raw], dtype=float)
+            amp  = _smooth_1d(np.clip(norm, 0, 1), win=smooth_win)
 
-    # Eje X como fecha con ticks espaciados (cada 3h)
-    THREE_H_MS = 3 * 3600 * 1000
+            # Pico y bucket SOLO para decidir color del marker (onda SIEMPRE azul)
+            orient, thr = _sev_cfg(um or "", net, UMBRAL_CFG)
+            pk = int(np.nanargmax(amp)) if amp.size else 0
+            bucket = _bucket_for_value(raw[pk] if raw.size else 0.0, orient, thr)
+
+            blue_line = "#0d6efd"
+            blue_fill = "rgba(13,110,253,0.25)"
+            red_hex   = SEV_COLORS.get("critico", "#e74c3c")
+
+            # --- Onda azul (siempre) ---
+            fig.add_trace(go.Scatter(
+                x=x,
+                y=amp,
+                mode="lines",
+                line=dict(width= line_width, color=blue_line),
+                fill="tozeroy",
+                fillcolor=blue_fill,
+                name=y_labels[i],
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "%{x|%Y-%m-%d %H:%M}<br>"
+                    f"Unidad: %{{customdata[1]:{val_fmt}}}"
+                    "<br><span style='opacity:0.85'>Tech:</span> %{customdata[2]} | "
+                    "<span style='opacity:0.85'>Vendor:</span> %{customdata[3]} | "
+                    "<span style='opacity:0.85'>Cluster:</span> %{customdata[4]} | "
+                    "<span style='opacity:0.85'>Net:</span> %{customdata[5]} | "
+                    "<span style='opacity:0.85'>Valor:</span> %{customdata[6]}<extra></extra>"
+                ),
+                customdata=np.column_stack([
+                    np.full(len(x), y_labels[i], dtype=object),  # 0
+                    raw if raw.size else np.zeros(len(x)),       # 1
+                    np.full(len(x), tech, dtype=object),         # 2
+                    np.full(len(x), vendor, dtype=object),       # 3
+                    np.full(len(x), cluster, dtype=object),      # 4
+                    np.full(len(x), net, dtype=object),          # 5
+                    np.full(len(x), valores, dtype=object),      # 6
+                ])
+            ))
+
+            # --- Marker del pico: rojo si crítico; si no, azul ---
+            peak_color = (red_hex if bucket == "critico" else blue_line)
+            fig.add_trace(go.Scatter(
+                x=[x[pk] if len(x) else None],
+                y=[amp[pk] if amp.size else None],
+                mode="markers",
+                marker=dict(size=7, color=peak_color, symbol="diamond"),
+                hovertemplate=(
+                    "<b>Pico</b><br>"
+                    "%{x|%Y-%m-%d %H:%M}<br>"
+                    f"Unidad: %{{customdata:{val_fmt}}}"
+                    + ( "<br><span style='opacity:0.85'>Crítico</span>" if bucket == "critico" else "" ) +
+                    "<extra></extra>"
+                ),
+                customdata=[raw[pk] if raw.size else np.nan],
+                showlegend=False
+            ))
+
+    # Ejes
     fig.update_xaxes(
         type="date",
-        dtick=THREE_H_MS,
+        dtick=3*3600*1000,     # cada 3 horas
         tickformat="%b %d %H:%M",
         tickangle=-45,
-        tickfont=dict(size=10),
-        ticklabelmode="instant",
         ticks="outside",
         ticklen=5,
-        fixedrange=True,
-        automargin=True,
+        fixedrange=True
     )
-    fig.update_yaxes(
-        showticklabels=True,
-        automargin=True,
-        fixedrange=True,
-        categoryorder="array",
-        categoryarray=y,
-        autorange="reversed",
-    )
-    # Línea del corte entre días
+    fig.update_yaxes(visible=False, fixedrange=True)
+
+    # Línea vertical entre días (entre idx 23–24) si aplica
     if isinstance(x, (list, tuple)) and len(x) >= 25:
         try:
-            fig.add_vline(x=x[24], line_dash="dot", line_color="rgba(255,255,255,0.5)", line_width=1)
+            fig.add_vline(x=x[24], line_dash="dot", line_color="rgba(255,255,255,0.45)", line_width=1)
         except Exception:
             pass
 
-    # Dark look & feel
+    # Layout compacto (para que las dos gráficas queden más juntas)
     fig.update_layout(
         height=height,
-        margin=dict(l=200, r=16, t=10, b=140), # más espacio abajo e izquierda
+        margin=dict(l=14, r=14, t=4, b=12),
         paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#eaeaea"),
-        hoverlabel=dict(bgcolor="#222", bordercolor="#444", font=dict(color="#fff", size=13)),
-        xaxis=dict(
-            type="date",
-            tickangle=-45,
-            ticklabelmode="instant",
-            ticks="outside",
-            ticklen=5,
-            fixedrange=True,
-        ),
-        yaxis=dict(
-            title="",
-            showticklabels=True,
-            automargin=True,
-            tickfont=dict(size=11, color="#eaeaea"),
-            categoryorder="array",
-            categoryarray=y,
-            fixedrange=True,
-        ),
-        uirevision="keep",
+        hoverlabel=dict(bgcolor="#222", bordercolor="#444", font=dict(color="#fff")),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=10)),
+        uirevision="keep"
     )
-
     return fig
 
-def build_heatmap_table_df(pct_payload, unit_payload, *, pct_decimals=2, unit_decimals=0) -> pd.DataFrame:
+def build_histo_table_df(pct_payload, unit_payload, *, pct_decimals=2, unit_decimals=0) -> pd.DataFrame:
     """
     Construye una tabla con las filas visibles (página actual) del heatmap.
     Columnas: Cluster, Tech, Vendor, Valor, Max %, Min %, Max UNIT, Min UNIT

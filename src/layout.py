@@ -125,12 +125,12 @@ def serve_layout():
                                     width="auto", className="d-flex align-items-center"
                                 ),
                             ], className="g-3 justify-content-center text-center mb-2"),
-                            # --- Resumen (tabla) arriba de los heatmaps ---
+
                             # --- Tabla (resumen de las filas visibles del heatmap) ---
                             dbc.Row([
                                 dbc.Col(
                                     dbc.Card(dbc.CardBody([
-                                        html.H4("Tabla detalle", className="mb-3"),
+                                        html.H4("Tabla detalle", className="mb-2"),
                                         html.Div(
                                             id="hm-table-container",
                                             style={
@@ -140,11 +140,11 @@ def serve_layout():
                                             }
                                         ),
                                     ]), className="shadow-sm bg-dark text-white border-0"),
-                                    md=12, className="my-3"
+                                    md=12, className="mb-2"
                                 ),
-                            ]),
+                            ], className="g-0"),
 
-                            # Heatmaps apilados (uno debajo del otro) con contenedor que recorta overflow
+                            # === Gráficas % y UNIT apiladas y pegadas ===
                             dbc.Row([
                                 dbc.Col(
                                     html.Div(
@@ -152,14 +152,14 @@ def serve_layout():
                                             dcc.Graph(
                                                 id="hm-pct",
                                                 config={"displayModeBar": False},
-                                                style={"height": "700px", "width": "100%"}
+                                                style={"height": "420px", "width": "100%", "margin": "0"}
                                             ),
                                             type="default"
                                         ),
                                         className="hm-wrap",
-                                        style={"overflow": "hidden", "marginBottom": "28px"}
+                                        style={"overflow": "hidden", "marginBottom": "6px"}
                                     ),
-                                    width=12, className="my-2"
+                                    width=12, className="my-0"
                                 ),
                                 dbc.Col(
                                     html.Div(
@@ -167,22 +167,23 @@ def serve_layout():
                                             dcc.Graph(
                                                 id="hm-unit",
                                                 config={"displayModeBar": False},
-                                                style={"height": "700px", "width": "100%"}
+                                                style={"height": "400px", "width": "100%", "margin": "0"}
                                             ),
                                             type="default"
                                         ),
                                         className="hm-wrap",
-                                        style={"overflow": "hidden"}  # 👈 recorta overflow
+                                        style={"overflow": "hidden"}
                                     ),
-                                    width=12, className="my-2"
+                                    width=12, className="my-0"
                                 ),
-                            ])
+                            ], className="g-0 gy-0")
 
-                        ]),
-                    ], className="bg-dark text-white border-0 shadow-sm"),
-                    md=12, className="my-3"
+                        ], className="p-2"),  # 👈 menos padding interno
+                    ], className="bg-dark text-white border-0 shadow-sm mb-0"),
+                    md=12, className="mb-2"
                 ),
-            ]),
+            ])
+
         ]),
 
         # Stores
