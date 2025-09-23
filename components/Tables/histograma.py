@@ -380,21 +380,13 @@ def build_overlay_waves_figure(
     payload,
     *,
     UMBRAL_CFG: dict,
-    mode="severity",       # "severity" = usa % y umbrales; "progress" = usa UNIT
-    height=460,            # altura total de la figura (compacta)
-    smooth_win=3,          # suavizado
-    opacity=0.28,          # opacidad del relleno
-    line_width=1.25,       # grosor de línea
+    mode="severity",
+    height=460,
+    smooth_win=3,
+    opacity=0.28,
+    line_width=1.25,
     decimals=2
 ):
-    """
-    Ondas superpuestas: todas parten de baseline=0.
-    - X = payload['x_dt'] (fechas/horas)
-    - Y = amplitud normalizada (sin eje Y)
-    - Hover con detalle (fila + valor crudo + metadatos)
-    - %: color por bucket del pico (SEV_COLORS)
-    - UNIT: onda azul; SOLO el pico en rojo si es 'critico' (si no, pico azul)
-    """
     if not payload:
         return go.Figure()
 
@@ -411,9 +403,8 @@ def build_overlay_waves_figure(
 
     for i in range(n):
         row_vals = z_raw[i] if i < len(z_raw) else []
-        raw = _interp_nan(row_vals)  # valores crudos por hora (48)
+        raw = _interp_nan(row_vals)
 
-        # Parse detail para net/valores/labels
         parts   = (detail[i] if i < len(detail) else "").split("/", 4)
         tech    = parts[0] if len(parts) > 0 else ""
         vendor  = parts[1] if len(parts) > 1 else ""
@@ -422,7 +413,7 @@ def build_overlay_waves_figure(
         valores = parts[4] if len(parts) > 4 else ""
 
         if mode == "severity":
-            # Normaliza por min-max de la fila para formar onda (visual)
+            # --- Onda normalizada por min/max local (sin marcadores de pico)
             rmin = float(np.nanmin(raw)) if raw.size else 0.0
             rmax = float(np.nanmax(raw)) if raw.size else 1.0
             if not np.isfinite(rmin) or not np.isfinite(rmax) or rmin == rmax:
@@ -431,25 +422,21 @@ def build_overlay_waves_figure(
                 amp = (raw - rmin) / (rmax - rmin)
             amp = _smooth_1d(np.clip(amp, 0, 1), win=smooth_win)
 
-            # Color por bucket del pico
             pm, _um = VALORES_MAP.get(valores, (None, None))
             orient, thr = _sev_cfg(pm or "", net, UMBRAL_CFG)
             pk = int(np.nanargmax(amp)) if amp.size else 0
             bucket = _bucket_for_value(raw[pk] if raw.size else 0.0, orient, thr)
             color_hex = SEV_COLORS.get(bucket, "#999")
-            line_color = color_hex
-            fill_color = _hex_to_rgba(color_hex, opacity)
-            legend_name = y_labels[i]
 
-            # --- Onda (baseline=0) ---
             fig.add_trace(go.Scatter(
                 x=x,
                 y=amp,
-                mode="lines",
-                line=dict(width=line_width, color=line_color),
+                mode="lines",  # 👈 sin markers en severity
+                line=dict(width=line_width, color=color_hex),
                 fill="tozeroy",
-                fillcolor=fill_color,
-                name=legend_name,
+                fillcolor=_hex_to_rgba(color_hex, opacity),
+                name=y_labels[i],
+                legendgroup=y_labels[i],  # por si luego agrupas más elementos
                 hovertemplate=(
                     "<b>%{customdata[0]}</b><br>"
                     "%{x|%Y-%m-%d %H:%M}<br>"
@@ -462,41 +449,25 @@ def build_overlay_waves_figure(
                     "<span style='opacity:0.85'>Valor:</span> %{customdata[6]}<extra></extra>"
                 ),
                 customdata=np.column_stack([
-                    np.full(len(x), y_labels[i], dtype=object),  # 0
-                    raw if raw.size else np.zeros(len(x)),       # 1
-                    np.full(len(x), tech, dtype=object),         # 2
-                    np.full(len(x), vendor, dtype=object),       # 3
-                    np.full(len(x), cluster, dtype=object),      # 4
-                    np.full(len(x), net, dtype=object),          # 5
-                    np.full(len(x), valores, dtype=object),      # 6
-                    np.full(len(x), bucket, dtype=object),       # 7
+                    np.full(len(x), y_labels[i], dtype=object),
+                    raw if raw.size else np.zeros(len(x)),
+                    np.full(len(x), tech, dtype=object),
+                    np.full(len(x), vendor, dtype=object),
+                    np.full(len(x), cluster, dtype=object),
+                    np.full(len(x), net, dtype=object),
+                    np.full(len(x), valores, dtype=object),
+                    np.full(len(x), bucket, dtype=object),
                 ])
             ))
 
-            # (Opcional) marcador del pico con mismo color de la onda
-            fig.add_trace(go.Scatter(
-                x=[x[pk] if len(x) else None],
-                y=[amp[pk] if amp.size else None],
-                mode="markers",
-                marker=dict(size=7, color=line_color, symbol="diamond"),
-                hovertemplate=(
-                    "<b>Pico</b><br>"
-                    "%{x|%Y-%m-%d %H:%M}<br>"
-                    f"Valor: %{{customdata:{val_fmt}}}<extra></extra>"
-                ),
-                customdata=[raw[pk] if raw.size else np.nan],
-                showlegend=False
-            ))
-
-        else:  # progress (UNIT)
-            # Normaliza con min/max de umbrales UNIT (como en tu payload UNIT)
+        else:
+            # --- UNIT (progress) con marcador de pico embebido en la MISMA traza
             _pm, um = VALORES_MAP.get(valores, (None, None))
             vmin, vmax = _prog_cfg(um or "", net, UMBRAL_CFG)
             norm = np.array([_normalize(v, vmin, vmax) if np.isfinite(v) else 0.0 for v in raw], dtype=float)
             amp  = _smooth_1d(np.clip(norm, 0, 1), win=smooth_win)
 
-            # Pico y bucket SOLO para decidir color del marker (onda SIEMPRE azul)
-            orient, thr = _sev_cfg(um or "", net, UMBRAL_CFG)
+            orient, thr = _sev_cfg(um or "", net, UMBRAL_CFG)  # usamos severity para clasificar el pico de UNIT
             pk = int(np.nanargmax(amp)) if amp.size else 0
             bucket = _bucket_for_value(raw[pk] if raw.size else 0.0, orient, thr)
 
@@ -504,19 +475,31 @@ def build_overlay_waves_figure(
             blue_fill = "rgba(13,110,253,0.25)"
             red_hex   = SEV_COLORS.get("critico", "#e74c3c")
 
-            # --- Onda azul (siempre) ---
+            # 🔹 tamaños por punto: solo el pico visible
+            sizes = [0] * len(x)
+            if len(x):
+                sizes[pk] = 9
+
+            # 🔹 color por punto: rojo si crítico, azul si no (solo afecta al pico)
+            mcolors = [blue_line] * len(x)
+            if len(x):
+                mcolors[pk] = red_hex if bucket == "critico" else blue_line
+
             fig.add_trace(go.Scatter(
                 x=x,
                 y=amp,
-                mode="lines",
-                line=dict(width= line_width, color=blue_line),
+                mode="lines+markers",          # 👈 marcador integrado
+                line=dict(width=line_width, color=blue_line),
+                marker=dict(size=sizes, color=mcolors, symbol="diamond"),
                 fill="tozeroy",
                 fillcolor=blue_fill,
                 name=y_labels[i],
+                legendgroup=y_labels[i],
                 hovertemplate=(
                     "<b>%{customdata[0]}</b><br>"
                     "%{x|%Y-%m-%d %H:%M}<br>"
                     f"Unidad: %{{customdata[1]:{val_fmt}}}"
+                    "<br><span style='opacity:0.85'>Bucket:</span> %{customdata[7]}"  # 👈 mismo detalle que severity
                     "<br><span style='opacity:0.85'>Tech:</span> %{customdata[2]} | "
                     "<span style='opacity:0.85'>Vendor:</span> %{customdata[3]} | "
                     "<span style='opacity:0.85'>Cluster:</span> %{customdata[4]} | "
@@ -524,38 +507,20 @@ def build_overlay_waves_figure(
                     "<span style='opacity:0.85'>Valor:</span> %{customdata[6]}<extra></extra>"
                 ),
                 customdata=np.column_stack([
-                    np.full(len(x), y_labels[i], dtype=object),  # 0
-                    raw if raw.size else np.zeros(len(x)),       # 1
-                    np.full(len(x), tech, dtype=object),         # 2
-                    np.full(len(x), vendor, dtype=object),       # 3
-                    np.full(len(x), cluster, dtype=object),      # 4
-                    np.full(len(x), net, dtype=object),          # 5
-                    np.full(len(x), valores, dtype=object),      # 6
+                    np.full(len(x), y_labels[i], dtype=object),
+                    raw if raw.size else np.zeros(len(x)),
+                    np.full(len(x), tech, dtype=object),
+                    np.full(len(x), vendor, dtype=object),
+                    np.full(len(x), cluster, dtype=object),
+                    np.full(len(x), net, dtype=object),
+                    np.full(len(x), valores, dtype=object),
+                    np.full(len(x), bucket, dtype=object),
                 ])
             ))
 
-            # --- Marker del pico: rojo si crítico; si no, azul ---
-            peak_color = (red_hex if bucket == "critico" else blue_line)
-            fig.add_trace(go.Scatter(
-                x=[x[pk] if len(x) else None],
-                y=[amp[pk] if amp.size else None],
-                mode="markers",
-                marker=dict(size=7, color=peak_color, symbol="diamond"),
-                hovertemplate=(
-                    "<b>Pico</b><br>"
-                    "%{x|%Y-%m-%d %H:%M}<br>"
-                    f"Unidad: %{{customdata:{val_fmt}}}"
-                    + ( "<br><span style='opacity:0.85'>Crítico</span>" if bucket == "critico" else "" ) +
-                    "<extra></extra>"
-                ),
-                customdata=[raw[pk] if raw.size else np.nan],
-                showlegend=False
-            ))
-
-    # Ejes
     fig.update_xaxes(
         type="date",
-        dtick=3*3600*1000,     # cada 3 horas
+        dtick=3*3600*1000,
         tickformat="%b %d %H:%M",
         tickangle=-45,
         ticks="outside",
@@ -564,14 +529,12 @@ def build_overlay_waves_figure(
     )
     fig.update_yaxes(visible=False, fixedrange=True)
 
-    # Línea vertical entre días (entre idx 23–24) si aplica
     if isinstance(x, (list, tuple)) and len(x) >= 25:
         try:
             fig.add_vline(x=x[24], line_dash="dot", line_color="rgba(255,255,255,0.45)", line_width=1)
         except Exception:
             pass
 
-    # Layout compacto (para que las dos gráficas queden más juntas)
     fig.update_layout(
         height=height,
         margin=dict(l=14, r=14, t=4, b=12),
@@ -584,22 +547,17 @@ def build_overlay_waves_figure(
     )
     return fig
 
+
 def build_histo_table_df(pct_payload, unit_payload, *, pct_decimals=2, unit_decimals=0) -> pd.DataFrame:
-    """
-    Construye una tabla con las filas visibles (página actual) del heatmap.
-    Columnas: Cluster, Tech, Vendor, Valor, Max %, Min %, Max UNIT, Min UNIT
-    Se alinea 1:1 con el orden del eje Y (y_labels) del heatmap.
-    """
-    # Selecciona la fuente de "detalle" y etiquetas Y (orden de filas)
+    # Fuente base para orden/filas
     src = pct_payload or unit_payload
     if not src:
-        return pd.DataFrame(columns=["Cluster","Tech","Vendor","Valor","Max %","Max UNIT"])
+        return pd.DataFrame(columns=["Cluster","Tech","Vendor","Valor","Última hora", "Max %","Max UNIT"])
 
     y = src.get("y") or []
-    detail = src.get("row_detail") or y  # "tech/vendor/cluster/net/valores"
+    detail = src.get("row_detail") or y
     n = len(y)
 
-    # Prepara helpers para obtener min/máx por fila
     def _minmax_from(payload, i, decimals):
         if not payload:
             return "", ""
@@ -611,28 +569,52 @@ def build_histo_table_df(pct_payload, unit_payload, *, pct_decimals=2, unit_deci
             return "", ""
         return (f"{max(arr):,.{decimals}f}", f"{min(arr):,.{decimals}f}")
 
+    def _last_ts_from(payload, i):
+        """Devuelve 'YYYY-MM-DD HH:MM' del último punto no nulo en la fila i."""
+        if not payload:
+            return ""
+        z_raw = payload.get("z_raw") or []
+        x_dt  = payload.get("x_dt") or []
+        if i >= len(z_raw) or not x_dt:
+            return ""
+        row = z_raw[i] or []
+        # Busca desde el final el último numérico
+        for idx in range(len(row)-1, -1, -1):
+            v = row[idx]
+            if isinstance(v, (int, float, np.floating)) and pd.notna(v):
+                try:
+                    dt = pd.to_datetime(x_dt[idx])
+                    return dt.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    return str(x_dt[idx])
+        return ""
+
     rows = []
     for i in range(n):
         parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 4)
         tech   = parts[0] if len(parts) > 0 else ""
         vendor = parts[1] if len(parts) > 1 else ""
         cluster= parts[2] if len(parts) > 2 else ""
-        # net   = parts[3] if len(parts) > 3 else ""   # si luego quieres añadirlo a la tabla
         valor  = parts[4] if len(parts) > 4 else ""
 
-        max_pct, min_pct   = _minmax_from(pct_payload,  i, pct_decimals)
-        max_unit, min_unit = _minmax_from(unit_payload, i, unit_decimals)
+        max_pct, _min_pct   = _minmax_from(pct_payload,  i, pct_decimals)
+        max_unit, _min_unit = _minmax_from(unit_payload, i, unit_decimals)
+
+        # Nuevo: último timestamp con UNIT
+        last_unit_ts = _last_ts_from(unit_payload, i)
 
         rows.append({
             "Cluster": cluster,
             "Tech": tech,
             "Vendor": vendor,
             "Valor": valor,
+            "Última hora": last_unit_ts,
             "Max %": max_pct,
             "Max UNIT": max_unit,
         })
 
-    df = pd.DataFrame(rows, columns=["Cluster","Tech","Vendor","Valor","Max %","Max UNIT"])
+    df = pd.DataFrame(rows, columns=["Cluster","Tech","Vendor","Valor","Última hora", "Max %","Max UNIT"])
     return df
+
 
 
