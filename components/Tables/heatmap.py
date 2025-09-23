@@ -169,52 +169,28 @@ def build_heatmap_payloads_fast(
     offset=0,
     limit=5,
 ):
-    """
-    Construye payloads de heatmap (% y UNIT) paginados, agrupando por cluster y
-    manteniendo el orden por 'alarmados' (vía alarm_keys o el orden de df_meta).
-    - %: clasifica 0..3 (excelente→crítico) usando UMBRAL_CFG (severity).
-    - UNIT: normaliza 0..1 con min/max por (métrica, red) usando UMBRAL_CFG (progress).
-    Devuelve: (pct_payload, unit_payload, page_info).
-    """
     import numpy as np
 
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-    # redes
     if networks is None or not networks:
         networks = _infer_networks(df_ts if df_ts is not None else df_meta)
     if not networks:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-    # fechas
     if today is None:
         today = _max_date_str(df_ts["fecha"]) if (df_ts is not None and "fecha" in df_ts.columns) else _day_str(datetime.now())
     if yday is None:
         yday = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # métricas necesarias
-    metrics_needed = set()
-    for v in valores_order:
-        pm, um = VALORES_MAP.get(v, (None, None))
-        if pm: metrics_needed.add(pm)
-        if um: metrics_needed.add(um)
+    metrics_needed = {m for v in valores_order for m in VALORES_MAP.get(v, (None, None)) if m}
     if not metrics_needed:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-    # meta base
     meta_cols = ["technology", "vendor", "noc_cluster"]
     base = df_meta.drop_duplicates(subset=meta_cols)[meta_cols].reset_index(drop=True)
-
-    # --- Construir todas las filas (antes de ordenar/paginar) ---
-    rows_full = (
-        base.assign(_tmp=1)
-        .merge(pd.DataFrame({"network": networks, "_tmp": 1}), on="_tmp", how="left")
-        .drop(columns=["_tmp"])
-    )
-    rows_full = rows_full.assign(
-        key5=rows_full[["technology","vendor","noc_cluster","network"]].astype(str).agg("/".join, axis=1)
-    )
+    rows_full = base.assign(_tmp=1).merge(pd.DataFrame({"network": networks, "_tmp": 1}), on="_tmp").drop(columns="_tmp")
 
     rows_all_list = []
     for v in valores_order:
@@ -225,147 +201,126 @@ def build_heatmap_payloads_fast(
             mask = list(zip(rf["technology"], rf["vendor"], rf["noc_cluster"], rf["network"]))
             rf = rf[[m in keys_ok for m in mask]]
         rows_all_list.append(rf)
-
-    if not rows_all_list:
-        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
-
     rows_all = pd.concat(rows_all_list, ignore_index=True)
 
-    # --- Rank de alarmados + orden por cluster ---
-    if alarm_keys:
-        order_df = pd.DataFrame(list(alarm_keys), columns=["technology","vendor","noc_cluster","network"])
-        order_df = order_df.drop_duplicates().reset_index(drop=True)
-    else:
-        order_cols = [c for c in ["technology","vendor","noc_cluster","network"] if c in df_meta.columns]
-        if order_cols:
-            order_df = df_meta[order_cols].drop_duplicates().reset_index(drop=True)
+    # ---- OPTIMIZADO: calcular Max UNIT en un pass ----
+    if df_ts is not None and not df_ts.empty:
+        um_cols = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
+        if um_cols:
+            df_long = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]),
+                                ["technology","vendor","noc_cluster","network"]+um_cols]
+            df_long = df_long.melt(id_vars=["technology","vendor","noc_cluster","network"],
+                                   value_vars=um_cols,
+                                   var_name="metric", value_name="value")
+            UM_TO_VAL = {um: name for name, (_, um) in VALORES_MAP.items() if um}
+            df_long["valores"] = df_long["metric"].map(UM_TO_VAL)
+            df_maxu = (df_long.dropna(subset=["valores"])
+                               .groupby(["technology","vendor","noc_cluster","network","valores"], as_index=False)["value"]
+                               .max()
+                               .rename(columns={"value":"max_unit"}))
+            rows_all = rows_all.merge(df_maxu,
+                                      on=["technology","vendor","noc_cluster","network","valores"],
+                                      how="left")
         else:
-            order_df = rows_all[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
+            rows_all["max_unit"] = np.nan
+    else:
+        rows_all["max_unit"] = np.nan
 
-    order_df = order_df.assign(alarm_rank=lambda d: np.arange(len(d), dtype=int))
-    val_rank = {name: i for i, name in enumerate(valores_order)}
-    merge_cols = [c for c in ["technology","vendor","noc_cluster","network"] if c in rows_all.columns and c in order_df.columns]
-
-    rows_all = rows_all.merge(order_df, on=merge_cols, how="left")
-    rows_all["alarm_rank"] = rows_all["alarm_rank"].fillna(10**9).astype(int)
-    rows_all["val_order"]  = rows_all["valores"].map(val_rank).astype(int)
-
-    # Orden final: cluster → alarm_rank → valor → tech/vendor/net
-    rows_all = rows_all.sort_values(
-        by=["noc_cluster", "alarm_rank", "val_order", "technology", "vendor", "network"],
-        kind="stable"
-    ).reset_index(drop=True)
-
-
+    rows_all["__ord_max_unit__"] = rows_all["max_unit"].astype(float).fillna(float("-inf"))
+    rows_all = rows_all.sort_values("__ord_max_unit__", ascending=False, kind="stable")
 
     # --- paginado
     total_rows = len(rows_all)
     start = max(0, int(offset)); end = start + max(1, int(limit))
     rows_page = rows_all.iloc[start:end].reset_index(drop=True)
 
-    # --- reducir df_ts a visibles
+    # --- df_small reducido
     if df_ts is None or df_ts.empty:
         df_small = pd.DataFrame()
         keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
-        keys_df["rid"] = np.arange(len(keys_df), dtype=int)
+        keys_df["rid"] = np.arange(len(keys_df))
     else:
         keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
-        keys_df["rid"] = np.arange(len(keys_df), dtype=int)
-
-        df_small = df_ts.loc[
-            df_ts["fecha"].astype(str).isin([yday, today]) &
-            df_ts["network"].astype(str).isin(keys_df["network"].astype(str))
-        ].copy()
-
-        df_small = df_small.merge(
-            keys_df,
-            on=["technology","vendor","noc_cluster","network"],
-            how="inner",
-            validate="many_to_one"
-        )
-        # hora 0..23
+        keys_df["rid"] = np.arange(len(keys_df))
+        df_small = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today])].merge(keys_df, on=["technology","vendor","noc_cluster","network"])
         hh = df_small["hora"].astype(str).str.split(":", n=1, expand=True)[0]
-        df_small["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s>=0) & (s<=23)).astype("Int64")
+        df_small["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s>=0)&(s<=23))
+        df_small["offset48"] = df_small["h"] + np.where(df_small["fecha"].astype(str)==today, 24, 0)
+        df_small = df_small.dropna(subset=["offset48"])
+        df_small["offset48"] = df_small["offset48"].astype(int)
 
-        keep_cols = {"fecha","h","rid"} | set(metrics_needed)
-        df_small = df_small[[c for c in keep_cols if c in df_small.columns]].dropna(subset=["h"])
-        df_small["h"] = df_small["h"].astype(int)
+    # --- diccionarios (rid, offset48) → valor
+    metric_maps = {}
+    if not df_small.empty:
+        for m in metrics_needed:
+            if m in df_small.columns:
+                sub = df_small[["rid","offset48",m]].dropna()
+                metric_maps[m] = dict(zip(zip(sub["rid"], sub["offset48"]), sub[m]))
+            else:
+                metric_maps[m] = {}
+    else:
+        metric_maps = {m:{} for m in metrics_needed}
 
-    # --- map fila -> rid
-    rows_page = rows_page.merge(
-        keys_df,
-        on=["technology","vendor","noc_cluster","network"],
-        how="left",
-        validate="many_to_one"
-    )
+    def _row48_raw(metric, rid):
+        mp = metric_maps.get(metric)
+        if not mp: return [None]*48
+        return [mp.get((rid, off)) for off in range(48)]
 
-    # --- construir matrices
+    # --- matrices y stats
     x_dt = [f"{yday}T{h:02d}:00:00" for h in range(24)] + [f"{today}T{h:02d}:00:00" for h in range(24)]
-    z_pct, z_unit = [], []
-    z_pct_raw, z_unit_raw = [], []
+    z_pct, z_unit, z_pct_raw, z_unit_raw = [], [], [], []
     y_labels, row_detail = [], []
+    row_last_ts, row_max_pct, row_max_unit = [], [], []
 
-    for _, r in rows_page.iterrows():
-        tech = r["technology"]; vend = r["vendor"]; clus = r["noc_cluster"]; net = r["network"]; valores = r["valores"]
-        pm, um = VALORES_MAP.get(valores, (None, None))
-        rid = int(r.get("rid", -1))
+    for rid, r in enumerate(rows_page.itertuples(index=False)):
+        tech, vend, clus, net, valores = r.technology, r.vendor, r.noc_cluster, r.network, r.valores
+        pm, um = VALORES_MAP.get(valores, (None,None))
 
-        # Etiqueta Y (ponemos cluster adelante para reforzar el grupo)
         y_labels.append(f"{clus} | {tech}/{vend}/{valores}")
         row_detail.append(f"{tech}/{vend}/{clus}/{net}/{valores}")
 
-        def _row48_raw(metric):
-            if metric is None or df_small.empty or rid < 0 or metric not in df_small.columns:
-                return [None]*48
-            sub_y = df_small.loc[(df_small["rid"]==rid) & (df_small["fecha"].astype(str)==yday), ["h", metric]]
-            sub_t = df_small.loc[(df_small["rid"]==rid) & (df_small["fecha"].astype(str)==today), ["h", metric]]
-            arr_y = [None]*24; arr_t = [None]*24
-            if not sub_y.empty:
-                for _, rr in sub_y.iterrows():
-                    v = rr[metric]; arr_y[int(rr["h"])] = (float(v) if pd.notna(v) else None)
-            if not sub_t.empty:
-                for _, rr in sub_t.iterrows():
-                    v = rr[metric]; arr_t[int(rr["h"])] = (float(v) if pd.notna(v) else None)
-            return arr_y + arr_t
+        row_raw = _row48_raw(pm, rid) if pm else [None]*48
+        row_raw_u = _row48_raw(um, rid) if um else [None]*48
 
-        # %: clasifica 0..3; guarda crudos para hover/máx/mín
         if pm:
-            row_raw = _row48_raw(pm)
             orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
             row_color = [_sev_bucket(v, orient, thr) if v is not None else None for v in row_raw]
             z_pct.append(row_color); z_pct_raw.append(row_raw)
         else:
-            z_pct.append([None]*48); z_pct_raw.append([None]*48)
+            z_pct.append([None]*48); z_pct_raw.append(row_raw)
 
-        # UNIT: normaliza 0..1 por (um, net); guarda crudos
         if um:
-            row_raw_u = _row48_raw(um)
             mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
             row_norm = [_normalize(v, mn, mx) if v is not None else None for v in row_raw_u]
             z_unit.append(row_norm); z_unit_raw.append(row_raw_u)
         else:
-            z_unit.append([None]*48); z_unit_raw.append([None]*48)
+            z_unit.append([None]*48); z_unit_raw.append(row_raw_u)
 
-    # --- payloads
-    pct_payload = {
-        "z": z_pct, "z_raw": z_pct_raw, "x_dt": x_dt, "y": y_labels,
-        "color_mode": "severity",
-        "zmin": -0.5, "zmax": 3.5,
-        "title": "% IA / % DC (color por umbral)",
-        "row_detail": row_detail,
-    }
-    unit_payload = {
-        "z": z_unit, "z_raw": z_unit_raw, "x_dt": x_dt, "y": y_labels,
-        "color_mode": "progress",
-        "zmin": 0.0, "zmax": 1.0,
-        "title": "Unidades (intensidad por Fail/Abnrel)",
-        "row_detail": row_detail,
-    }
+        arr_u = np.array([v if isinstance(v,(int,float)) else np.nan for v in row_raw_u], float)
+        arr_p = np.array([v if isinstance(v,(int,float)) else np.nan for v in row_raw], float)
+        if np.isfinite(arr_u).any():
+            rmax_u = np.nanmax(arr_u)
+            valid_idx = np.where(np.isfinite(arr_u))[0]
+        else:
+            rmax_u = np.nan
+            valid_idx = np.where(np.isfinite(arr_p))[0]
+        rmax_p = np.nanmax(arr_p) if np.isfinite(arr_p).any() else np.nan
+        if valid_idx.size:
+            last_label = str(x_dt[int(valid_idx[-1])]).replace("T"," ")[:16]
+        else:
+            last_label = ""
+        row_last_ts.append(last_label)
+        row_max_pct.append(rmax_p); row_max_unit.append(rmax_u)
+
+    pct_payload = {"z":z_pct,"z_raw":z_pct_raw,"x_dt":x_dt,"y":y_labels,"color_mode":"severity",
+                   "zmin":-0.5,"zmax":3.5,"title":"% IA / % DC","row_detail":row_detail,
+                   "row_last_ts":row_last_ts,"row_max_pct":row_max_pct,"row_max_unit":row_max_unit}
+    unit_payload = {"z":z_unit,"z_raw":z_unit_raw,"x_dt":x_dt,"y":y_labels,"color_mode":"progress",
+                    "zmin":0.0,"zmax":1.0,"title":"Unidades","row_detail":row_detail,
+                    "row_last_ts":row_last_ts,"row_max_pct":row_max_pct,"row_max_unit":row_max_unit}
 
     page_info = {"total_rows": total_rows, "offset": start, "limit": limit, "showing": len(rows_page)}
     return pct_payload, unit_payload, page_info
-
-
 
 
 # =========================
@@ -540,54 +495,27 @@ def build_heatmap_figure(
     return fig
 
 def build_heatmap_table_df(pct_payload, unit_payload, *, pct_decimals=2, unit_decimals=0) -> pd.DataFrame:
-    """
-    Construye una tabla con las filas visibles (página actual) del heatmap.
-    Columnas: Cluster, Tech, Vendor, Valor, Max %, Min %, Max UNIT, Min UNIT
-    Se alinea 1:1 con el orden del eje Y (y_labels) del heatmap.
-    """
-    # Selecciona la fuente de "detalle" y etiquetas Y (orden de filas)
     src = pct_payload or unit_payload
     if not src:
-        return pd.DataFrame(columns=["Cluster","Tech","Vendor","Valor","Max %","Max UNIT"])
-
+        return pd.DataFrame(columns=["Cluster","Tech","Vendor","Valor","Última hora","Max %","Max UNIT"])
     y = src.get("y") or []
-    detail = src.get("row_detail") or y  # "tech/vendor/cluster/net/valores"
-    n = len(y)
+    detail = src.get("row_detail") or y
+    row_last_ts  = (unit_payload or pct_payload).get("row_last_ts") or []
+    row_max_pct  = (pct_payload or {}).get("row_max_pct") or []
+    row_max_unit = (unit_payload or {}).get("row_max_unit") or []
+    rows=[]
+    for i in range(len(y)):
+        parts=(detail[i] if i<len(detail) else str(y[i])).split("/",4)
+        tech=parts[0] if len(parts)>0 else ""
+        vendor=parts[1] if len(parts)>1 else ""
+        cluster=parts[2] if len(parts)>2 else ""
+        valor=parts[4] if len(parts)>4 else ""
+        def _fmt(v,dec): return f"{float(v):,.{dec}f}" if v is not None and np.isfinite(v) else ""
+        rows.append({"Cluster":cluster,"Tech":tech,"Vendor":vendor,"Valor":valor,
+                     "Última hora":row_last_ts[i] if i<len(row_last_ts) else "",
+                     "Max %":_fmt(row_max_pct[i] if i<len(row_max_pct) else None,pct_decimals),
+                     "Max UNIT":_fmt(row_max_unit[i] if i<len(row_max_unit) else None,unit_decimals)})
+    return pd.DataFrame(rows,columns=["Cluster","Tech","Vendor","Valor","Última hora","Max %","Max UNIT"])
 
-    # Prepara helpers para obtener min/máx por fila
-    def _minmax_from(payload, i, decimals):
-        if not payload:
-            return "", ""
-        z_raw = payload.get("z_raw")
-        if not z_raw or i >= len(z_raw):
-            return "", ""
-        arr = [v for v in (z_raw[i] or []) if isinstance(v, (int, float, np.floating))]
-        if not arr:
-            return "", ""
-        return (f"{max(arr):,.{decimals}f}", f"{min(arr):,.{decimals}f}")
-
-    rows = []
-    for i in range(n):
-        parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 4)
-        tech   = parts[0] if len(parts) > 0 else ""
-        vendor = parts[1] if len(parts) > 1 else ""
-        cluster= parts[2] if len(parts) > 2 else ""
-        # net   = parts[3] if len(parts) > 3 else ""   # si luego quieres añadirlo a la tabla
-        valor  = parts[4] if len(parts) > 4 else ""
-
-        max_pct, min_pct   = _minmax_from(pct_payload,  i, pct_decimals)
-        max_unit, min_unit = _minmax_from(unit_payload, i, unit_decimals)
-
-        rows.append({
-            "Cluster": cluster,
-            "Tech": tech,
-            "Vendor": vendor,
-            "Valor": valor,
-            "Max %": max_pct,
-            "Max UNIT": max_unit,
-        })
-
-    df = pd.DataFrame(rows, columns=["Cluster","Tech","Vendor","Valor","Max %","Max UNIT"])
-    return df
 
 

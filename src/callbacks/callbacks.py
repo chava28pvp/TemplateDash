@@ -428,7 +428,7 @@ def register_callbacks(app):
     # 8) HeatMap render (optimizado)
     # -------------------------------------------------
     @app.callback(
-        Output("hm-table-container", "children"),  # 👈 NUEVA salida (tabla)
+        Output("hm-table-container", "children"),
         Output("hm-pct", "figure"),
         Output("hm-unit", "figure"),
         Output("hm-page-indicator", "children"),

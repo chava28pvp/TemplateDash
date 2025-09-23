@@ -32,7 +32,7 @@ BASE_PROGRESS_COLS = [
 ]
 BASE_SEVERITY_COLS = [
     "ps_rrc_ia_percent", "ps_rab_ia_percent", "ps_s1_ia_percent", "ps_drop_dc_percent",
-    "cs_rrc_ia_percent", "cs_rab_ia_percent", "cs_drop_dc_percent"
+    "cs_rrc_ia_percent", "cs_rab_ia_percent", "cs_drop_dc_percent", "ps_traff_delta", "cs_traff_delta"
 ]
 
 # Etiquetas visibles para alias (sin prefijo)

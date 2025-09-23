@@ -17,7 +17,8 @@ SEVERITY_BASES: List[str] = [
     "cs_rrc_ia_percent",
     "cs_rab_ia_percent",
     "cs_drop_dc_percent",
-    # Optional: include "integrity" if you want it colored
+    "ps_traff_delta",
+    "cs_traff_delta"
 ]
 
 PROGRESS_BASES: List[str] = [
