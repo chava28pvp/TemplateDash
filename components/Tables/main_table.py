@@ -13,16 +13,16 @@ ROW_KEYS = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
 
 # Grupos SOLO de métricas (sin fecha/hora/vendor/cluster/tech)
 BASE_GROUPS = [
-    ("INTEG",   ["integrity"]),
-    ("CS_TRAFF", ["cs_traff_delta", "cs_traff_erl"]),
-    ("CS_RRC",   ["cs_rrc_ia_percent", "cs_rrc_fail"]),
-    ("CS_RAB",   ["cs_rab_ia_percent", "cs_rab_fail"]),
-    ("CS_DROP",  ["cs_drop_dc_percent", "cs_drop_abnrel"]),
+    ("INTEG", ["integrity"]),
     ("PS_TRAFF", ["ps_traff_delta", "ps_traff_gb"]),
     ("PS_RRC",   ["ps_rrc_ia_percent", "ps_rrc_fail"]),
     ("PS_RAB",   ["ps_rab_ia_percent", "ps_rab_fail"]),
     ("PS_S1",    ["ps_s1_ia_percent", "ps_s1_fail"]),
     ("PS_DROP",  ["ps_drop_dc_percent", "ps_drop_abnrel"]),
+    ("CS_TRAFF", ["cs_traff_delta", "cs_traff_erl"]),
+    ("CS_RRC",   ["cs_rrc_ia_percent", "cs_rrc_fail"]),
+    ("CS_RAB",   ["cs_rab_ia_percent", "cs_rab_fail"]),
+    ("CS_DROP",  ["cs_drop_dc_percent", "cs_drop_abnrel"]),
 ]
 
 # Columnas base que llevan progress bar y severidad (sin prefijo de red)
@@ -98,17 +98,20 @@ def _resolve_sort_col(df: pd.DataFrame, metric_order: list[str], sort_col: str |
 def _label_base(base: str) -> str:
     return DISPLAY_NAME_BASE.get(base, base)
 
-def _fmt_number(v):
-    # vacío para None/NaN/inf
+def _fmt_number(v, colname=None):
     if v is None:
         return ""
     if isinstance(v, float):
         if pd.isna(v) or math.isinf(v):
             return ""
+        # Caso especial para ps_traff_gb → sin decimales
+        if colname == "ps_traff_gb":
+            return f"{int(v):,}"
         return f"{v:,.1f}"
     if isinstance(v, int):
         return f"{v:,}"
     return str(v)
+
 
 def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
                    color=None, striped=True, animated=True, decimals=1,
@@ -204,7 +207,9 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
 
     # Nivel 1: keys fijos (igual que antes)
     left = [
-        html.Th(DISPLAY_NAME_BASE.get(k, k).title(), rowSpan=3, className="th-left")
+        html.Th(DISPLAY_NAME_BASE.get(k, k).title(),
+                rowSpan=3,
+                className=f"th-left th-{k}")  # 👈 clase específica por columna
         for k in ROW_KEYS
     ]
 
@@ -320,9 +325,22 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
         for key in ROW_KEYS:
             val = _safe_get(row, key)
             if val is None and key in df_in.columns:
-                # fallback por si el wide no las trae (casos edge)
                 val = df_in.iloc[0][key]
-            tds.append(html.Td(html.Div(_fmt_number(val), className="cell-key"), className="td-key"))
+
+            # Mostrar solo inicial en 'vendor' (y dejar el valor completo como tooltip)
+            if key == "vendor":
+                txt = (str(val)[0]).upper() if val not in (None, "") else ""
+                content = html.Span(txt, title=str(val) if val not in (None, "") else "")
+            else:
+                # Pasa el nombre de la columna para que _fmt_number pueda decidir formatos especiales
+                content = _fmt_number(val, key)
+
+            tds.append(
+                html.Td(
+                    html.Div(content, className="cell-key"),
+                    className=f"td-key td-{key}"  # 👈 clase específica por columna
+                )
+            )
 
         # métricas
         for col in METRIC_ORDER:
@@ -347,7 +365,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
                     cls = f"cell-{cell_severity(base_name, float(num_val), network=net)}"
                 else:
                     cls = "cell-neutral"
-                cell = html.Div(_fmt_number(val), className=cls)
+                cell = html.Div(_fmt_number(val, base_name), className=cls)
 
             td_cls = "td-cell" + (" td-end-of-group" if col in END_OF_GROUP else "")
             tds.append(html.Td(cell, className=td_cls))

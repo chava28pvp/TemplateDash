@@ -79,19 +79,11 @@ def create_umbral_config_modal(network_options=None):
                             clearable=False,
                         ),
                         html.Small(
-                            "Selecciona una red para definir un override; (Global) aplica a todas.",
+                            "Selecciona una red",
                             className="text-muted d-block mt-1",
                         ),
                     ], md=8),
-                    dbc.Col([
-                        dbc.Button(
-                            "Restablecer override",
-                            id="umbral-reset",
-                            color="link",
-                            className="mt-4 p-0 text-danger",
-                            n_clicks=0,
-                        ),
-                    ], md=4),
+
                 ], className="mb-3"),
 
                 # Panel de Severity (4 colores)
@@ -104,10 +96,7 @@ def create_umbral_config_modal(network_options=None):
                         dbc.Col(_severity_card("regular", "#e67e22"), md=6),
                         dbc.Col(_severity_card("critico", "#e74c3c"), md=6),
                     ], className="g-3 mt-1"),
-                    html.Small(
-                        "Si 'mayor es mejor', estos son mínimos por categoría. Si 'menor es mejor', son máximos.",
-                        className="text-muted",
-                    ),
+
                 ], id="severity-panel", hidden=True, className="mb-3"),
 
                 # Panel de Progress (min/max)
@@ -117,10 +106,7 @@ def create_umbral_config_modal(network_options=None):
                         dbc.Col(dbc.Input(id="progress-min", type="number", placeholder="Mínimo", step="any"), md=6),
                         dbc.Col(dbc.Input(id="progress-max", type="number", placeholder="Máximo", step="any"), md=6),
                     ], className="g-3 mt-1"),
-                    html.Small(
-                        "El color del progress es fijo; aquí sólo se define el rango.",
-                        className="text-muted"
-                    ),
+
                 ], id="progress-panel", hidden=True, className="mb-3"),
 
                 # Área de errores
@@ -130,7 +116,7 @@ def create_umbral_config_modal(network_options=None):
                 dbc.Button("Cancelar", id="umbral-cancel", color="secondary", className="me-2"),
                 dbc.Button("Guardar", id="umbral-save", color="primary"),
             ]),
-        ], id="umbral-config-modal", is_open=False, centered=True, size="lg"),
+        ], id="umbral-config-modal", is_open=False, centered=True, size="sm"),
     ])
 
 

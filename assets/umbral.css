@@ -1,8 +1,5 @@
 """
-.cell-excelente { background: rgba(46, 204, 113, 0.2); color: #1e824c; font-weight: 600; }
-.cell-bueno     { background: rgba(241, 196, 15, 0.2);  color: #8a6d3b; font-weight: 600; }
-.cell-regular   { background: rgba(230, 126, 34, 0.2);  color: #8f3d05; font-weight: 600; }
-.cell-critico   { background: rgba(231, 76, 60, 0.25);  color: #a94442; font-weight: 700; }
+
 
 /* Optional: keep compact table look */
 .kpi-table.compact td, .kpi-table.compact th { padding: .25rem .4rem; vertical-align: middle; }
@@ -12,4 +9,58 @@
 body {
     background-color: #121212 !important;
     color: #f1f1f1;
+}
+
+/* Aplica solo dentro del modal de umbrales */
+#umbral-config-modal .Select-control,
+#umbral-config-modal .Select-menu-outer {
+  background-color: #2a2a2a !important;  /* fondo oscuro */
+  color: #f1f1f1 !important;             /* texto claro */
+  border: 1px solid #444 !important;
+}
+
+/* Texto del valor seleccionado */
+#umbral-config-modal .Select-value-label {
+  color: #f1f1f1 !important;
+}
+
+/* Placeholder */
+#umbral-config-modal .Select-placeholder {
+  color: #bbb !important;
+}
+
+/* Opciones desplegadas */
+#umbral-config-modal .VirtualizedSelectOption {
+  background-color: #2a2a2a;
+  color: #f1f1f1;
+}
+#umbral-config-modal .VirtualizedSelectFocusedOption {
+  background-color: #3d3d3d;
+  color: #fff;
+}
+/* Eleva por encima del “glass” y su backdrop */
+.modal         { z-index: 2000; }
+.modal-backdrop{ z-index: 1900; }
+
+/* Baja un poco el modal (cuando está centrado) */
+.umbral-dialog.modal-dialog-centered {
+  transform: translateY(24px);  /* mueve 24px hacia abajo; ajusta a gusto */
+}
+
+/* También puedes fijar un ancho máximo cómodo */
+.umbral-dialog {
+  max-width: 720px;             /* hazlo más chico; ajusta 600–760px según necesites */
+}
+
+/* Si prefieres no centrarlo, quita centered=True y usa margin-top: */
+/*
+.umbral-dialog { margin-top: 56px; }
+*/
+
+/* Truco: cuando el modal está abierto, apaga el blur del card de filtros
+   para que nada se vea “borroso” detrás del modal */
+.modal-open .filtros-card::before {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background: rgba(255,255,255,0.03) !important; /* deja una capita muy leve */
 }

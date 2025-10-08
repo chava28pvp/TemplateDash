@@ -6,7 +6,6 @@ from src.config import REFRESH_INTERVAL_MS
 from src.Utils.utils_time import default_date_str, default_hour_str
 from components.umbral_config_modal import create_umbral_config_modal
 
-
 def serve_layout():
     return dbc.Container([
         # Header principal
@@ -16,16 +15,37 @@ def serve_layout():
             ], width=8),
         ], className="align-items-center"),
 
-        # Filtros + botón de configuración de umbrales
+        html.Div(
+            create_umbral_config_modal(),
+            className="position-absolute top-0 end-0 mt-3 me-3 umbral-fab"
+        ),
+
+        # Filtros + botón de configuración de umbrales (colapsables)
         html.Div(
             children=[
-                build_filters(),  # tu card/contenedor de filtros
-                html.Div(
-                    create_umbral_config_modal(),  # botón + modal
-                    className="position-absolute top-0 end-0 mt-3 me-3 umbral-fab"
+                # Barra de acciones (toggler de filtros)
+                dbc.Row([
+                    dbc.Col(
+                        dbc.Button(
+                            "Mostrar / Ocultar filtros",
+                            id="filters-toggle",
+                            color="secondary",
+                            size="sm",
+                            outline=True,
+                            className="mb-2"
+                        ),
+                        width="auto"
+                    ),
+                ], className="g-2 align-items-center"),
+
+                # Card de filtros colapsable
+                dbc.Collapse(
+                    id="filters-collapse",
+                    is_open=True,  # abiertos por defecto
+                    children=build_filters()
                 ),
             ],
-            className="position-relative"  # ancla para el posicionamiento absoluto
+            className="position-relative"
         ),
 
         # Contenido principal
@@ -34,7 +54,6 @@ def serve_layout():
             # Tabla principal + paginación
             dbc.Row([
                 dbc.Col([
-                    # Controles de paginación
                     dbc.Card(dbc.CardBody([
                         dbc.Row([
                             dbc.Col(dbc.Button("« Anterior", id="page-prev", n_clicks=0), width="auto"),
@@ -54,10 +73,13 @@ def serve_layout():
                                 className="ms-3"
                             ),
                             dbc.Col(html.Div(id="total-rows-banner", className="text-muted"), width=True),
+                            dbc.Col(
+                                dbc.Button("Exportar Excel", id="export-excel", color="primary", size="sm"),
+                                width="auto"
+                            ),
                         ], className="g-2 align-items-center"),
                     ]), className="shadow-sm mb-2"),
 
-                    # Contenedor con altura fija y scroll para la tabla
                     html.Div(
                         id="table-container",
                         className="kpi-table-wrap kpi-table-container"
@@ -65,34 +87,120 @@ def serve_layout():
                 ], md=12, className="my-3"),
             ]),
 
-            # Gráficas
+            # === Heatmaps agrupados en un solo Card ===
             dbc.Row([
                 dbc.Col(
-                    dbc.Card(dbc.CardBody([
-                        html.H4("Gráfica (CS)", className="mb-3"),
-                        dcc.Loading(html.Div(id="line-chart-a"))
-                    ]), className="shadow-sm"),
-                    md=6, sm=12, className="my-3"
-                ),
-                dbc.Col(
-                    dbc.Card(dbc.CardBody([
-                        html.H4("Gráfica (PS)", className="mb-3"),
-                        dcc.Loading(html.Div(id="line-chart-b"))
-                    ]), className="shadow-sm"),
-                    md=6, sm=12, className="my-3"
-                ),
-            ]),
+                    dbc.Card([
+                        dbc.CardHeader(
+                            dbc.Row([
+                                dbc.Col(html.H4("Degradados", className="m-0"), width="auto"),
+                            ], className="g-2 align-items-center justify-content-center"),
+                            className="bg-transparent border-0"
+                        ),
+                        dbc.CardBody([
+                            # Controles compactos centrados
+                            dbc.Row([
+                                dbc.Col(
+                                    dbc.ButtonGroup([
+                                        dbc.Button("«", id="hm-page-prev", n_clicks=0, size="sm", color="secondary"),
+                                        dbc.Button(id="hm-page-indicator", size="sm", disabled=True,
+                                                   color="secondary", className="px-2"),
+                                        dbc.Button("»", id="hm-page-next", n_clicks=0, size="sm", color="secondary"),
+                                    ], size="sm"),
+                                    width="auto", className="d-flex justify-content-center"
+                                ),
+                                dbc.Col(
+                                    dbc.InputGroup([
+                                        dbc.InputGroupText("Tamaño", className="py-0"),
+                                        dbc.Input(
+                                            id="hm-page-size",
+                                            type="number", min=5, step=5, value=5, size="sm",
+                                            style={"width": "80px"}
+                                        ),
+                                    ], size="sm"),
+                                    width="auto", className="d-flex justify-content-center"
+                                ),
+                                dbc.Col(
+                                    html.Small(id="hm-total-rows-banner", className="text-muted"),
+                                    width="auto", className="d-flex align-items-center"
+                                ),
+                            ], className="g-3 justify-content-center text-center mb-2"),
 
-            # Tablas inferiores
+                            # --- Tabla (resumen de las filas visibles del heatmap) ---
+                            dbc.Row([
+                                dbc.Col(
+                                    dbc.Card(dbc.CardBody([
+                                        html.H4("Tabla detalle", className="mb-2"),
+                                        html.Div(
+                                            id="hm-table-container",
+                                            style={
+                                                "maxHeight": "360px",
+                                                "overflowY": "auto",
+                                                "overflowX": "auto",
+                                            }
+                                        ),
+                                    ]), className="shadow-sm bg-dark text-white border-0"),
+                                    md=12, className="mb-2"
+                                ),
+                            ], className="g-0"),
+
+                            # === Gráficas % y UNIT apiladas y pegadas ===
+                            dbc.Row([
+                                dbc.Col(
+                                    html.Div(
+                                        dcc.Loading(
+                                            dcc.Graph(
+                                                id="hm-pct",
+                                                config={"displayModeBar": False},
+                                                style={"height": "420px", "width": "100%", "margin": "0"}
+                                            ),
+                                            type="default"
+                                        ),
+                                        className="hm-wrap",
+                                        style={"overflow": "hidden", "marginBottom": "6px"}
+                                    ),
+                                    width=12, className="my-0"
+                                ),
+                                dbc.Col(
+                                    html.Div(
+                                        dcc.Loading(
+                                            dcc.Graph(
+                                                id="hm-unit",
+                                                config={"displayModeBar": False},
+                                                style={"height": "400px", "width": "100%", "margin": "0"}
+                                            ),
+                                            type="default"
+                                        ),
+                                        className="hm-wrap",
+                                        style={"overflow": "hidden"}
+                                    ),
+                                    width=12, className="my-0"
+                                ),
+                            ], className="g-0 gy-0")
+
+                        ], className="p-2"),  # 👈 menos padding interno
+                    ], className="bg-dark text-white border-0 shadow-sm mb-0"),
+                    md=12, className="mb-2"
+                ),
+            ])
 
         ]),
 
         # Stores
         dcc.Store(id="defaults-store", data={"fecha": default_date_str(), "hora": default_hour_str()}),
-        dcc.Store(id="page-state", data={"page": 1, "page_size": 50}),  # ← estado de paginación
+        dcc.Store(id="page-state", data={"page": 1, "page_size": 5}),
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
+        dcc.Store(id="table-page-data"),
+
+        # Señales/estado Heatmap
+        dcc.Store(id="heatmap-trigger", data=None),
+        dcc.Store(id="heatmap-page-state", data={"page": 1, "page_size": 5}),
+        dcc.Store(id="heatmap-page-info"),
+        dcc.Store(id="heatmap-params"),
+
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
+        dcc.Download(id="download-excel"),
     ],
         fluid=True,
-        style={"backgroundColor": "#121212", "color": "white"}  # 👈 fondo y texto
+        style={"backgroundColor": "#121212", "color": "white"}
     )

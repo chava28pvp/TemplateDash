@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 from src.config import UMBRAL_JSON_PATH
 
 
-# Defaults aligned with your table's BASE_* lists
 SEVERITY_BASES: List[str] = [
     "ps_rrc_ia_percent",
     "ps_rab_ia_percent",
@@ -17,7 +16,6 @@ SEVERITY_BASES: List[str] = [
     "cs_rrc_ia_percent",
     "cs_rab_ia_percent",
     "cs_drop_dc_percent",
-    # Optional: include "integrity" if you want it colored
 ]
 
 PROGRESS_BASES: List[str] = [

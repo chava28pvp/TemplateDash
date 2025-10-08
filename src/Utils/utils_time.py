@@ -1,8 +1,7 @@
-# src/Utils/utils_time.py
 from datetime import datetime, timezone
 import pytz
 import os
-
+#utils para funciones de tiempo tales como no reiniciar la hora si esta filtado el dashboard
 TZ = os.getenv("APP_TZ", "America/Monterrey")
 try:
     _TZ = pytz.timezone(TZ)

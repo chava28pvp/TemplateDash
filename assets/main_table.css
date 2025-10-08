@@ -1,24 +1,25 @@
-/* ======= Base tabla ======= */
+/* ======= Base tabla (modo oscuro) ======= */
 .kpi-table {
-  border-collapse: separate;   /* necesario para bordes limpios por celda */
+  border-collapse: separate;
   border-spacing: 0;
   table-layout: auto;
   width: 100%;
-  background: #fff;
+  background: #1e1e1e;
 
-  /* alturas aproximadas de cada fila de header (ajusta según tu padding/size) */
-  --hdr-h1: 36px;   /* fila 1: Networks */
-  --hdr-h2: 32px;   /* fila 2: Grupos */
-  --hdr-h3: 32px;   /* fila 3: Sub-headers */
+  --hdr-h1: 28px;   /* fila 1: Networks */
+  --hdr-h2: 28px;   /* fila 2: Grupos */
+  --hdr-h3: 28px;   /* fila 3: Sub-headers */
+
+  color: #f1f1f1;
 }
 
-/* Rejilla completa (todas las celdas con borde) */
+/* Rejilla completa */
 .kpi-table th,
 .kpi-table td {
-  border: 1px solid #d0d7e2;   /* borde fino por defecto */
+  border: 1px solid #2d2d2d;
 }
 
-/* Tamaño y tipografía compactos */
+/* Compacto */
 .kpi-table.compact {
   font-size: 0.85rem;
 }
@@ -31,10 +32,16 @@
 .kpi-table thead th {
   text-align: center;
   vertical-align: middle;
-  background: #f8fafc;
+  background: #2a2a2a;
+  color: #f1f1f1;
   font-weight: 600;
-  position: sticky;        /* 👈 se quedan fijos al hacer scroll */
+  position: sticky;
   z-index: 2;
+
+  /* evita “saltos” */
+  min-height: 32px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 .kpi-table thead tr:nth-child(1) th { top: 0; }
 .kpi-table thead tr:nth-child(2) th { top: var(--hdr-h1); }
@@ -42,106 +49,158 @@
 
 /* Nivel 1 (Networks) */
 .kpi-table .th-network {
-  background: #e9eef6;
+  background: #333;
   font-weight: 700;
-  border-bottom: 2px solid #cbd5e1;
+  border-bottom: 2px solid #444;
 }
 
 /* Nivel 2 (Grupos) */
 .kpi-table .th-group {
-  background: #eef2f7;
+  background: #2f2f2f;
   font-weight: 700;
-  border-top: 1px solid #d0d7e2;
-  border-bottom: 2px solid #cbd5e1;
-  border-right: 2px solid #b6c2d0;
+  border-top: 1px solid #444;
+  border-bottom: 2px solid #444;
+  border-right: 2px solid #444;
 }
 
 /* Nivel 3 (Sub-headers) */
 .kpi-table .th-sub {
-  background: #f8fafc;
+  background: #2a2a2a;
   font-weight: 600;
-  border-bottom: 1px solid #dee2e6;
-  border-right: 1px solid #e1e7ef;
+  border-bottom: 1px solid #444;
+  border-right: 1px solid #444;
 }
 .kpi-table .th-end-of-group {
-  border-right: 2px solid #b6c2d0 !important;
+  border-right: 2px solid #555 !important;
 }
 
 /* ======= Cuerpo ======= */
 .kpi-table tbody td {
-  border-right: 1px solid #eef2f7;
-  border-bottom: 1px solid #eef2f7;
+  border-right: 1px solid #333;
+  border-bottom: 1px solid #333;
 }
 .kpi-table tbody td.td-end-of-group {
-  border-right: 2px solid #b6c2d0 !important;
+  border-right: 2px solid #555 !important;
 }
-
-/* Última fila: línea de cierre inferior */
 .kpi-table tbody tr:last-child td {
-  border-bottom: 1px solid #d0d7e2;
+  border-bottom: 1px solid #444;
 }
 
 /* Rayado suave + hover */
 .kpi-table tbody tr:nth-child(odd) td {
-  background: #fbfdff;
+  background: #1b1b1b;
 }
 .kpi-table tbody tr:hover td {
-  background: #f5f9ff;
+  background: #2b2b2b;
 }
 
-/* ======= Columna(s) izquierda(s) fija(s) ======= */
+/* ======= Columnas fijas ======= */
 .kpi-table .th-left,
 .kpi-table .td-key {
   position: sticky;
   left: 0;
   z-index: 3;
-  background: #ffffff;
-  box-shadow: 2px 0 0 rgba(0,0,0,0.04);
-  min-width: 140px;     /* ancho fijo para consistencia */
+  background: #222 !important;
+  box-shadow: 2px 0 0 rgba(0,0,0,0.6);
+  min-width: 140px;
 }
-/* Si fijas más columnas, define offsets acumulados:
-.kpi-table .td-key.col-2, .kpi-table .th-left.col-2 { left: 140px; }
-.kpi-table .td-key.col-3, .kpi-table .th-left.col-3 { left: 280px; }
-*/
 
-/* ======= Envoltura con scroll ======= */
+/* ======= Envoltura ======= */
 .kpi-table-wrap {
-  max-height: 480px;          /* 👈 alto máximo visible */
-  overflow-y: auto;           /* 👈 scroll vertical */
-  overflow-x: auto;           /* 👈 scroll horizontal */
+  max-height: 480px;
+  overflow-y: auto;
+  overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #333;
   border-radius: 8px;
-  background: #fff;
+  background: #1e1e1e;
   padding: 0.25rem;
 }
 
+/* ======= Severidades ======= */
+.cell-ok   { background: #1f3d2b; color: #a6e3b3; }
+.cell-warn { background: #3d3520; color: #ffd580; }
+.cell-bad  { background: #3d2022; color: #ff9b9b; }
 
+.cell-excelente { background-color: #28a745; color: white; }
+.cell-bueno     { background-color: #ffc107; color: black; }
+.cell-regular   { background-color: #fd7e14; color: white; }
+.cell-critico   { background-color: #dc3545; color: white; }
+.cell-neutral   { background-color: #2a2a2a; color: #f1f1f1; }
 
-/* Colores por severidad (existentes) */
-.cell-ok   { background: #e9f7ef; }
-.cell-warn { background: #fff8e1; }
-.cell-bad  { background: #ffebee; }
+.cell-good      { background-color: var(--umbral-color-good, #28a745); color:white; }
+.cell-warning   { background-color: var(--umbral-color-warning, #ffc107); color:black; }
+.cell-critical  { background-color: var(--umbral-color-critical, #dc3545); color:white; }
 
+/* ======= Sorting ======= */
+.th-sorted {
+  outline: 2px solid rgba(122, 178, 255, 0.35);
+  outline-offset: -2px;
+  background: #34495e !important; /* opcional para resaltar */
+}
+.th-sort-wrap {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: .35rem;
+  justify-content: center;
+}
+.sort-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 1.25rem;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  line-height: 1.25rem;
+  padding: 0;
 
-/*filter per column*/
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 
-.th-sort-wrap { display:flex; align-items:center; gap:.35rem; justify-content:center; }
-.sort-btn { border:none; background:transparent; padding:0; cursor:pointer; font-size:.9rem; }
-.th-sorted { background: #eef6ff; } /* resalta la col ordenada */
+  font-size: .9rem;
+  color: #f1f1f1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Roboto Mono", monospace;
+}
+.th-sub .th-label {
+  white-space: nowrap;
+}
 
-/* Estilos base */
-.cell-excelente { background-color: var(--color-excelente, #28a745); color: white; }
-.cell-bueno { background-color: var(--color-bueno, #ffc107); color: black; }
-.cell-regular { background-color: var(--color-regular, #fd7e14); color: white; }
-.cell-critico { background-color: var(--color-critico, #dc3545); color: white; }
-.cell-neutral { background-color: #f8f9fa; }
+/* Ancho fijo y compacto para Tech */
+.kpi-table .th-left.th-technology,
+.kpi-table .td-key.td-technology {
+  width: 72px;
+  min-width: 72px;
+  max-width: 72px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-/* Estilos dinámicos basados en configuración */
-.cell-good { background-color: var(--umbral-color-good, #28a745); }
-.cell-warning { background-color: var(--umbral-color-warning, #ffc107); }
-.cell-critical { background-color: var(--umbral-color-critical, #dc3545); }
+/* (Opcional) también puedes recortar un poco Vendor si quieres */
+.kpi-table .th-left.th-vendor,
+.kpi-table .td-key.td-vendor {
+  width: 64px;
+  min-width: 64px;
+  max-width: 64px;
+}
 
-
-
-
+/* Centrar y “estilo badge” para la inicial de Vendor */
+.kpi-table .td-key.td-vendor .cell-key {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.kpi-table .td-key.td-vendor .cell-key > span {
+  display: inline-block;
+  width: 1.6rem;
+  height: 1.6rem;
+  line-height: 1.6rem;
+  text-align: center;
+  border-radius: 0.4rem;
+  font-weight: 700;
+  /* Colores adaptados a modo oscuro; ajusta a tu paleta */
+  background: #2f2f2f;
+  color: #eaeaea;
+}
