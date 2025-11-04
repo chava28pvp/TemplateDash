@@ -67,6 +67,12 @@ DISPLAY_NAME_BASE = {
     "cs_drop_dc_percent": "%DC",
     "cs_drop_abnrel": "ABNREL",
 }
+VENDOR_ICON = {
+    "ericsson": "ericsson.svg",
+    "nokia":    "nokia.svg",
+    "huawei":   "huawei.svg",
+    "samsung":  "samsung.svg",
+}
 
 # Derivados
 INDEX_KEYS = ROW_KEYS
@@ -160,6 +166,39 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
         return html.Div([bar, html.Div(label, className="kb-value")], className="kb-wrap")
     return bar
 
+def vendor_badge(val):
+    """
+    Devuelve Img con el logo del vendor (si existe),
+    si no, cae a la inicial (fallback).
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return html.Span("", className="vendor-empty")
+
+    raw = str(val).strip()
+    key = raw.lower()
+
+    fname = VENDOR_ICON.get(key)
+    if fname:
+        # Ojo: si usas Dash, todo en /assets se sirve automáticamente
+        src = f"/assets/vendor/{fname}"
+        return html.Div(
+            html.Img(
+                src=src,
+                alt=raw,
+                title=raw,  # tooltip nativo
+                className="vendor-icon"
+            ),
+            className="cell-key vendor-badge",
+            **{"aria-label": f"Vendor {raw}"}
+        )
+
+    # Fallback: inicial como antes
+    return html.Span(
+        (raw[0]).upper(),
+        title=raw,
+        className="cell-key vendor-initial",
+        **{"aria-label": f"Vendor {raw}"}
+    )
 
 # =========================
 # Lógica multi-network
@@ -324,23 +363,22 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
         # keys a la izquierda (si no existen en wide, intenta buscarlas en df_in)
         for key in ROW_KEYS:
             val = _safe_get(row, key)
-            if val is None and key in df_in.columns:
-                val = df_in.iloc[0][key]
 
             # Mostrar solo inicial en 'vendor' (y dejar el valor completo como tooltip)
             if key == "vendor":
-                txt = (str(val)[0]).upper() if val not in (None, "") else ""
-                content = html.Span(txt, title=str(val) if val not in (None, "") else "")
-            else:
-                # Pasa el nombre de la columna para que _fmt_number pueda decidir formatos especiales
-                content = _fmt_number(val, key)
-
-            tds.append(
-                html.Td(
-                    html.Div(content, className="cell-key"),
-                    className=f"td-key td-{key}"  # 👈 clase específica por columna
+                cell_content = vendor_badge(val)  # 👈 nuevo
+                tds.append(
+                    html.Td(cell_content, className=f"td-key td-{key}")
                 )
-            )
+            else:
+                content = _fmt_number(val, key)
+                tds.append(
+                    html.Td(
+                        html.Div(content, className="cell-key"),
+                        className=f"td-key td-{key}"
+                    )
+                )
+
 
         # métricas
         for col in METRIC_ORDER:
