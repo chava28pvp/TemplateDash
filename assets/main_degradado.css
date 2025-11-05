@@ -48,3 +48,49 @@
 /* Opcional: reduce cualquier margen extra entre columnas */
 .hm-board .col, .hm-board .card, .hm-board .card-body { margin: 0 !important; }
 
+/* Encabezado separado, sin scroll y sin márgenes */
+.kpi-table-summary.header-only thead { display: table-header-group; }
+.kpi-table-summary.header-only tbody { display: none; }
+.kpi-table-summary.header-only th {
+  padding: 0.20rem 0.35rem;
+  line-height: 26px;           /* coherente con ROW_H */
+  border-bottom: 0 !important;
+}
+
+/* Asegura que la fila header no agregue espacios */
+.hm-board + .hm-header-filler { height: 0; margin: 0; padding: 0; }
+
+/* ===== Timeline headers (dos filas) ===== */
+.hm-time-row {
+  display: grid;
+  grid-template-columns: repeat(48, 1fr); /* 48 columnas = 24 ayer + 24 hoy */
+  gap: 0;
+}
+
+/* Fila de días: 2 bloques que ocupan 24 columnas cada uno */
+.hm-time-dates .cell {
+  grid-column: span 24;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.8rem;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+/* Fila de horas: 48 celdas (una por columna) */
+.hm-time-hours .cell {
+  text-align: center;
+  font-size: 0.72rem;
+  line-height: 20px;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
+/* Separador visual entre Ayer/Hoy (col 24→25) */
+.hm-time-dates .cell.sep,
+.hm-time-hours .cell.sep {
+  border-left: 2px solid rgba(255,255,255,0.35);
+}
+
+/* Atenuar horas que no se etiquetan */
+.hm-time-hours .cell.muted { opacity: 0.45; }

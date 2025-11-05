@@ -8,7 +8,7 @@ import plotly.graph_objs as go
 from datetime import datetime, timedelta
 from dash import html
 from components.Tables.heatmap import build_heatmap_figure, render_heatmap_summary_table, build_heatmap_payloads_fast, \
-    _hm_height
+    _hm_height, build_timeline_header_figure, _build_time_header_children
 from components.Tables.histograma import \
     build_histo_payloads_fast, build_overlay_waves_figure
 from components.Tables.main_table import (
@@ -441,13 +441,16 @@ def register_callbacks(app):
     # 8) HeatMap render
     # -------------------------------------------------
     @app.callback(
-
-        Output("hm-table-container", "children",  allow_duplicate=True),
+        Output("hm-table-container", "children", allow_duplicate=True),
         Output("hm-pct", "figure"),
         Output("hm-unit", "figure"),
         Output("hm-page-indicator", "children", allow_duplicate=True),
         Output("hm-total-rows-banner", "children", allow_duplicate=True),
         Output("heatmap-page-info", "data"),
+        # 👇 nuevos
+        Output("hm-time-dates", "children"),
+        Output("hm-time-hours", "children"),
+
         Input("heatmap-trigger", "data"),
         State("f-fecha", "date"),
         State("f-network", "value"),
@@ -475,8 +478,16 @@ def register_callbacks(app):
 
         state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
         if _LAST_HEATMAP_KEY == state_key:
-            return no_update, no_update, no_update, no_update, no_update, no_update
-
+            return (
+                no_update,  # hm-table-container.children
+                no_update,  # hm-pct.figure
+                no_update,  # hm-unit.figure
+                no_update,  # hm-page-indicator.children
+                no_update,  # hm-total-rows-banner.children
+                no_update,  # heatmap-page-info.data
+                no_update,  # hm-time-dates.children
+                no_update,  # hm-time-hours.children
+            )
         # --- Fechas HOY/AYER (sin hora) ---
         try:
             today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
@@ -521,38 +532,39 @@ def register_callbacks(app):
             pct_payload = unit_payload = None
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-        # --- Altura exacta en función del número de filas visibles ---
         nrows = len((pct_payload or unit_payload or {}).get("y") or [])
-        hm_height = _hm_height(nrows)  # ← ROW_H * nrows + márgenes mínimos
+        hm_height = _hm_height(nrows)
 
-        # --- Figuras ---
         fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
         fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
 
-        # --- Tabla (misma página/orden) ---
+        # Tabla
         if pct_payload or unit_payload:
-            table_component = render_heatmap_summary_table(
-                pct_payload, unit_payload,
-                pct_decimals=2, unit_decimals=0,
-                asset_url_getter=None  # o app.get_asset_url si lo usas
-            )
+            table_component = render_heatmap_summary_table(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
         else:
             table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
 
-        # --- Indicadores de página ---
+        # Indicadores
         total = int(page_info.get("total_rows", 0))
         showing = int(page_info.get("showing", 0))
         start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
         end_i = start_i + showing - 1 if showing else 0
-        total_pg = max(1, math.ceil(total / max(1, page_sz)))
-
-        hm_indicator = f"Página {page} de {total_pg}"
+        total_pg = max(1, math.ceil(total / max(1, int((hm_page_state or {}).get("page_size", 5)))))
+        hm_indicator = f"Página {int((hm_page_state or {}).get('page', 1))} de {total_pg}"
         hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
+
+        # === NUEVO: construir encabezados de tiempo (2 filas) ===
+        if pct_payload or unit_payload:
+            x_dt = (pct_payload or unit_payload).get("x_dt") or []
+            dates_children, hours_children = _build_time_header_children(x_dt)
+        else:
+            dates_children, hours_children = [], []
 
         _LAST_HEATMAP_KEY = state_key
 
-        # (tabla, fig_pct, fig_unit, indicador, banner, page_info)
-        return table_component, fig_pct, fig_unit, hm_indicator, hm_banner, page_info
+        return (table_component, fig_pct, fig_unit,
+                hm_indicator, hm_banner, page_info,
+                dates_children, hours_children)
 
     @app.callback(
         Output("heatmap-trigger", "data"),

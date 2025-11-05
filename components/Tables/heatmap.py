@@ -587,3 +587,77 @@ def render_heatmap_summary_table(pct_payload, unit_payload, *, pct_decimals=2, u
     return dbc.Table([thead, html.Tbody(body_rows)],
                      striped=True, bordered=False, hover=True, size="sm",
                      className="mb-0 table-dark kpi-table kpi-table-summary compact")
+
+def build_timeline_header_figure(x_dt, *, title=None):
+    fig = go.Figure()
+    # Línea invisible para forzar eje X con los 48 puntos
+    fig.add_trace(go.Scatter(
+        x=x_dt, y=[0]*len(x_dt),
+        mode="lines", line=dict(width=0), hoverinfo="skip", showlegend=False
+    ))
+    # Eje X con ticks cada 3 horas
+    THREE_H_MS = 3 * 3600 * 1000
+    fig.update_xaxes(
+        type="date",
+        dtick=THREE_H_MS,
+        showticklabels=True,
+        tickformat="%d %b %H:%M",  # ej. "04 Nov 03:00"
+        ticks="outside",
+        ticklen=4,
+        tickfont=dict(size=10),
+        showgrid=False,
+        fixedrange=True
+    )
+    fig.update_yaxes(visible=False, fixedrange=True)
+
+    # Vline entre días
+    if isinstance(x_dt, (list, tuple)) and len(x_dt) >= 25:
+        fig.add_vline(
+            x=x_dt[24], line_width=2,
+            line_color="rgba(255,255,255,0.35)", line_dash="solid", layer="above"
+        )
+
+    fig.update_layout(
+        margin=dict(l=4, r=4, t=0, b=0),
+        height=36,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#eaeaea"),
+        hovermode=False,
+        showlegend=False,
+    )
+    return fig
+
+def _build_time_header_children(x_dt):
+    """
+    x_dt: lista de 48 timestamps (str tipo 'YYYY-MM-DDTHH:MM:SS')
+    Devuelve (dates_children, hours_children) como listas de Divs.
+    """
+    if not x_dt or len(x_dt) < 48:
+        # fallback vacío (mantiene estructura)
+        dates = [html.Div("", className="cell"), html.Div("", className="cell sep")]
+        hours = [html.Div("", className="cell muted") for _ in range(48)]
+        return dates, hours
+
+    # Fechas "YYYY-MM-DD"
+    yday = x_dt[0].split("T", 1)[0]
+    today = x_dt[24].split("T", 1)[0]
+
+    # Fila de días (2 celdas de 24 columnas)
+    dates = [
+        html.Div(yday,  className="cell"),
+        html.Div(today, className="cell sep"),
+    ]
+
+    # Fila de horas (48 celdas: etiqueta cada 3h; otras atenuadas)
+    hours = []
+    for i in range(48):
+        hh = int(x_dt[i].split("T", 1)[1][:2])  # 00..23
+        show = (hh % 3 == 0)
+        cls = "cell"
+        if i == 24:
+            cls += " sep"  # separador entre días
+        if not show:
+            cls += " muted"
+        hours.append(html.Div(f"{hh:02d}", className=cls if show else cls))
+    return dates, hours

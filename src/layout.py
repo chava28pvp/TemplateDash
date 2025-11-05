@@ -87,7 +87,6 @@ def serve_layout():
                 ], md=12, className="my-3"),
             ]),
 
-            # === Heatmaps + Tabla en un Card ===
             dbc.Row([
                 dbc.Col(
                     dbc.Card([
@@ -99,7 +98,7 @@ def serve_layout():
                         ),
                         dbc.CardBody([
 
-                            # Controles compactos centrados (SE QUEDAN AQUÍ)
+                            # -- Controles de paginación de heatmap (se quedan aquí) --
                             dbc.Row([
                                 dbc.Col(
                                     dbc.ButtonGroup([
@@ -114,8 +113,7 @@ def serve_layout():
                                     dbc.InputGroup([
                                         dbc.InputGroupText("Tamaño", className="py-0"),
                                         dbc.Input(
-                                            id="hm-page-size",
-                                            type="number", min=5, step=5, value=5, size="sm",
+                                            id="hm-page-size", type="number", min=5, step=5, value=5, size="sm",
                                             style={"width": "80px"}
                                         ),
                                     ], size="sm"),
@@ -127,10 +125,47 @@ def serve_layout():
                                 ),
                             ], className="g-3 justify-content-center text-center mb-2"),
 
-                            # 👇 ÚNICO scroll que envuelve Tabla + dos Heatmaps
+                            # -- HEADER FIJO (no scrollea): Tabla + Timeline % + Timeline UNIT --
+                            dbc.Row([
+                                # Encabezado de la tabla resumen (md=4)
+                                dbc.Col(
+                                    dbc.Card(
+                                        dbc.CardBody([
+                                            dbc.Table([
+                                                html.Thead(html.Tr([
+                                                    html.Th("Cluster", className="w-cluster"),
+                                                    html.Th("Tech", className="w-tech"),
+                                                    html.Th("Vendor", className="w-vendor"),
+                                                    html.Th("Valor", className="w-valor"),
+                                                    html.Th("Última", className="w-ultima"),
+                                                    html.Th("% Últ.", className="w-num ta-right"),
+                                                    html.Th("UNIT Últ.", className="w-num ta-right"),
+                                                ])),
+                                            ], bordered=False, hover=False, size="sm",
+                                                className="mb-0 table-dark kpi-table kpi-table-summary header-only"),
+                                        ], className="p-1"),
+                                    ),
+                                    md=4, sm=12
+                                ),
+
+                                # Timeline header Heatmap UNIT
+                                dbc.Col(
+                                    dbc.Card(
+                                        dbc.CardBody([
+                                            # Fila 1: dos celdas que abarcan 24 columnas cada una (Ayer/Hoy)
+                                            html.Div(id="hm-time-dates", className="hm-time-row hm-time-dates"),
+                                            # Fila 2: 48 celdas (00..23 | 00..23), etiquetando cada 3h
+                                            html.Div(id="hm-time-hours", className="hm-time-row hm-time-hours"),
+                                        ], className="p-1"),
+                                    ),
+                                    md=8, sm=12
+                                ),
+                            ], className="g-0 align-items-stretch mb-1"),
+
+                            # -- ÚNICO SCROLL: Tabla + Heatmap % + Heatmap UNIT --
                             html.Div(
                                 dbc.Row([
-                                    # === Tabla ===
+                                    # === Tabla resumen (filas alineadas con heatmaps) ===
                                     dbc.Col(
                                         dbc.Card(
                                             dbc.CardBody([
@@ -177,10 +212,10 @@ def serve_layout():
                                         md=4, sm=12, className="mb-0"
                                     ),
                                 ], className="g-0 align-items-stretch"),
-                                className="hm-board"  # 👈 aquí vive el ÚNICO scroll
+                                className="hm-board"  # único scroll
                             ),
                         ], className="p-2"),
-                    ], className="bg-dark text-white border-0 shadow-sm mb-2"),  # 👈 este Card es solo Tabla+Heatmaps
+                    ], className="bg-dark text-white border-0 shadow-sm mb-2"),
                     md=12
                 ),
             ]),
