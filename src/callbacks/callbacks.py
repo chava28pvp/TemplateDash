@@ -6,8 +6,11 @@ import json
 import time
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
+from dash import html
+from components.Tables.heatmap import build_heatmap_figure, render_heatmap_summary_table, build_heatmap_payloads_fast, \
+    _hm_height
 from components.Tables.histograma import \
-    build_histo_payloads_fast, build_histo_table_df, build_overlay_waves_figure
+    build_histo_payloads_fast, build_overlay_waves_figure
 from components.Tables.main_table import (
     pivot_by_network,
     render_kpi_table_multinet,
@@ -22,7 +25,7 @@ from src.config import REFRESH_INTERVAL_MS
 
 from src.Utils.utils_time import now_local
 
-# Cache simple en memoria para df_ts (HOY+AYER)
+#Cach simple en memoria para df_ts
 _DFTS_CACHE = {}
 _DFTS_TTL = 300  # segundos
 
@@ -86,6 +89,16 @@ def _as_list(x):
 
 def round_down_to_hour(dt):
     return dt.replace(minute=0, second=0, microsecond=0)
+def vendor_badge(vendor_key: str, *, title: str = "", size: int = 22, asset_url_getter=None):
+    key = (vendor_key or "").strip().lower()
+    if not key:
+        return html.Span("", className="vendor-icon vendor-empty", title=title)
+    src = asset_url_getter(f"vendor/{key}.svg") if asset_url_getter else f"/assets/vendor/{key}.svg"
+    return html.Img(
+        src=src, alt=title or key, title=title or key,
+        className="vendor-icon",
+        style={"width": f"{size}px", "height": f"{size}px", "objectFit": "contain"}
+    )
 
 def register_callbacks(app):
 
@@ -389,7 +402,7 @@ def register_callbacks(app):
         hh = floored.strftime("%H:00:00")
         today = floored.strftime("%Y-%m-%d")
 
-        # No sobre-escribas si el usuario fijó manualmente
+        # No sobre/escribas si el usuario fijó manualmente
         if (current_date not in (None, today)) or (current_hour not in (None, hh)):
             return no_update, no_update
 
@@ -425,14 +438,15 @@ def register_callbacks(app):
         return not is_open
 
     # -------------------------------------------------
-    # 8) HeatMap render (optimizado)
+    # 8) HeatMap render
     # -------------------------------------------------
     @app.callback(
-        Output("hm-table-container", "children"),  # 👈 NUEVA salida (tabla)
+
+        Output("hm-table-container", "children",  allow_duplicate=True),
         Output("hm-pct", "figure"),
         Output("hm-unit", "figure"),
-        Output("hm-page-indicator", "children"),
-        Output("hm-total-rows-banner", "children"),
+        Output("hm-page-indicator", "children", allow_duplicate=True),
+        Output("hm-total-rows-banner", "children", allow_duplicate=True),
         Output("heatmap-page-info", "data"),
         Input("heatmap-trigger", "data"),
         State("f-fecha", "date"),
@@ -444,7 +458,166 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def refresh_heatmaps(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state):
-        """Render ultra-rápido del heatmap + tabla: figuras % y UNIT, indicadores de paginado y tabla resumen."""
+        """Render heatmaps + tabla alineados fila-a-fila."""
+        global _LAST_HEATMAP_KEY
+
+
+        networks = _as_list(networks)
+        technologies = _as_list(technologies)
+        vendors = _as_list(vendors)
+        clusters = _as_list(clusters)
+
+        # --- Paginado del HEATMAP ---
+        page = int((hm_page_state or {}).get("page", 1))
+        page_sz = int((hm_page_state or {}).get("page_size", 5))
+        offset = max(0, (page - 1) * page_sz)
+        limit = max(1, page_sz)
+
+        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
+        if _LAST_HEATMAP_KEY == state_key:
+            return no_update, no_update, no_update, no_update, no_update, no_update
+
+        # --- Fechas HOY/AYER (sin hora) ---
+        try:
+            today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
+        except Exception:
+            today_dt = datetime.utcnow()
+        yday_dt = today_dt - timedelta(days=1)
+        today_str = today_dt.strftime("%Y-%m-%d")
+        yday_str = yday_dt.strftime("%Y-%m-%d")
+
+        # --- df_ts cacheado por filtros (no depende de hora) ---
+        df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
+
+        # --- Redes para heatmap ---
+        if networks:
+            nets_heat = networks
+        else:
+            nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) \
+                if not df_ts.empty and "network" in df_ts.columns else []
+
+        # --- Meta de alarmados (filas base) ---
+        df_meta_heat, alarm_keys_set = fetch_alarm_meta_for_heatmap(
+            fecha=today_str,
+            vendors=vendors or None, clusters=clusters or None,
+            networks=nets_heat or None, technologies=technologies or None,
+        )
+
+        # --- Payloads ---
+        if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
+            pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
+                df_meta=df_meta_heat,
+                df_ts=df_ts,
+                UMBRAL_CFG=UM_MANAGER.config(),
+                networks=nets_heat,
+                valores_order=("PS_RCC", "CS_RCC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                today=today_str, yday=yday_str,
+                alarm_keys=alarm_keys_set,
+                alarm_only=True,
+                offset=offset,
+                limit=limit,
+            )
+        else:
+            pct_payload = unit_payload = None
+            page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+
+        # --- Altura exacta en función del número de filas visibles ---
+        nrows = len((pct_payload or unit_payload or {}).get("y") or [])
+        hm_height = _hm_height(nrows)  # ← ROW_H * nrows + márgenes mínimos
+
+        # --- Figuras ---
+        fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
+        fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
+
+        # --- Tabla (misma página/orden) ---
+        if pct_payload or unit_payload:
+            table_component = render_heatmap_summary_table(
+                pct_payload, unit_payload,
+                pct_decimals=2, unit_decimals=0,
+                asset_url_getter=None  # o app.get_asset_url si lo usas
+            )
+        else:
+            table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
+
+        # --- Indicadores de página ---
+        total = int(page_info.get("total_rows", 0))
+        showing = int(page_info.get("showing", 0))
+        start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
+        end_i = start_i + showing - 1 if showing else 0
+        total_pg = max(1, math.ceil(total / max(1, page_sz)))
+
+        hm_indicator = f"Página {page} de {total_pg}"
+        hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
+
+        _LAST_HEATMAP_KEY = state_key
+
+        # (tabla, fig_pct, fig_unit, indicador, banner, page_info)
+        return table_component, fig_pct, fig_unit, hm_indicator, hm_banner, page_info
+
+    @app.callback(
+        Output("heatmap-trigger", "data"),
+        Input("f-fecha", "date"),
+        Input("f-network", "value"),
+        Input("f-technology", "value"),
+        Input("f-vendor", "value"),
+        Input("f-cluster", "value"),
+        Input("heatmap-page-state", "data"),  # dispara por paginado del heatmap
+        prevent_initial_call=False,  # permite “bootstrap” al cargar
+    )
+    def heatmap_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state):
+        return {"ts": time.time()}
+
+    @app.callback(
+        Output("heatmap-page-state", "data"),
+        Input("f-fecha", "date"),
+        Input("f-network", "value"),
+        Input("f-technology", "value"),
+        Input("f-vendor", "value"),
+        Input("f-cluster", "value"),
+        Input("hm-page-size", "value"),
+        prevent_initial_call=False,  # bootstrap
+    )
+    def hm_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
+        ps = max(1, int(hm_page_size or 5))
+        return {"page": 1, "page_size": ps}
+
+    @app.callback(
+        Output("heatmap-page-state", "data", allow_duplicate=True),
+        Input("hm-page-prev", "n_clicks"),
+        Input("hm-page-next", "n_clicks"),
+        State("heatmap-page-state", "data"),
+        prevent_initial_call=True,
+    )
+    def hm_paginate(n_prev, n_next, state):
+        state = state or {"page": 1, "page_size": 5}
+        page = int(state.get("page", 1))
+        ps = int(state.get("page_size", 5))
+
+        trig = ctx.triggered_id
+        if trig == "hm-page-prev":
+            page = max(1, page - 1)
+        elif trig == "hm-page-next":
+            page = page + 1
+
+        return {"page": page, "page_size": ps}
+    # -------------------------------------------------
+    # 8) Histograma render
+    # -------------------------------------------------
+    @app.callback(
+        Output("hi-pct", "figure"),
+        Output("hi-unit", "figure"),
+        Output("histo-page-info", "data"),
+        Input("histo-trigger", "data"),
+        State("f-fecha", "date"),
+        State("f-network", "value"),
+        State("f-technology", "value"),
+        State("f-vendor", "value"),
+        State("f-cluster", "value"),
+        State("histo-page-state", "data"),
+        prevent_initial_call=True,
+    )
+    def refresh_histograma(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state):
+        """Render ultrarápido del heatmap + tabla: figuras % y UNIT, indicadores de paginado y tabla resumen."""
         global _LAST_HEATMAP_KEY
 
         # --- Normaliza filtros ---
@@ -462,7 +635,7 @@ def register_callbacks(app):
         # --- Clave de estado: evita re-render idéntico ---
         state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
         if _LAST_HEATMAP_KEY == state_key:
-            return no_update, no_update, no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update
 
         # --- Fechas HOY/AYER (sin hora) ---
         try:
@@ -539,52 +712,30 @@ def register_callbacks(app):
         else:
             fig_unit = go.Figure()
 
-        # --- Tabla (misma página/orden) ---
-        if pct_payload or unit_payload:
-            df_tbl = build_histo_table_df(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
-            if df_tbl.empty:
-                table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
-            else:
-                table_component = dbc.Table.from_dataframe(
-                    df_tbl,
-                    striped=True, bordered=False, hover=True,
-                    size="sm",
-                    className="mb-0 table-dark"  # dark theme
-                )
-        else:
-            table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
 
-        # --- Indicadores de página ---
-        total = int(page_info.get("total_rows", 0))
-        showing = int(page_info.get("showing", 0))
-        start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
-        end_i = start_i + showing - 1 if showing else 0
-        total_pages = max(1, math.ceil(total / max(1, page_sz)))
-
-        hm_indicator = f"Página {page} de {total_pages}"
-        hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
 
         # --- Memoriza última clave renderizada ---
         _LAST_HEATMAP_KEY = state_key
 
-        return table_component, fig_pct, fig_unit, hm_indicator, hm_banner, page_info
+        return fig_pct, fig_unit, page_info
 
 
     @app.callback(
-        Output("heatmap-trigger", "data"),
+        Output("histo-trigger", "data"),
         Input("f-fecha", "date"),
         Input("f-network", "value"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
-        Input("heatmap-page-state", "data"),  # dispara por paginado del heatmap
+        Input("histo-page-state", "data"),  # dispara por paginado del heatmap
         prevent_initial_call=False,  # permite “bootstrap” al cargar
     )
-    def heatmap_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state):
+    def histo_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state):
         return {"ts": time.time()}
 
+
     @app.callback(
-        Output("heatmap-page-state", "data"),
+        Output("histo-page-state", "data"),
         Input("f-fecha", "date"),
         Input("f-network", "value"),
         Input("f-technology", "value"),
@@ -593,18 +744,18 @@ def register_callbacks(app):
         Input("hm-page-size", "value"),
         prevent_initial_call=False,  # bootstrap
     )
-    def hm_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
+    def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
         ps = max(1, int(hm_page_size or 5))
         return {"page": 1, "page_size": ps}
 
     @app.callback(
-        Output("heatmap-page-state", "data", allow_duplicate=True),
+        Output("histo-page-state", "data", allow_duplicate=True),
         Input("hm-page-prev", "n_clicks"),
         Input("hm-page-next", "n_clicks"),
-        State("heatmap-page-state", "data"),
+        State("histo-page-state", "data"),
         prevent_initial_call=True,
     )
-    def hm_paginate(n_prev, n_next, state):
+    def hi_paginate(n_prev, n_next, state):
         state = state or {"page": 1, "page_size": 5}
         page = int(state.get("page", 1))
         ps = int(state.get("page_size", 5))

@@ -87,7 +87,7 @@ def serve_layout():
                 ], md=12, className="my-3"),
             ]),
 
-            # === Heatmaps agrupados en un solo Card ===
+            # === Heatmaps + Tabla en un Card ===
             dbc.Row([
                 dbc.Col(
                     dbc.Card([
@@ -98,7 +98,8 @@ def serve_layout():
                             className="bg-transparent border-0"
                         ),
                         dbc.CardBody([
-                            # Controles compactos centrados
+
+                            # Controles compactos centrados (SE QUEDAN AQUÍ)
                             dbc.Row([
                                 dbc.Col(
                                     dbc.ButtonGroup([
@@ -126,31 +127,81 @@ def serve_layout():
                                 ),
                             ], className="g-3 justify-content-center text-center mb-2"),
 
-                            # --- Tabla (resumen de las filas visibles del heatmap) ---
-                            dbc.Row([
-                                dbc.Col(
-                                    dbc.Card(dbc.CardBody([
-                                        html.H4("Tabla detalle", className="mb-2"),
-                                        html.Div(
-                                            id="hm-table-container",
-                                            style={
-                                                "maxHeight": "360px",
-                                                "overflowY": "auto",
-                                                "overflowX": "auto",
-                                            }
+                            # 👇 ÚNICO scroll que envuelve Tabla + dos Heatmaps
+                            html.Div(
+                                dbc.Row([
+                                    # === Tabla ===
+                                    dbc.Col(
+                                        dbc.Card(
+                                            dbc.CardBody([
+                                                html.Div(id="hm-table-container"),
+                                            ], className="p-0", style={"minHeight": 0}),
+                                            className="bg-dark text-white border-0 h-100"
                                         ),
-                                    ]), className="shadow-sm bg-dark text-white border-0"),
-                                    md=12, className="mb-2"
-                                ),
-                            ], className="g-0"),
+                                        md=4, sm=12, className="mb-0"
+                                    ),
 
-                            # === Gráficas % y UNIT apiladas y pegadas ===
+                                    # === Heatmap % ===
+                                    dbc.Col(
+                                        dbc.Card(
+                                            dbc.CardBody([
+                                                dcc.Loading(
+                                                    dcc.Graph(
+                                                        id="hm-pct",
+                                                        config={"displayModeBar": False},
+                                                        style={"width": "100%", "margin": 0}
+                                                    ),
+                                                    type="default"
+                                                ),
+                                            ], className="p-0", style={"minHeight": 0}),
+                                            className="bg-dark text-white border-0 h-100"
+                                        ),
+                                        md=4, sm=12, className="mb-0"
+                                    ),
+
+                                    # === Heatmap UNIT ===
+                                    dbc.Col(
+                                        dbc.Card(
+                                            dbc.CardBody([
+                                                dcc.Loading(
+                                                    dcc.Graph(
+                                                        id="hm-unit",
+                                                        config={"displayModeBar": False},
+                                                        style={"width": "100%", "margin": 0}
+                                                    ),
+                                                    type="default"
+                                                ),
+                                            ], className="p-0", style={"minHeight": 0}),
+                                            className="bg-dark text-white border-0 h-100"
+                                        ),
+                                        md=4, sm=12, className="mb-0"
+                                    ),
+                                ], className="g-0 align-items-stretch"),
+                                className="hm-board"  # 👈 aquí vive el ÚNICO scroll
+                            ),
+                        ], className="p-2"),
+                    ], className="bg-dark text-white border-0 shadow-sm mb-2"),  # 👈 este Card es solo Tabla+Heatmaps
+                    md=12
+                ),
+            ]),
+
+            # === Histogramas en su propio Card ===
+            dbc.Row([
+                dbc.Col(
+                    dbc.Card([
+                        dbc.CardHeader(
+                            dbc.Row([
+                                dbc.Col(html.H4("Histogramas", className="m-0"), width="auto"),
+                            ], className="g-2 align-items-center justify-content-center"),
+                            className="bg-transparent border-0"
+                        ),
+                        dbc.CardBody([
                             dbc.Row([
                                 dbc.Col(
                                     html.Div(
                                         dcc.Loading(
                                             dcc.Graph(
-                                                id="hm-pct",
+                                                id="hi-pct",
                                                 config={"displayModeBar": False},
                                                 style={"height": "420px", "width": "100%", "margin": "0"}
                                             ),
@@ -165,7 +216,7 @@ def serve_layout():
                                     html.Div(
                                         dcc.Loading(
                                             dcc.Graph(
-                                                id="hm-unit",
+                                                id="hi-unit",
                                                 config={"displayModeBar": False},
                                                 style={"height": "400px", "width": "100%", "margin": "0"}
                                             ),
@@ -176,13 +227,13 @@ def serve_layout():
                                     ),
                                     width=12, className="my-0"
                                 ),
-                            ], className="g-0 gy-0")
-
-                        ], className="p-2"),  # 👈 menos padding interno
-                    ], className="bg-dark text-white border-0 shadow-sm mb-0"),
-                    md=12, className="mb-2"
+                            ], className="g-0 gy-0"),
+                        ], className="p-2"),
+                    ], className="bg-dark text-white border-0 shadow-sm mb-2"),
+                    # 👈 Card separado solo para histogramas
+                    md=12
                 ),
-            ])
+            ]),
 
         ]),
 
@@ -193,10 +244,17 @@ def serve_layout():
         dcc.Store(id="table-page-data"),
 
         # Señales/estado Heatmap
+
+
         dcc.Store(id="heatmap-trigger", data=None),
         dcc.Store(id="heatmap-page-state", data={"page": 1, "page_size": 5}),
         dcc.Store(id="heatmap-page-info"),
         dcc.Store(id="heatmap-params"),
+
+        dcc.Store(id="histo-trigger", data=None),
+        dcc.Store(id="histo-page-state", data={"page": 1, "page_size": 5}),
+        dcc.Store(id="histo-page-info"),
+        dcc.Store(id="histo-params"),
 
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Download(id="download-excel"),
