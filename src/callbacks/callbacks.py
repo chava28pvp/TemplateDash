@@ -1,6 +1,6 @@
 import math
 import pandas as pd
-from dash import Input, Output, State, ALL, no_update, ctx
+from dash import Input, Output, State, ALL, no_update, ctx, dash
 from hashlib import md5
 import json
 import time
@@ -8,7 +8,7 @@ import plotly.graph_objs as go
 from datetime import datetime, timedelta
 from dash import html
 from components.Tables.heatmap import build_heatmap_figure, render_heatmap_summary_table, build_heatmap_payloads_fast, \
-    _hm_height, build_timeline_header_figure, _build_time_header_children
+    _hm_height, _build_time_header_children, _build_time_header_children_by_dates
 from components.Tables.histograma import \
     build_histo_payloads_fast, build_overlay_waves_figure
 from components.Tables.main_table import (
@@ -31,6 +31,8 @@ _DFTS_TTL = 300  # segundos
 
 # Última clave renderizada para evitar re-render idéntico
 _LAST_HEATMAP_KEY = None
+_LAST_HI_KEY = None
+
 
 def _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit):
     """Clave estable del estado visible del heatmap (sin hora)."""
@@ -447,10 +449,6 @@ def register_callbacks(app):
         Output("hm-page-indicator", "children", allow_duplicate=True),
         Output("hm-total-rows-banner", "children", allow_duplicate=True),
         Output("heatmap-page-info", "data"),
-        # 👇 nuevos
-        Output("hm-time-dates", "children"),
-        Output("hm-time-hours", "children"),
-
         Input("heatmap-trigger", "data"),
         State("f-fecha", "date"),
         State("f-network", "value"),
@@ -484,9 +482,7 @@ def register_callbacks(app):
                 no_update,  # hm-unit.figure
                 no_update,  # hm-page-indicator.children
                 no_update,  # hm-total-rows-banner.children
-                no_update,  # heatmap-page-info.data
-                no_update,  # hm-time-dates.children
-                no_update,  # hm-time-hours.children
+                no_update  # heatmap-page-info.data
             )
         # --- Fechas HOY/AYER (sin hora) ---
         try:
@@ -563,8 +559,8 @@ def register_callbacks(app):
         _LAST_HEATMAP_KEY = state_key
 
         return (table_component, fig_pct, fig_unit,
-                hm_indicator, hm_banner, page_info,
-                dates_children, hours_children)
+                hm_indicator, hm_banner, page_info
+                )
 
     @app.callback(
         Output("heatmap-trigger", "data"),
@@ -612,6 +608,19 @@ def register_callbacks(app):
             page = page + 1
 
         return {"page": page, "page_size": ps}
+
+    @app.callback(
+        Output("hm-pct-dates", "children"),
+        Output("hm-pct-hours", "children"),
+        Output("hm-unit-dates", "children"),
+        Output("hm-unit-hours", "children"),
+        Input("f-fecha", "date"),
+        prevent_initial_call=False,  # puebla al inicio
+    )
+    def update_time_headers(selected_date):
+        dates_children, hours_children = _build_time_header_children_by_dates(selected_date)
+        # % y UNIT comparten la misma línea temporal, por eso duplicamos
+        return dates_children, hours_children, dates_children, hours_children
     # -------------------------------------------------
     # 8) Histograma render
     # -------------------------------------------------
@@ -620,6 +629,7 @@ def register_callbacks(app):
         Output("hi-unit", "figure"),
         Output("histo-page-info", "data"),
         Input("histo-trigger", "data"),
+        Input("histo-selected-wave", "data"),  # 👈 sólo wave
         State("f-fecha", "date"),
         State("f-network", "value"),
         State("f-technology", "value"),
@@ -628,28 +638,29 @@ def register_callbacks(app):
         State("histo-page-state", "data"),
         prevent_initial_call=True,
     )
-    def refresh_histograma(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state):
-        """Render ultrarápido del heatmap + tabla: figuras % y UNIT, indicadores de paginado y tabla resumen."""
-        global _LAST_HEATMAP_KEY
+    def refresh_histograma(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state):
+        global _LAST_HI_KEY
 
-        # --- Normaliza filtros ---
+        selected_wave = (sel_wave or {}).get("series_key")
+
+        # Normaliza filtros
         networks = _as_list(networks)
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
         clusters = _as_list(clusters)
 
-        # --- Paginado del HEATMAP ---
+        # Paginado
         page = int((hm_page_state or {}).get("page", 1))
         page_sz = int((hm_page_state or {}).get("page_size", 5))
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
-        # --- Clave de estado: evita re-render idéntico ---
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
-        if _LAST_HEATMAP_KEY == state_key:
+        # Clave de estado (sin selected_x)
+        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|selw={selected_wave}"
+        if _LAST_HI_KEY == state_key and ctx.triggered_id != "histo-selected-wave":
             return no_update, no_update, no_update
 
-        # --- Fechas HOY/AYER (sin hora) ---
+        # Fechas
         try:
             today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
         except Exception:
@@ -658,24 +669,20 @@ def register_callbacks(app):
         today_str = today_dt.strftime("%Y-%m-%d")
         yday_str = yday_dt.strftime("%Y-%m-%d")
 
-        # --- df_ts cacheado por filtros (no depende de hora) ---
+        # Datos
         df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
-
-        # --- Redes para heatmap (si no hay filtro, infiere de df_ts) ---
         if networks:
             nets_heat = networks
         else:
-            nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) \
-                if not df_ts.empty and "network" in df_ts.columns else []
+            nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) if (
+                        df_ts is not None and not df_ts.empty and "network" in df_ts.columns) else []
 
-        # --- Meta de alarmados (define las filas base) ---
         df_meta_heat, alarm_keys_set = fetch_alarm_meta_for_heatmap(
             fecha=today_str,
             vendors=vendors or None, clusters=clusters or None,
             networks=nets_heat or None, technologies=technologies or None,
         )
 
-        # --- Construcción de payloads ---
         if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
             pct_payload, unit_payload, page_info = build_histo_payloads_fast(
                 df_meta=df_meta_heat,
@@ -686,49 +693,26 @@ def register_callbacks(app):
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
                 alarm_only=True,
-                offset=offset,
-                limit=limit,
+                offset=offset, limit=limit,
             )
         else:
             pct_payload = unit_payload = None
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-        # --- Figuras ---
-        # % (severity)
-        if pct_payload:
-            fig_pct = build_overlay_waves_figure(
-                pct_payload,
-                UMBRAL_CFG=UM_MANAGER.config(),
-                mode="severity",
-                height=420,  # más compacto que antes
-                smooth_win=3,
-                opacity=0.28,
-                line_width=1.2,
-                decimals=2
-            )
-        else:
-            fig_pct = go.Figure()
+        # Figuras (sin selected_x)
+        fig_pct = build_overlay_waves_figure(
+            pct_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="severity",
+            height=420, smooth_win=3, opacity=0.28, line_width=1.2, decimals=2,
+            show_yaxis_ticks=True, selected_wave=selected_wave
+        ) if pct_payload else go.Figure()
 
-        # UNIT (progress)
-        if unit_payload:
-            fig_unit = build_overlay_waves_figure(
-                unit_payload,
-                UMBRAL_CFG=UM_MANAGER.config(),
-                mode="progress",
-                height=400,  # aún más compacto
-                smooth_win=3,
-                opacity=0.25,
-                line_width=1.2,
-                decimals=0
-            )
-        else:
-            fig_unit = go.Figure()
+        fig_unit = build_overlay_waves_figure(
+            unit_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="progress",
+            height=420, smooth_win=3, opacity=0.25, line_width=1.2, decimals=0,
+            show_yaxis_ticks=True, selected_wave=selected_wave
+        ) if unit_payload else go.Figure()
 
-
-
-        # --- Memoriza última clave renderizada ---
-        _LAST_HEATMAP_KEY = state_key
-
+        _LAST_HI_KEY = state_key
         return fig_pct, fig_unit, page_info
 
 
@@ -779,3 +763,64 @@ def register_callbacks(app):
             page = page + 1
 
         return {"page": page, "page_size": ps}
+
+    # Click en % (hi-pct)
+    @app.callback(
+        Output("histo-selected-wave", "data"),
+        Input("hi-pct", "clickData"),
+        State("hi-pct", "figure"),
+        prevent_initial_call=True,
+    )
+    def on_click_wave_pct(clickData, fig):
+        if not clickData or not fig:
+            return no_update
+        pt = (clickData.get("points") or [{}])[0]
+        i = pt.get("curveNumber")
+        traces = (fig or {}).get("data") or []
+        if i is None or i >= len(traces):
+            return no_update
+        cd = traces[i].get("customdata")
+        if not cd or not cd[0]:
+            return no_update
+        series_key = cd[0][0]  # 👈 primera columna del customdata
+        return {"series_key": series_key}
+
+    # Click en UNIT (hi-unit)
+    @app.callback(
+        Output("histo-selected-wave", "data", allow_duplicate=True),
+        Input("hi-unit", "clickData"),
+        State("hi-unit", "figure"),
+        prevent_initial_call=True,
+    )
+    def on_click_wave_unit(clickData, fig):
+        if not clickData or not fig:
+            return no_update
+        pt = (clickData.get("points") or [{}])[0]
+        i = pt.get("curveNumber")
+        traces = (fig or {}).get("data") or []
+        if i is None or i >= len(traces):
+            return no_update
+        cd = traces[i].get("customdata")
+        if not cd or not cd[0]:
+            return no_update
+        series_key = cd[0][0]
+        return {"series_key": series_key}
+
+    @app.callback(
+        Output("histo-selected-wave", "data", allow_duplicate=True),
+        Input("hi-pct", "relayoutData"),
+        Input("hi-unit", "relayoutData"),
+        prevent_initial_call=True,
+    )
+    def clear_wave_on_doubleclick(r1, r2):
+        def is_autosize(r):
+            # Plotly manda estas claves cuando haces doble click (reset zoom)
+            return bool(r) and (
+                    r.get("autosize") is True
+                    or r.get("xaxis.autorange") is True
+                    or r.get("yaxis.autorange") is True
+            )
+
+        if is_autosize(r1) or is_autosize(r2):
+            return {}  # ← limpia la selección (deselecciona la wave)
+        return no_update

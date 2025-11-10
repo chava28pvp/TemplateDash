@@ -155,7 +155,6 @@ def _normalize(v: float | None, vmin: float, vmax: float) -> float | None:
         return 0.0
     x = (float(v) - vmin) / (vmax - vmin)
     return 0.0 if x < 0 else (1.0 if x > 1 else x)
-# 1) Reutiliza tu helper
 
 def _vendor_key(raw: str) -> str:
     if not raw:
@@ -169,6 +168,20 @@ def _vendor_key(raw: str) -> str:
     if "samsung" in s:return "samsung"
     # fallback: primera palabra
     return s.split(" ",1)[0] if s else ""
+
+def _vendor_initial(vendor: str) -> str:
+    key = _vendor_key(vendor)
+    m = {
+        "ericsson": "E",
+        "huawei":   "H",
+        "nokia":    "N",
+        "samsung":  "S",
+    }
+    if key in m:
+        return m[key]
+    # fallback: primera letra del texto “limpio”
+    s = (vendor or "").strip()
+    return s[:1].upper() if s else ""
 
 def _vendor_badge(vendor_key: str, *, title: str = "", size: int = 20, asset_url_getter=None):
     key = (vendor_key or "").strip().lower()
@@ -463,14 +476,9 @@ def build_heatmap_figure(
         "<span style='opacity:0.85'>%{x|%Y-%m-%d %H:%M}</span><br>"
         "──────────<br>"
         "DETALLE<br>"
-        "<b>Tech:</b> %{customdata[0]}<br>"
-        "<b>Vendor:</b> %{customdata[1]}<br>"
-        "<b>Cluster:</b> %{customdata[2]}<br>"
         "<b>Net:</b> %{customdata[3]}<br>"
-        "<b>Valor:</b> %{customdata[4]}<br>"
         "<b>Última hora con registro:</b> %{customdata[5]}<br>"
         "<b>Máx:</b> %{customdata[6]}<br>"
-        "<b>Mín:</b> %{customdata[7]}<br>"
         "<extra></extra>"
     )
 
@@ -536,8 +544,6 @@ def build_heatmap_figure(
     return fig
 
 
-
-
 def render_heatmap_summary_table(pct_payload, unit_payload, *, pct_decimals=2, unit_decimals=0, asset_url_getter=None, active_y=None):
     src = pct_payload or unit_payload
     if not src:
@@ -560,6 +566,15 @@ def render_heatmap_summary_table(pct_payload, unit_payload, *, pct_decimals=2, u
     ]
     thead = html.Thead(html.Tr([html.Th(n, className=c) for n, c in cols]), className="table-dark")
 
+    # más precisión para el tooltip (sin cambiar lo visible)
+    def _fmt_full(v):
+        try:
+            f = float(v)
+            if not np.isfinite(f): return ""
+            return f"{f:,.2f}"  # muestra más decimales en el hover
+        except Exception:
+            return ""
+
     body_rows = []
     for i in range(len(y)):
         parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 4)
@@ -571,16 +586,31 @@ def render_heatmap_summary_table(pct_payload, unit_payload, *, pct_decimals=2, u
         last_pct = _last_numeric(z_raw_pct[i]) if z_raw_pct and i < len(z_raw_pct) else None
         last_unit = _last_numeric(z_raw_unit[i]) if z_raw_unit and i < len(z_raw_unit) else None
 
+        ultima_txt = _only_time(row_last_ts[i] if i < len(row_last_ts) else "")
+        pct_txt    = _fmt(last_pct, pct_decimals)
+        unit_txt   = _fmt(last_unit, unit_decimals)
+
         body_rows.append(
             html.Tr([
-                html.Td(cluster, className="w-cluster"),
-                html.Td(tech, className="w-tech"),
-                html.Td(_vendor_badge(_vendor_key(vendor), title=vendor, size=20, asset_url_getter=asset_url_getter),
-                        className="td-vendor w-vendor"),
-                html.Td(valor, className="w-valor"),
-                html.Td(_only_time(row_last_ts[i] if i < len(row_last_ts) else ""), className="w-ultima ta-center"),
-                html.Td(_fmt(last_pct, pct_decimals), className="w-num ta-right"),
-                html.Td(_fmt(last_unit, unit_decimals), className="w-num ta-right"),
+                html.Td(
+                    html.Span(
+                        html.Span(cluster, className="unflip"),
+                        className="ellipsis-left"
+                    ),
+                    className="w-cluster",
+                    title=cluster
+                ),
+                html.Td(tech, className="w-tech", title=tech),
+                html.Td(
+                    html.Span(_vendor_initial(vendor), className="vendor-initial"),
+                    className="td-vendor w-vendor",
+                    title=vendor
+                ),
+
+                html.Td(valor, className="w-valor", title=valor),
+                html.Td(ultima_txt, className="w-ultima ta-center", title=ultima_txt),
+                html.Td(pct_txt, className="w-num ta-right",  title=_fmt_full(last_pct)),
+                html.Td(unit_txt, className="w-num ta-right", title=_fmt_full(last_unit)),
             ])
         )
 
@@ -588,45 +618,7 @@ def render_heatmap_summary_table(pct_payload, unit_payload, *, pct_decimals=2, u
                      striped=True, bordered=False, hover=True, size="sm",
                      className="mb-0 table-dark kpi-table kpi-table-summary compact")
 
-def build_timeline_header_figure(x_dt, *, title=None):
-    fig = go.Figure()
-    # Línea invisible para forzar eje X con los 48 puntos
-    fig.add_trace(go.Scatter(
-        x=x_dt, y=[0]*len(x_dt),
-        mode="lines", line=dict(width=0), hoverinfo="skip", showlegend=False
-    ))
-    # Eje X con ticks cada 3 horas
-    THREE_H_MS = 3 * 3600 * 1000
-    fig.update_xaxes(
-        type="date",
-        dtick=THREE_H_MS,
-        showticklabels=True,
-        tickformat="%d %b %H:%M",  # ej. "04 Nov 03:00"
-        ticks="outside",
-        ticklen=4,
-        tickfont=dict(size=10),
-        showgrid=False,
-        fixedrange=True
-    )
-    fig.update_yaxes(visible=False, fixedrange=True)
 
-    # Vline entre días
-    if isinstance(x_dt, (list, tuple)) and len(x_dt) >= 25:
-        fig.add_vline(
-            x=x_dt[24], line_width=2,
-            line_color="rgba(255,255,255,0.35)", line_dash="solid", layer="above"
-        )
-
-    fig.update_layout(
-        margin=dict(l=4, r=4, t=0, b=0),
-        height=36,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#eaeaea"),
-        hovermode=False,
-        showlegend=False,
-    )
-    return fig
 
 def _build_time_header_children(x_dt):
     """
@@ -661,3 +653,37 @@ def _build_time_header_children(x_dt):
             cls += " muted"
         hours.append(html.Div(f"{hh:02d}", className=cls if show else cls))
     return dates, hours
+
+def _build_time_header_children_by_dates(fecha_str: str):
+    from datetime import datetime, timedelta
+    from dash import html
+
+    try:
+        today_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.utcnow()
+    except Exception:
+        today_dt = datetime.utcnow()
+    yday_dt = today_dt - timedelta(days=1)
+    today_s = today_dt.strftime("%Y-%m-%d")
+    yday_s  = yday_dt.strftime("%Y-%m-%d")
+
+    # Fila de días (dos bloques de 24 columnas)
+    dates_children = [
+        html.Div(yday_s,  className="cell"),
+        html.Div(today_s, className="cell sep"),
+    ]
+
+    # Fila de horas (48 celdas con ticks; etiqueta cada 3h, fuerte cada 6h)
+    hours_children = []
+    for i in range(48):
+        hh = i if i < 24 else i - 24
+        cls = ["cell"]
+        if i == 24:
+            cls.append("sep")
+        if hh % 6 == 0:
+            cls.append("tick6")  # tick más alto/visible
+
+        # etiqueta solo cada 3 horas
+        label = html.Span(f"{hh:02d}", className="lbl") if (hh % 3 == 0) else None
+        hours_children.append(html.Div(label, className=" ".join(cls)))
+
+    return dates_children, hours_children

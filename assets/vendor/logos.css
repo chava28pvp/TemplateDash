@@ -5,7 +5,7 @@
 }
 
 .vendor-icon {
-  width: 32px;               /* prueba 28–32px */
+  width: 65px;               /* prueba 28–32px */
   height: 32px;
   display: inline-block;
   object-fit: contain;       /* por si algún SVG trae width/height */

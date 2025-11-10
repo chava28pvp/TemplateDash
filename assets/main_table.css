@@ -178,7 +178,7 @@
   text-overflow: ellipsis;
 }
 
-/* (Opcional) también puedes recortar un poco Vendor si quieres */
+/* también puedes recortar un poco Vendor si quieres */
 .kpi-table .th-left.th-vendor,
 .kpi-table .td-key.td-vendor {
   width: 64px;
@@ -186,12 +186,7 @@
   max-width: 64px;
 }
 
-/* Centrar y “estilo badge” para la inicial de Vendor */
-.kpi-table .td-key.td-vendor .cell-key {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
+
 .kpi-table .td-key.td-vendor .cell-key > span {
   display: inline-block;
   width: 1.6rem;
@@ -205,7 +200,7 @@
   color: #f3f3f3;
 }
 .kpi-table .td-key.td-vendor {
-  background: #303030 !important; /* antes #2b2b2b */
+  background: #4a4a4a !important; /* antes #2b2b2b */
   color: #f3f3f3;
   border-right-color: #444;
 }

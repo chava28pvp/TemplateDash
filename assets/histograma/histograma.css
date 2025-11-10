@@ -1,0 +1,11 @@
+/* Contenedor con scroll horizontal cuando el grafico sea ancho */
+.histo-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Ancho minimo útil para que aparezca scroll (si el contenedor es estrecho) */
+.histo-wide {
+  min-width: 900px; /* ajusta segun lo que necesites */
+}

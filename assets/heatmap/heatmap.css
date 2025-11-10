@@ -1,0 +1,195 @@
+/* Fuerza cursor tipo “manita” en el área del gráfico y ejes */
+#hm-pct .plotly, #hm-unit .plotly { cursor: pointer !important; }
+
+/* Override de cursores de la capa de drag de Plotly */
+#hm-pct .plotly .draglayer [class*="drag"],
+#hm-unit .plotly .draglayer [class*="drag"],
+#hm-pct .plotly .cursor-crosshair,
+#hm-unit .plotly .cursor-crosshair,
+#hm-pct .plotly .cursor-ew-resize,
+#hm-unit .plotly .cursor-ew-resize,
+#hm-pct .plotly .cursor-ns-resize,
+#hm-unit .plotly .cursor-ns-resize,
+#hm-pct .plotly .cursor-grab,
+#hm-unit .plotly .cursor-grab,
+#hm-pct .plotly .cursor-grabbing,
+#hm-unit .plotly .cursor-grabbing {
+  cursor: pointer !important;
+}
+/* ===== Timeline headers (dos filas) ===== */
+.hm-time-row {
+  display: grid;
+  grid-template-columns: repeat(48, 1fr); /* 48 columnas = 24 ayer + 24 hoy */
+  gap: 0;
+}
+
+/* Fila de días: 2 bloques que ocupan 24 columnas cada uno */
+.hm-time-dates .cell {
+  grid-column: span 24;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.8rem;
+  line-height: 24px;
+  white-space: nowrap;
+}
+/* Nudge ajustable en px */
+.hm-nudge-left { padding-left: var(--hm-nudge, 6px) !important; }
+
+@media (max-width: 991.98px) {
+  .hm-nudge-left { --hm-nudge: 2px; }
+}
+
+
+/* ===== Horas: ticks + etiquetas rotadas ===== */
+.hm-time-hours {
+  display: grid;
+  grid-template-columns: repeat(48, 1fr);
+  gap: 0;
+  grid-auto-rows: 24px;             /* altura del renglón de horas */
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+}
+
+.hm-time-hours .cell {
+  position: relative;
+  text-align: center;
+}
+
+/* tick vertical en el centro de cada columna */
+.hm-time-hours .cell::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  transform: translateX(-50%);
+  width: 1px;
+  height: 8px;
+  background: rgba(255,255,255,0.28);
+}
+
+/* ticks “fuertes” cada 6 horas */
+.hm-time-hours .cell.tick6::before {
+  height: 12px;
+  background: rgba(255,255,255,0.45);
+}
+
+/* etiqueta rotada (se muestra solo donde toque) */
+.hm-time-hours .lbl {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%) rotate(-60deg);
+  transform-origin: 50% 100%;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: #eaeaea;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+/* separador entre días (col 24→25) */
+.hm-time-hours .cell.sep::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(255,255,255,0.35);
+}
+
+/* fila de días (como ya la tienes) */
+.hm-time-dates .cell {
+  grid-column: span 24;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.8rem;
+  line-height: 24px;
+  white-space: nowrap;
+}
+.hm-time-dates .cell.sep { border-left: 2px solid rgba(255,255,255,0.35); }
+
+
+/* Separador visual entre Ayer/Hoy (col 24→25) */
+/* Desactiva el separador visual */
+.hm-time-dates .cell.sep { border-left: 0 !important; }
+.hm-time-hours .cell.sep::after { display: none !important; }
+
+/* Atenuar horas que no se etiquetan */
+.hm-time-hours .cell.muted { opacity: 0.45; }
+
+
+}
+
+/* ========== Alturas del header de heatmaps ========== */
+.hm-time-card {
+  /* Ajusta a tu gusto */
+  --hm-date-h: 28px;   /* altura de fila de días (Ayer/Hoy) */
+  --hm-hour-h: 36px;   /* altura de fila de horas (00..23 | 00..23) */
+}
+
+/* Fila de días: ocupa 24 columnas + 24 y centra verticalmente el texto */
+.hm-time-card .hm-time-dates {
+  height: var(--hm-date-h);
+  display: grid;
+  grid-template-columns: repeat(48, 1fr);
+  align-content: center;    /* centra vertical */
+}
+
+.hm-time-card .hm-time-dates .cell {
+  grid-column: span 24;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.8rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Fila de horas: también 48 columnas y mayor altura para que quepan números */
+.hm-time-card .hm-time-hours {
+  height: var(--hm-hour-h);
+  display: grid;
+  grid-template-columns: repeat(48, 1fr);
+  align-content: center;   /* centra vertical */
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+}
+
+.hm-time-card .hm-time-hours .cell {
+  position: relative;
+  text-align: center;
+}
+
+.hm-time-card .hm-time-hours .cell.sep::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 0; bottom: 0;
+  width: 2px;
+  background: rgba(255,255,255,0.35);
+}
+
+/* Etiquetas de hora: SIN ticks; texto legible */
+.hm-time-card .hm-time-hours .lbl {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;                     /* más aire inferior */
+  transform: translateX(-50%);     /* sin rotación; si quieres, usa rotate(-25deg) */
+  font-size: 11px;                 /* sube/baja según var(--hm-hour-h) */
+  line-height: 1;
+  white-space: nowrap;
+  color: #eaeaea;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.95;
+}
+
+/* Opcional: responsive en pantallas pequeñas */
+@media (max-width: 991.98px) {
+  .hm-time-card {
+    --hm-date-h: 24px;
+    --hm-hour-h: 32px;
+  }
+  .hm-time-card .hm-time-hours .lbl { font-size: 10px; }

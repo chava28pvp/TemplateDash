@@ -138,8 +138,8 @@ def serve_layout():
                                                     html.Th("Vendor", className="w-vendor"),
                                                     html.Th("Valor", className="w-valor"),
                                                     html.Th("Última", className="w-ultima"),
-                                                    html.Th("% Últ.", className="w-num ta-right"),
-                                                    html.Th("UNIT Últ.", className="w-num ta-right"),
+                                                    html.Th("% Fail.", className="w-num ta-right"),
+                                                    html.Th("Fail Últ.", className="w-num ta-right"),
                                                 ])),
                                             ], bordered=False, hover=False, size="sm",
                                                 className="mb-0 table-dark kpi-table kpi-table-summary header-only"),
@@ -152,13 +152,24 @@ def serve_layout():
                                 dbc.Col(
                                     dbc.Card(
                                         dbc.CardBody([
-                                            # Fila 1: dos celdas que abarcan 24 columnas cada una (Ayer/Hoy)
-                                            html.Div(id="hm-time-dates", className="hm-time-row hm-time-dates"),
-                                            # Fila 2: 48 celdas (00..23 | 00..23), etiquetando cada 3h
-                                            html.Div(id="hm-time-hours", className="hm-time-row hm-time-hours"),
-                                        ], className="p-1"),
+                                            html.Div(id="hm-pct-dates", className="hm-time-row hm-time-dates"),
+                                            html.Div(id="hm-pct-hours", className="hm-time-row hm-time-hours"),
+                                        ], className="p-2"),
+                                        className="hm-time-card"
                                     ),
-                                    md=8, sm=12
+                                    md=4, sm=12
+                                ),
+
+                                # Header del HEATMAP UNIT (dos filas: días y horas)
+                                dbc.Col(
+                                    dbc.Card(
+                                        dbc.CardBody([
+                                            html.Div(id="hm-unit-dates", className="hm-time-row hm-time-dates"),
+                                            html.Div(id="hm-unit-hours", className="hm-time-row hm-time-hours"),
+                                        ], className="p-2"),
+                                        className="hm-time-card"
+                                    ),
+                                    md=4, sm=12
                                 ),
                             ], className="g-0 align-items-stretch mb-1"),
 
@@ -188,7 +199,7 @@ def serve_layout():
                                                     ),
                                                     type="default"
                                                 ),
-                                            ], className="p-0", style={"minHeight": 0}),
+                                            ], className="p-0 hm-nudge-left"),
                                             className="bg-dark text-white border-0 h-100"
                                         ),
                                         md=4, sm=12, className="mb-0"
@@ -206,7 +217,7 @@ def serve_layout():
                                                     ),
                                                     type="default"
                                                 ),
-                                            ], className="p-0", style={"minHeight": 0}),
+                                            ], className="p-0 hm-nudge-left"),
                                             className="bg-dark text-white border-0 h-100"
                                         ),
                                         md=4, sm=12, className="mb-0"
@@ -220,7 +231,7 @@ def serve_layout():
                 ),
             ]),
 
-            # === Histogramas en su propio Card ===
+            # === Histogramas en su propio Card (lado a lado, con títulos y scroll) ===
             dbc.Row([
                 dbc.Col(
                     dbc.Card([
@@ -231,44 +242,64 @@ def serve_layout():
                             className="bg-transparent border-0"
                         ),
                         dbc.CardBody([
+                            # Store para sincronizar selección entre % y UNIT
+
                             dbc.Row([
+                                # -------- Columna: HM % --------
                                 dbc.Col(
                                     html.Div(
-                                        dcc.Loading(
-                                            dcc.Graph(
-                                                id="hi-pct",
-                                                config={"displayModeBar": False},
-                                                style={"height": "420px", "width": "100%", "margin": "0"}
+                                        [
+                                            html.H5("%", className="mb-2"),
+                                            html.Div(
+                                                dcc.Loading(
+                                                    dcc.Graph(
+                                                        id="hi-pct",
+                                                        config={"displayModeBar": False},
+                                                        className="histo-wide",
+                                                        # 👈 ancho “grande” para permitir scroll
+                                                        style={"height": "420px", "width": "1400px", "margin": "0"}
+                                                        # 👈 ajusta width
+                                                    ),
+                                                    type="default"
+                                                ),
+                                                className="histo-scroll"  # 👈 contenedor con overflow-x
                                             ),
-                                            type="default"
-                                        ),
+                                        ],
                                         className="hm-wrap",
                                         style={"overflow": "hidden", "marginBottom": "6px"}
                                     ),
-                                    width=12, className="my-0"
+                                    md=6, sm=12, className="my-0"
                                 ),
+
+                                # -------- Columna: HM UNIT --------
                                 dbc.Col(
                                     html.Div(
-                                        dcc.Loading(
-                                            dcc.Graph(
-                                                id="hi-unit",
-                                                config={"displayModeBar": False},
-                                                style={"height": "400px", "width": "100%", "margin": "0"}
+                                        [
+                                            html.H5("UNIT", className="mb-2"),
+                                            html.Div(
+                                                dcc.Loading(
+                                                    dcc.Graph(
+                                                        id="hi-unit",
+                                                        config={"displayModeBar": False},
+                                                        className="histo-wide",
+                                                        style={"height": "420px", "width": "1400px", "margin": "0"}
+                                                    ),
+                                                    type="default"
+                                                ),
+                                                className="histo-scroll"
                                             ),
-                                            type="default"
-                                        ),
+                                        ],
                                         className="hm-wrap",
                                         style={"overflow": "hidden"}
                                     ),
-                                    width=12, className="my-0"
+                                    md=6, sm=12, className="my-0"
                                 ),
-                            ], className="g-0 gy-0"),
+                            ], className="g-3"),
                         ], className="p-2"),
                     ], className="bg-dark text-white border-0 shadow-sm mb-2"),
-                    # 👈 Card separado solo para histogramas
                     md=12
                 ),
-            ]),
+            ])
 
         ]),
 
@@ -278,9 +309,9 @@ def serve_layout():
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
         dcc.Store(id="table-page-data"),
 
+
+
         # Señales/estado Heatmap
-
-
         dcc.Store(id="heatmap-trigger", data=None),
         dcc.Store(id="heatmap-page-state", data={"page": 1, "page_size": 5}),
         dcc.Store(id="heatmap-page-info"),
@@ -290,6 +321,7 @@ def serve_layout():
         dcc.Store(id="histo-page-state", data={"page": 1, "page_size": 5}),
         dcc.Store(id="histo-page-info"),
         dcc.Store(id="histo-params"),
+        dcc.Store(id="histo-selected-wave"),
 
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Download(id="download-excel"),

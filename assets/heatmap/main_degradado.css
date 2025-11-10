@@ -1,9 +1,9 @@
 .kpi-table-summary { table-layout: fixed; width: 100%; font-size: 0.80rem; }
 .kpi-table-summary td, .kpi-table-summary th { padding: 0.20rem 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.kpi-table-summary .w-cluster { width: 50px; max-width: 50px; }
+.kpi-table-summary .w-cluster { width: 100px; max-width: 100px;}
 .kpi-table-summary .w-tech    { width: 32px;  max-width: 32px;  text-align:center; }
-.kpi-table-summary .w-vendor  { width: 22px;  max-width: 22px;  text-align:center; }
+.kpi-table-summary .w-vendor  { width: 28px;  max-width: 28px;  text-align:center; }
 .kpi-table-summary .w-valor   { width: 32px;  max-width: 32px;  text-align:center; }
 .kpi-table-summary .w-ultima  { width: 32px;  max-width: 32px;  text-align:center; }
 .kpi-table-summary .w-num     { width: 32px;  max-width: 32px;  text-align:center; }
@@ -60,37 +60,41 @@
 /* Asegura que la fila header no agregue espacios */
 .hm-board + .hm-header-filler { height: 0; margin: 0; padding: 0; }
 
-/* ===== Timeline headers (dos filas) ===== */
-.hm-time-row {
-  display: grid;
-  grid-template-columns: repeat(48, 1fr); /* 48 columnas = 24 ayer + 24 hoy */
-  gap: 0;
-}
 
-/* Fila de días: 2 bloques que ocupan 24 columnas cada uno */
-.hm-time-dates .cell {
-  grid-column: span 24;
+/* El td no recorta; lo hace el span interno */
+.kpi-table-summary .w-cluster { text-overflow: clip; }
+
+/* Elipsis al INICIO usando flip horizontal (no cambia altura/anchos) */
+.kpi-table-summary .w-cluster .ellipsis-left{
+  display: inline-block;   /* mantiene altura de la fila */
+  max-width: 100%;
+  text-overflow: ellipsis; /* la elipsis va al "final" del contenedor volteado => izquierda */
+  transform: scaleX(-1);   /* volteamos el contenedor */
+}
+/* Desvolteamos el texto para que se lea normal */
+.kpi-table-summary .w-cluster .ellipsis-left .unflip{
+  display: inline-block;
+  transform: scaleX(-1);
+}
+/* Vendor: no cambies el alto; respeta la línea de 26px del <td> */
+.td-vendor .vendor-initial{
+  display: inline-block;
+  width: 20px;              /* igual que el icono anterior */
+  height: 20px;
+  line-height: 20px;        /* NO cambia la altura de la fila */
   text-align: center;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.8rem;
-  line-height: 24px;
-  white-space: nowrap;
+  vertical-align: middle;
+  color: #fff !important;   /* ← blanco */
+  /* resets defensivos */
+  background: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
-/* Fila de horas: 48 celdas (una por columna) */
-.hm-time-hours .cell {
-  text-align: center;
-  font-size: 0.72rem;
-  line-height: 20px;
-  white-space: nowrap;
-  opacity: 0.9;
-}
 
-/* Separador visual entre Ayer/Hoy (col 24→25) */
-.hm-time-dates .cell.sep,
-.hm-time-hours .cell.sep {
-  border-left: 2px solid rgba(255,255,255,0.35);
-}
-
-/* Atenuar horas que no se etiquetan */
-.hm-time-hours .cell.muted { opacity: 0.45; }
