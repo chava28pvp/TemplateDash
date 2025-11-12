@@ -7,8 +7,8 @@ from sqlalchemy import create_engine, text, bindparam
 from typing import Dict, Tuple, Optional, List
 
 from components.Tables.histograma import VALORES_MAP
-from .Utils.alarmados import alarm_threshold_for, load_threshold_cfg, excess_base_for
-from .config import SQLALCHEMY_URL
+from src.Utils.alarmados import alarm_threshold_for, load_threshold_cfg, excess_base_for
+from src.config import SQLALCHEMY_URL
 
 # =========================================================
 # Engine / Config

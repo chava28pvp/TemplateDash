@@ -299,6 +299,40 @@ def serve_layout():
                     ], className="bg-dark text-white border-0 shadow-sm mb-2"),
                     md=12
                 ),
+            ]),
+
+            dbc.Row([
+                dbc.Col([
+                    dcc.Store(id="topoff-page-state", data={"page": 1, "page_size": 50}),
+                    dbc.Card(dbc.CardBody([
+                        dbc.Row([
+                            dbc.Col(dbc.Button("« Anterior", id="topoff-page-prev", n_clicks=0), width="auto"),
+                            dbc.Col(html.Div(id="topoff-page-indicator", className="mx-2 fw-semibold"), width="auto"),
+                            dbc.Col(dbc.Button("Siguiente »", id="topoff-page-next", n_clicks=0), width="auto"),
+                            dbc.Col(
+                                dbc.Input(
+                                    id="topoff-page-size",
+                                    type="number",
+                                    min=10,
+                                    step=10,
+                                    value=50,
+                                    placeholder="Tamaño",
+                                    style={"width": "110px"}
+                                ),
+                                width="auto",
+                                className="ms-3"
+                            ),
+                            dbc.Col(html.Div(id="topoff-total-rows-banner", className="text-muted"), width=True),
+                            # (Opcional) botón export — lo puedes wirear después
+                            # dbc.Col(dbc.Button("Exportar Excel", id="topoff-export-excel", color="primary", size="sm"), width="auto"),
+                        ], className="g-2 align-items-center"),
+                    ]), className="shadow-sm mb-2"),
+
+                    html.Div(
+                        id="topoff-table-container",
+                        className="kpi-table-wrap kpi-table-container"
+                    ),
+                ], md=12, className="my-3"),
             ])
 
         ]),
