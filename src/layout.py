@@ -357,6 +357,8 @@ def serve_layout():
         dcc.Store(id="histo-params"),
         dcc.Store(id="histo-selected-wave"),
 
+        dcc.Store(id="topoff-sort-state", data={"column": None, "ascending": True}),
+
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Download(id="download-excel"),
     ],

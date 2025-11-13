@@ -5,8 +5,7 @@ from typing import List, Tuple, Dict, Optional
 import pandas as pd
 from sqlalchemy import create_engine, text, bindparam
 
-# Ajusta tu URL (o impórtala desde config)
-SQLALCHEMY_URL = "mysql+mysqlconnector://root:12345@127.0.0.1:3306/prueba"
+from src.config import SQLALCHEMY_URL
 
 # =========================================================
 # Engine / Config
@@ -318,5 +317,96 @@ def fetch_topoff_paginated(
     if na_as_empty and not df.empty:
         df = df.where(pd.notna(df), "")
 
+    return df, int(total)
+
+def fetch_topoff_paginated_global_sort(
+    fecha: Optional[str] = None,
+    hora: Optional[str] = None,
+    regions: Optional[List[str]] = None,
+    provinces: Optional[List[str]] = None,
+    municipalities: Optional[List[str]] = None,
+    techs: Optional[List[str]] = None,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by_friendly: Optional[str] = None,
+    ascending: bool = True,
+    na_as_empty: bool = False,
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Igual a fetch_topoff_paginated, pero ordena en SQL por la columna 'friendly' indicada,
+    empujando vacíos (NULL o '') al final y casteando numéricos cuando aplique.
+    """
+    friendly_cols = _resolve_columns(BASE_COLUMNS)
+    select_cols = _select_list_with_aliases(friendly_cols)
+
+    where_sql, params, ur, up, um, ut = _filters_where_and_params(
+        fecha, hora, regions, provinces, municipalities, techs
+    )
+
+    # --- columnas tratadas como numéricas para ordenar ---
+    NUMERIC_COLS = {
+        "ps_traff_gb","ps_rrc_ia_percent","ps_rrc_fail","ps_rab_ia_percent","ps_rab_fail",
+        "ps_s1_ia_percent","ps_s1_fail","ps_drop_dc_percent","ps_drop_abnrel",
+        "cs_traff_erl","cs_rrc_ia_percent","cs_rrc_fail","cs_rab_ia_percent","cs_rab_fail",
+        "cs_drop_dc_percent","cs_drop_abnrel",
+        "unav","rtx_tnl_tx_percent","tnl_abn","tnl_fail"
+    }
+
+    # ORDER BY con NULLS LAST y manejo de '' como NULL
+    if sort_by_friendly and sort_by_friendly in COLMAP:
+        real = COLMAP[sort_by_friendly]
+        direction = "ASC" if ascending else "DESC"
+
+        # Trata '' como NULL para el ordenamiento
+        if sort_by_friendly in NUMERIC_COLS:
+            # Orden numérico real
+            real_expr = f"CAST(NULLIF({_quote(real)}, '') AS DECIMAL(18,6))"
+        else:
+            # Orden lexicográfico/fecha según tipo de columna en BD
+            real_expr = f"NULLIF({_quote(real)}, '')"
+
+        # Empuja NULL al final (NULLS LAST) y luego ordena por el valor
+        order_by = (
+            f"({real_expr} IS NULL) ASC, "
+            f"{real_expr} {direction}, "
+            f"{_quote(COLMAP['fecha'])} DESC, "
+            f"{_quote(COLMAP['hora'])} DESC"
+        )
+    else:
+        order_by = f"{_quote(COLMAP['fecha'])} DESC, {_quote(COLMAP['hora'])} DESC"
+
+    # COUNT
+    count_sql = f"""
+        SELECT COUNT(*) AS total
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+    """
+
+    # PAGE
+    page = max(1, int(page))
+    page_size = max(1, int(page_size))
+    offset = (page - 1) * page_size
+
+    sel_sql = f"""
+        SELECT {", ".join(select_cols)}
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+        ORDER BY {order_by}
+        LIMIT :limit OFFSET :offset
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, ut)
+        total = conn.execute(stmt_count, params).scalar() or 0
+
+        sel_params = dict(params)
+        sel_params.update({"limit": page_size, "offset": offset})
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, ut)
+        df = pd.read_sql(stmt_sel, conn, params=sel_params)
+
+    df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
+    if na_as_empty and not df.empty:
+        df = df.where(pd.notna(df), "")
     return df, int(total)
 
