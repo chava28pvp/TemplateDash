@@ -8,11 +8,17 @@ ROW_KEYS = ["fecha", "hora", "tech", "region", "province", "municipality", "site
 
 # Grupos por temática (similar a la principal)
 BASE_GROUPS = [
-    ("PS", ["ps_traff_gb", "ps_rrc_ia_percent", "ps_rrc_fail", "ps_rab_ia_percent", "ps_rab_fail",
-            "ps_s1_ia_percent", "ps_s1_fail", "ps_drop_dc_percent", "ps_drop_abnrel"]),
-    ("CS", ["cs_traff_erl", "cs_rrc_ia_percent", "cs_rrc_fail", "cs_rab_ia_percent", "cs_rab_fail",
-            "cs_drop_dc_percent", "cs_drop_abnrel"]),
-    ("DISP/TNL", ["unav", "rtx_tnl_tx_percent", "tnl_fail", "tnl_abn"]),
+    ("PS_TRAFF", ["ps_traff_gb"]),
+    ("PS_RRC", ["ps_rrc_ia_percent", "ps_rrc_fail"]),
+    ("PS_RAB", ["ps_rab_ia_percent", "ps_rab_fail"]),
+    ("PS_S1", ["ps_s1_ia_percent", "ps_s1_fail"]),
+    ("PS_DROP", ["ps_drop_dc_percent", "ps_drop_abnrel"]),
+    ("CS_TRAFF", ["cs_traff_erl"]),
+    ("CS_RRC", ["cs_rrc_ia_percent", "cs_rrc_fail"]),
+    ("CS_RAB", ["cs_rab_ia_percent", "cs_rab_fail"]),
+    ("CS_DROP", ["cs_drop_dc_percent", "cs_drop_abnrel"]),
+    ("3G_RTX/4G_TNL%", ["unav", "rtx_tnl_tx_percent", "tnl_abn"]),
+    ("", ["tnl_fail"])
 ]
 
 DISPLAY = {
@@ -21,16 +27,16 @@ DISPLAY = {
     "province": "Province", "municipality": "Municipality", "site_att": "Site ATT",
     "rnc": "RNC", "nodeb": "NodeB",
     # PS
-    "ps_traff_gb": "PS GB", "ps_rrc_ia_percent": "PS %IA", "ps_rrc_fail": "PS FAIL",
-    "ps_rab_ia_percent": "RAB %IA", "ps_rab_fail": "RAB FAIL",
-    "ps_s1_ia_percent": "S1 %IA", "ps_s1_fail": "S1 FAIL",
-    "ps_drop_dc_percent": "DROP %DC", "ps_drop_abnrel": "ABNREL",
+    "ps_traff_gb": "GB", "ps_rrc_ia_percent": "%IA", "ps_rrc_fail": "FAIL",
+    "ps_rab_ia_percent": "%IA", "ps_rab_fail": "FAIL",
+    "ps_s1_ia_percent": "%IA", "ps_s1_fail": "FAIL",
+    "ps_drop_dc_percent": "%DC", "ps_drop_abnrel": "ABNREL",
     # CS
-    "cs_traff_erl": "CS ERL", "cs_rrc_ia_percent": "CS %IA", "cs_rrc_fail": "CS FAIL",
-    "cs_rab_ia_percent": "RAB %IA", "cs_rab_fail": "RAB FAIL",
-    "cs_drop_dc_percent": "DROP %DC", "cs_drop_abnrel": "ABNREL",
+    "cs_traff_erl": "ERL", "cs_rrc_ia_percent": "%IA", "cs_rrc_fail": "FAIL",
+    "cs_rab_ia_percent": "%IA", "cs_rab_fail": "FAIL",
+    "cs_drop_dc_percent": "%DC", "cs_drop_abnrel": "ABNREL",
     # DISP/TNL
-    "unav": "Unav", "rtx_tnl_tx_percent": "RTX/TNL %Tx", "tnl_fail": "TNL FAIL", "tnl_abn": "TNL ABN",
+    "unav": "Unav", "rtx_tnl_tx_percent": "%Tx", "tnl_fail": "TNL FAIL", "tnl_abn": "TNL ABN",
     # META
     "archivo_fuente": "Archivo", "fecha_ejecucion": "Ejecución",
 }

@@ -249,7 +249,7 @@ def serve_layout():
                                 dbc.Col(
                                     html.Div(
                                         [
-                                            html.H5("%", className="mb-2"),
+                                            html.H5("%", className="mb-2 text-center"),
                                             html.Div(
                                                 dcc.Loading(
                                                     dcc.Graph(
@@ -275,7 +275,7 @@ def serve_layout():
                                 dbc.Col(
                                     html.Div(
                                         [
-                                            html.H5("UNIT", className="mb-2"),
+                                            html.H5("UNIT", className="mb-2 text-center"),
                                             html.Div(
                                                 dcc.Loading(
                                                     dcc.Graph(
