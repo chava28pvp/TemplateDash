@@ -7,8 +7,8 @@
         "thresholds": {
           "excelente": 1.5,
           "bueno": 1.5,
-          "regular": 3,
-          "critico": 5
+          "regular": 3.0,
+          "critico": 12.0
         }
       },
       "per_network": {
@@ -16,8 +16,8 @@
           "thresholds": {
             "excelente": 1.5,
             "bueno": 1.5,
-            "regular": 3,
-            "critico": 5
+            "regular": 3.0,
+            "critico": 5.0
           }
         }
       }
