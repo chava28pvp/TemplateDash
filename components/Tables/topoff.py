@@ -176,7 +176,7 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
             val = r[col]
 
             if col in PROGRESS_COLS:
-                cfg = progress_cfg(col, network=None)  # no hay 'network' en esta tabla
+                cfg = progress_cfg(col, network=None, profile="topoff")  # no hay 'network' en esta tabla
                 cell = _progress_cell(
                     val,
                     vmin=cfg.get("min", 0.0),
@@ -190,7 +190,7 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
             else:
                 # severidad si aplica
                 if col in SEVERITY_COLS and isinstance(val, (int, float)) and not pd.isna(val):
-                    sev = cell_severity(col, float(val), network=None)
+                    sev = cell_severity(col, float(val), network=None, profile="topoff")
                     cls = f"cell-{sev}"
                 else:
                     cls = "cell-neutral"

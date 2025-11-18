@@ -67,17 +67,10 @@ DISPLAY_NAME_BASE = {
     "cs_drop_dc_percent": "%DC",
     "cs_drop_abnrel": "ABNREL",
 }
-VENDOR_ICON = {
-    "ericsson": "ericsson.svg",
-    "nokia":    "nokia.svg",
-    "huawei":   "huawei.svg",
-    "samsung":  "samsung.svg",
-}
 
 # Derivados
 INDEX_KEYS = ROW_KEYS
 VALUE_COLS = sorted({c for _, cols in BASE_GROUPS for c in cols} | {"integrity"})
-
 
 # =========================
 # Helpers
@@ -110,14 +103,12 @@ def _fmt_number(v, colname=None):
     if isinstance(v, float):
         if pd.isna(v) or math.isinf(v):
             return ""
-        # Caso especial para ps_traff_gb → sin decimales
         if colname == "ps_traff_gb":
             return f"{int(v):,}"
         return f"{v:,.1f}"
     if isinstance(v, int):
         return f"{v:,}"
     return str(v)
-
 
 def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
                    color=None, striped=True, animated=True, decimals=1,
@@ -129,7 +120,6 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
         real = None
 
     if real is None or pd.isna(real) or math.isinf(real):
-        # Celda vacía (sin barra ni label)
         return html.Div("", className="kb kb--empty", style={"--kb-width": f"{width_px}px"})
 
     if vmax <= vmin:
@@ -168,35 +158,21 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
 
 def vendor_badge(val):
     """
-    Devuelve Img con el logo del vendor (si existe),
-    si no, cae a la inicial (fallback).
+    Muestra solo la inicial del vendor (E, N, H, S...), con tooltip.
     """
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return html.Span("", className="vendor-empty")
 
     raw = str(val).strip()
-    key = raw.lower()
+    initial = (raw[0]).upper() if raw else "?"
 
-    fname = VENDOR_ICON.get(key)
-    if fname:
-        # Ojo: si usas Dash, todo en /assets se sirve automáticamente
-        src = f"/assets/vendor/{fname}"
-        return html.Div(
-            html.Img(
-                src=src,
-                alt=raw,
-                title=raw,  # tooltip nativo
-                className="vendor-icon"
-            ),
-            className="cell-key vendor-badge",
-            **{"aria-label": f"Vendor {raw}"}
-        )
-
-    # Fallback: inicial como antes
-    return html.Span(
-        (raw[0]).upper(),
-        title=raw,
-        className="cell-key vendor-initial",
+    return html.Div(
+        html.Span(
+            initial,
+            title=raw,  # tooltip nativo
+            className="vendor-initial"
+        ),
+        className="cell-key",
         **{"aria-label": f"Vendor {raw}"}
     )
 
@@ -214,10 +190,8 @@ def expand_groups_for_networks(networks: list[str]):
             end_of_group.add(cols[-1])
     return groups_3lvl, visible_order, end_of_group
 
-
 def prefixed_progress_cols(networks: list[str]):
     return {f"{net}__{c}" for net in networks for c in BASE_PROGRESS_COLS}
-
 
 def prefixed_severity_cols(networks: list[str]):
     return {f"{net}__{c}" for net in networks for c in BASE_SEVERITY_COLS}
@@ -234,8 +208,6 @@ def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
     wide = wide.reset_index()
     return wide
 
-
-
 # =========================
 # Header 3 niveles (keys + grupos por network)
 # =========================
@@ -248,7 +220,7 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
     left = [
         html.Th(DISPLAY_NAME_BASE.get(k, k).title(),
                 rowSpan=3,
-                className=f"th-left th-{k}")  # 👈 clase específica por columna
+                className=f"th-left th-{k}")  # clase específica por columna
         for k in ROW_KEYS
     ]
 
@@ -268,7 +240,6 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
     for _, _, cols in groups_3lvl:
         for c in cols:
             base = strip_net(c)
-            # ¿esta columna es la actualmente ordenada?
             is_sorted = (sort_col == c) or (sort_col == base)
             arrow = "▲" if (is_sorted and ascending) else ("▼" if is_sorted else "↕")
 
@@ -276,7 +247,7 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
                 html.Span(_label_base(base), className="th-label"),
                 html.Button(
                     arrow,
-                    id={"type": "sort-btn", "col": c},  # ← pattern-matching ID
+                    id={"type": "sort-btn", "col": c},
                     n_clicks=0,
                     className="sort-btn",
                     **{"aria-label": f"Ordenar {c}"}
@@ -292,19 +263,16 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
 
     return html.Thead([html.Tr(row1), html.Tr(row2), html.Tr(row3)])
 
-
-
 # =========================
 # Render principal
 # =========================
 
-# --- firma nueva (nota: agrega sort_state) ---
 def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=None):
     if df_in is None or df_in.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
 
     # 1) Detectar si es long o wide
-    is_long = "network" in df_in.columns  # long si tiene esta columna
+    is_long = "network" in df_in.columns
     df_long = df_in.copy()
 
     # 2) Derivar networks si no se especifican explícitamente
@@ -312,7 +280,6 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
         if is_long:
             networks = sorted(df_long["network"].dropna().unique().tolist())
         else:
-            # inferir de columnas wide: prefijo antes de "__"
             nets = set()
             for c in df_in.columns:
                 if "__" in c:
@@ -333,7 +300,6 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     PROGRESS_COLS = prefixed_progress_cols(networks)
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
-    # ↓↓↓ APLICAR ORDEN ↓↓↓
     if sort_state:
         sort_col_req = (sort_state or {}).get("column")
         resolved = _resolve_sort_col(df_wide, METRIC_ORDER, sort_col_req)
@@ -360,34 +326,30 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     for row in df_wide.itertuples(index=False, name=None):
         tds = []
 
-        # keys a la izquierda (si no existen en wide, intenta buscarlas en df_in)
+        # keys a la izquierda (con vendor inicial y tooltips en todas)
         for key in ROW_KEYS:
             val = _safe_get(row, key)
 
-            # Mostrar solo inicial en 'vendor' (y dejar el valor completo como tooltip)
             if key == "vendor":
-                cell_content = vendor_badge(val)  # 👈 nuevo
-                tds.append(
-                    html.Td(cell_content, className=f"td-key td-{key}")
-                )
+                cell_content = vendor_badge(val)
+                tds.append(html.Td(cell_content, className=f"td-key td-{key}"))
             else:
                 content = _fmt_number(val, key)
                 tds.append(
                     html.Td(
-                        html.Div(content, className="cell-key"),
+                        html.Div(content, className="cell-key", title=str(content) if content else ""),
                         className=f"td-key td-{key}"
                     )
                 )
 
-
-        # métricas
+        # métricas (centradas por CSS)
         for col in METRIC_ORDER:
             val = _safe_get(row, col)
             base_name = strip_net(col)
             net = col.split("__", 1)[0] if "__" in col else None
 
             if col in PROGRESS_COLS:
-                cfg = progress_cfg(base_name, network=net)
+                cfg = progress_cfg(base_name, network=net, profile="main")
                 cell = _progress_cell(
                     val,
                     vmin=cfg.get("min", 0.0),
@@ -400,7 +362,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
                 if (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
-                    cls = f"cell-{cell_severity(base_name, float(num_val), network=net)}"
+                    cls = f"cell-{cell_severity(base_name, float(num_val), network=net, profile='main')}"
                 else:
                     cls = "cell-neutral"
                 cell = html.Div(_fmt_number(val, base_name), className=cls)
@@ -414,4 +376,3 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     table = dbc.Table([header, body], bordered=False, hover=True, responsive=True, striped=True, size="sm",
                       className="kpi-table compact")
     return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
-

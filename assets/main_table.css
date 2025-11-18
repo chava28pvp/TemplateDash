@@ -94,7 +94,7 @@
   background: #2b2b2b;
 }
 
-/* ======= Columnas fijas ======= */
+/* ======= Columnas fijas (ajustadas + hover + fuente más pequeña) ======= */
 .kpi-table .th-left,
 .kpi-table .td-key {
   position: sticky;
@@ -102,7 +102,42 @@
   z-index: 3;
   background: #222 !important;
   box-shadow: 2px 0 0 rgba(0,0,0,0.6);
-  min-width: 140px;
+  min-width: 96px;          /* ↓ antes 140px */
+  font-size: 0.8rem;        /* fuente más pequeña */
+}
+.kpi-table .th-left:hover,
+.kpi-table .td-key:hover {
+  background: #333 !important;
+  color: #fff;
+}
+
+/* Anchos específicos */
+.kpi-table .th-left.th-fecha,
+.kpi-table .td-key.td-fecha {
+  width: 88px; min-width: 88px; max-width: 120px;
+}
+
+.kpi-table .th-left.th-hora,
+.kpi-table .td-key.td-hora {
+  width: 64px; min-width: 64px; max-width: 80px;
+}
+
+.kpi-table .th-left.th-vendor,
+.kpi-table .td-key.td-vendor {
+  width: 56px; min-width: 56px; max-width: 72px;
+}
+
+.kpi-table .th-left.th-noc_cluster,
+.kpi-table .td-key.td-noc_cluster {
+  width: 120px; min-width: 110px; max-width: 160px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Tech compacto ya considerado */
+.kpi-table .th-left.th-technology,
+.kpi-table .td-key.td-technology {
+  width: 72px; min-width: 72px; max-width: 72px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* ======= Envoltura ======= */
@@ -136,7 +171,7 @@
 .th-sorted {
   outline: 2px solid rgba(122, 178, 255, 0.35);
   outline-offset: -2px;
-  background: #34495e !important; /* opcional para resaltar */
+  background: #34495e !important;
 }
 .th-sort-wrap {
   display: grid;
@@ -167,40 +202,66 @@
   white-space: nowrap;
 }
 
-/* Ancho fijo y compacto para Tech */
-.kpi-table .th-left.th-technology,
-.kpi-table .td-key.td-technology {
-  width: 72px;
-  min-width: 72px;
-  max-width: 72px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* también puedes recortar un poco Vendor si quieres */
-.kpi-table .th-left.th-vendor,
-.kpi-table .td-key.td-vendor {
-  width: 64px;
-  min-width: 64px;
-  max-width: 64px;
-}
-
-
-.kpi-table .td-key.td-vendor .cell-key > span {
-  display: inline-block;
-  width: 1.6rem;
-  height: 1.6rem;
-  line-height: 1.6rem;
+/* ======= KPI centrados ======= */
+.kpi-table .td-cell {
   text-align: center;
-  border-radius: 0.4rem;
+}
+.kpi-table .td-cell .kb {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ======= Vendor con inicial (sin imagen) ======= */
+.kpi-table .td-key.td-vendor .cell-key > span,
+.kpi-table .td-key.td-vendor .vendor-initial {
+  display: inline-block;
+  width: 1.4rem;
+  height: 1.4rem;
+  line-height: 1.4rem;
+  text-align: center;
+  border-radius: 0.35rem;
   font-weight: 700;
-  /* Colores adaptados a modo oscuro; ajusta a tu paleta */
   background: #2b2b2b !important;
   color: #f3f3f3;
+  vertical-align: middle;
 }
-.kpi-table .td-key.td-vendor {
-  background: #4a4a4a !important; /* antes #2b2b2b */
-  color: #f3f3f3;
-  border-right-color: #444;
+
+/* ======= Cluster: mostrar más contenido (2 líneas con ellipsis) ======= */
+.kpi-table .th-left.th-noc_cluster,
+.kpi-table .td-key.td-noc_cluster {
+  width: 100px;         /* ↑ antes ~120 */
+  min-width: 140px;
+  max-width: 280px;
+}
+
+/* Permitir 2 líneas y cortar con ellipsis si excede */
+.kpi-table .td-key.td-noc_cluster .cell-key {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;          /* 2 líneas visibles */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;            /* permite salto de línea */
+  line-height: 1.15;
+}
+/* ======= Tech: centrar mejor contenido ======= */
+.kpi-table .th-left.th-technology,
+.kpi-table .td-key.td-technology {
+  text-align: center;
+}
+
+.kpi-table .td-key.td-technology .cell-key {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;                 /* asegura centrado real en sticky */
+  padding-left: 0;             /* quita sesgo visual a la izquierda */
+  padding-right: 0;
+}
+
+/* Si quieres un poco más de aire visual en Tech: */
+.kpi-table .th-left.th-technology,
+.kpi-table .td-key.td-technology {
+  width: 76px;                 /* opcional: +4px para evitar cortes */
+  min-width: 76px;
+  max-width: 84px;
 }

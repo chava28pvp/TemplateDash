@@ -1,69 +1,31 @@
 {
-  "version": 1,
-  "severity": {
-    "ps_rrc_ia_percent": {
-      "default": {
-        "orientation": "lower_is_better",
-        "thresholds": {
-          "excelente": 1.5,
-          "bueno": 1.5,
-          "regular": 3.0,
-          "critico": 12.0
-        }
-      },
-      "per_network": {
-        "NET": {
-          "thresholds": {
-            "excelente": 1.5,
-            "bueno": 1.5,
-            "regular": 3.0,
-            "critico": 5.0
+  "version": 2,
+  "profiles": {
+    "main": {
+      "severity": {
+        "ps_rrc_ia_percent": {
+          "default": {
+            "orientation": "lower_is_better",
+            "thresholds": {
+              "excelente": 1.5,
+              "bueno": 1.5,
+              "regular": 3.0,
+              "critico": 5.0
+            }
+          },
+          "per_network": {
+            "NET": {
+              "thresholds": {
+                "excelente": 1.5,
+                "bueno": 1.5,
+                "regular": 3.0,
+                "critico": 5.0
+              }
+            }
           }
-        }
-      }
-    },
-    "ps_rab_ia_percent": {
-      "orientation": "lower_is_better",
-      "thresholds": {
-        "excelente": 1.5,
-        "bueno": 1.5,
-        "regular": 3,
-        "critico": 5
-      }
-    },
-    "ps_s1_ia_percent": {
-      "orientation": "lower_is_better",
-      "thresholds": {
-        "excelente": 1.5,
-        "bueno": 1.5,
-        "regular": 3,
-        "critico": 5
-      }
-    },
-    "ps_drop_dc_percent": {
-      "default": {
-        "orientation": "lower_is_better",
-        "thresholds": {
-          "excelente": 1.5,
-          "bueno": 1.5,
-          "regular": 3.0,
-          "critico": 5.0
-        }
-      },
-      "per_network": {}
-    },
-    "cs_rrc_ia_percent": {
-      "default": {
-        "orientation": "lower_is_better",
-        "thresholds": {
-          "excelente": 1.5,
-          "bueno": 1.5,
-          "regular": 3,
-          "critico": 5
-        }
-      },
-      "per_network": {
-        "ATT": {
+        },
+        "ps_rab_ia_percent": {
+          "orientation": "lower_is_better",
           "thresholds": {
             "excelente": 1.5,
             "bueno": 1.5,
@@ -71,7 +33,67 @@
             "critico": 5
           }
         },
-        "NET": {
+        "ps_s1_ia_percent": {
+          "orientation": "lower_is_better",
+          "thresholds": {
+            "excelente": 1.5,
+            "bueno": 1.5,
+            "regular": 3,
+            "critico": 5
+          }
+        },
+        "ps_drop_dc_percent": {
+          "default": {
+            "orientation": "lower_is_better",
+            "thresholds": {
+              "excelente": 1.5,
+              "bueno": 1.5,
+              "regular": 3.0,
+              "critico": 5.0
+            }
+          },
+          "per_network": {}
+        },
+        "cs_rrc_ia_percent": {
+          "default": {
+            "orientation": "lower_is_better",
+            "thresholds": {
+              "excelente": 1.5,
+              "bueno": 1.5,
+              "regular": 3,
+              "critico": 5
+            }
+          },
+          "per_network": {
+            "ATT": {
+              "thresholds": {
+                "excelente": 1.5,
+                "bueno": 1.5,
+                "regular": 3,
+                "critico": 5
+              }
+            },
+            "NET": {
+              "thresholds": {
+                "excelente": 1.5,
+                "bueno": 1.5,
+                "regular": 3,
+                "critico": 5
+              }
+            }
+          }
+        },
+        "cs_rab_ia_percent": {
+          "orientation": "lower_is_better",
+          "thresholds": {
+            "excelente": 1.5,
+            "bueno": 1.5,
+            "regular": 3,
+            "critico": 5
+          }
+        },
+        "cs_drop_dc_percent": {
+          "orientation": "lower_is_better",
           "thresholds": {
             "excelente": 1.5,
             "bueno": 1.5,
@@ -79,129 +101,323 @@
             "critico": 5
           }
         }
+      },
+      "progress": {
+        "ps_rrc_fail": {
+          "default": {
+            "min": 0,
+            "max": 30,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 9000.0
+            }
+          }
+        },
+        "ps_rab_fail": {
+          "default": {
+            "min": 0.0,
+            "max": 13500.0,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 8000.0
+            }
+          }
+        },
+        "ps_s1_fail": {
+          "default": {
+            "min": 0,
+            "max": 30,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 16000.0
+            }
+          }
+        },
+        "ps_drop_abnrel": {
+          "default": {
+            "min": 0,
+            "max": 30,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 16000.0
+            }
+          }
+        },
+        "cs_rrc_fail": {
+          "default": {
+            "min": 0.0,
+            "max": 11.0,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "ATT": {
+              "min": 0.0,
+              "max": 30.0
+            },
+            "NET": {
+              "min": 0.0,
+              "max": 700.0
+            }
+          }
+        },
+        "cs_rab_fail": {
+          "default": {
+            "min": 0,
+            "max": 30,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 700.0
+            }
+          }
+        },
+        "cs_drop_abnrel": {
+          "default": {
+            "min": 0.0,
+            "max": 10.0,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 16000.0
+            }
+          }
+        }
       }
     },
-    "cs_rab_ia_percent": {
-      "orientation": "lower_is_better",
-      "thresholds": {
-        "excelente": 1.5,
-        "bueno": 1.5,
-        "regular": 3,
-        "critico": 5
-      }
-    },
-    "cs_drop_dc_percent": {
-      "orientation": "lower_is_better",
-      "thresholds": {
-        "excelente": 1.5,
-        "bueno": 1.5,
-        "regular": 3,
-        "critico": 5
+    "topoff": {
+      "severity": {
+        "ps_rrc_ia_percent": {
+          "default": {
+            "orientation": "lower_is_better",
+            "thresholds": {
+              "excelente": 1.5,
+              "bueno": 1.5,
+              "regular": 3.0,
+              "critico": 5.0
+            }
+          },
+          "per_network": {
+            "NET": {
+              "thresholds": {
+                "excelente": 1.5,
+                "bueno": 1.5,
+                "regular": 3.0,
+                "critico": 5.0
+              }
+            }
+          }
+        },
+        "ps_rab_ia_percent": {
+          "orientation": "lower_is_better",
+          "thresholds": {
+            "excelente": 1.5,
+            "bueno": 1.5,
+            "regular": 3,
+            "critico": 5
+          }
+        },
+        "ps_s1_ia_percent": {
+          "orientation": "lower_is_better",
+          "thresholds": {
+            "excelente": 1.5,
+            "bueno": 1.5,
+            "regular": 3,
+            "critico": 5
+          }
+        },
+        "ps_drop_dc_percent": {
+          "default": {
+            "orientation": "lower_is_better",
+            "thresholds": {
+              "excelente": 1.5,
+              "bueno": 1.5,
+              "regular": 3.0,
+              "critico": 5.0
+            }
+          },
+          "per_network": {}
+        },
+        "cs_rrc_ia_percent": {
+          "default": {
+            "orientation": "lower_is_better",
+            "thresholds": {
+              "excelente": 1.5,
+              "bueno": 1.5,
+              "regular": 3,
+              "critico": 5
+            }
+          },
+          "per_network": {
+            "ATT": {
+              "thresholds": {
+                "excelente": 1.5,
+                "bueno": 1.5,
+                "regular": 3,
+                "critico": 5
+              }
+            },
+            "NET": {
+              "thresholds": {
+                "excelente": 1.5,
+                "bueno": 1.5,
+                "regular": 3,
+                "critico": 5
+              }
+            }
+          }
+        },
+        "cs_rab_ia_percent": {
+          "orientation": "lower_is_better",
+          "thresholds": {
+            "excelente": 1.5,
+            "bueno": 1.5,
+            "regular": 3,
+            "critico": 5
+          }
+        },
+        "cs_drop_dc_percent": {
+          "orientation": "lower_is_better",
+          "thresholds": {
+            "excelente": 1.5,
+            "bueno": 1.5,
+            "regular": 3,
+            "critico": 5
+          }
+        }
+      },
+      "progress": {
+        "ps_rrc_fail": {
+          "default": {
+            "min": 0,
+            "max": 30,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 9000.0
+            }
+          }
+        },
+        "ps_rab_fail": {
+          "default": {
+            "min": 0.0,
+            "max": 13500.0,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 8000.0
+            }
+          }
+        },
+        "ps_s1_fail": {
+          "default": {
+            "min": 0,
+            "max": 30,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 16000.0
+            }
+          }
+        },
+        "ps_drop_abnrel": {
+          "default": {
+            "min": 0,
+            "max": 30,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 16000.0
+            }
+          }
+        },
+        "cs_rrc_fail": {
+          "default": {
+            "min": 0.0,
+            "max": 11.0,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "ATT": {
+              "min": 0.0,
+              "max": 30.0
+            },
+            "NET": {
+              "min": 0.0,
+              "max": 700.0
+            }
+          }
+        },
+        "cs_rab_fail": {
+          "default": {
+            "min": 0,
+            "max": 30,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 700.0
+            }
+          }
+        },
+        "cs_drop_abnrel": {
+          "default": {
+            "min": 0.0,
+            "max": 10.0,
+            "decimals": 0,
+            "label": "{value:,.0f}"
+          },
+          "per_network": {
+            "NET": {
+              "min": 0.0,
+              "max": 16000.0
+            }
+          }
+        }
       }
     }
   },
-  "progress": {
-    "ps_rrc_fail": {
-      "default": {
-        "min": 0,
-        "max": 30,
-        "decimals": 0,
-        "label": "{value:,.0f}"
-      },
-      "per_network": {
-        "NET": {
-          "min": 0.0,
-          "max": 9000.0
-        }
-      }
-    },
-    "ps_rab_fail": {
-      "default": {
-        "min": 0.0,
-        "max": 13500.0,
-        "decimals": 0,
-        "label": "{value:,.0f}"
-      },
-      "per_network": {
-        "NET": {
-          "min": 0.0,
-          "max": 8000.0
-        }
-      }
-    },
-    "ps_s1_fail": {
-      "default": {
-        "min": 0,
-        "max": 30,
-        "decimals": 0,
-        "label": "{value:,.0f}"
-      },
-      "per_network": {
-        "NET": {
-          "min": 0.0,
-          "max": 16000.0
-        }
-      }
-    },
-    "ps_drop_abnrel": {
-      "default": {
-        "min": 0,
-        "max": 30,
-        "decimals": 0,
-        "label": "{value:,.0f}"
-      },
-      "per_network": {
-        "NET": {
-          "min": 0.0,
-          "max": 16000.0
-        }
-      }
-    },
-    "cs_rrc_fail": {
-      "default": {
-        "min": 0.0,
-        "max": 11.0,
-        "decimals": 0,
-        "label": "{value:,.0f}"
-      },
-      "per_network": {
-        "ATT": {
-          "min": 0.0,
-          "max": 30.0
-        },
-        "NET": {
-          "min": 0.0,
-          "max": 700.0
-        }
-      }
-    },
-    "cs_rab_fail": {
-      "default": {
-        "min": 0,
-        "max": 30,
-        "decimals": 0,
-        "label": "{value:,.0f}"
-      },
-      "per_network": {
-        "NET": {
-          "min": 0.0,
-          "max": 700.0
-        }
-      }
-    },
-    "cs_drop_abnrel": {
-      "default": {
-        "min": 0.0,
-        "max": 10.0,
-        "decimals": 0,
-        "label": "{value:,.0f}"
-      },
-      "per_network": {
-        "NET": {
-          "min": 0.0,
-          "max": 16000.0
-        }
-      }
-    }
+  "colors": {
+    "excelente": "#2ecc71",
+    "bueno": "#f1c40f",
+    "regular": "#e67e22",
+    "critico": "#e74c3c"
   }
 }

@@ -48,39 +48,40 @@ def umbral_callbacks(app):
         Output("progress-min", "value"),
         Output("progress-max", "value"),
         Input("umbral-metric", "value"),
-        Input("umbral-network", "value"),  # 👈 NUEVO
+        Input("umbral-network", "value"),
+        Input("umbral-table", "value"),  # 👈 NUEVO
         State("umbral-config-store", "data"),
         prevent_initial_call=True,
     )
-    def on_metric_change(metric, net_value, store):
+    def on_metric_change(metric, net_value, table_profile, store):
         from dash import no_update
         if not metric:
             raise PreventUpdate
         network = net_value or None
+        profile = table_profile or "main"
 
-        is_sev = UM_MANAGER.is_severity(metric)
-        is_prog = UM_MANAGER.is_progress(metric)
+        is_sev = UM_MANAGER.is_severity(metric, profile=profile)
+        is_prog = UM_MANAGER.is_progress(metric, profile=profile)
         scope_txt = "(Global)" if network is None else f"(Override · {network})"
+        table_txt = f"· Tabla: {profile}"
 
         if is_sev:
-            sev_cfg = UM_MANAGER.get_severity(metric, network=network) or UM_MANAGER.get_severity(metric) or {}
+            sev_cfg = (UM_MANAGER.get_severity(metric, network=network, profile=profile)
+                       or UM_MANAGER.get_severity(metric, profile=profile) or {})
             thr = sev_cfg.get("thresholds", {})
             ori = sev_cfg.get("orientation", "lower_is_better")
-            help_txt = f"Tipo: Severidad (4 colores) · Ámbito: {scope_txt} · Orientación: {'Mayor es mejor' if ori == 'higher_is_better' else 'Menor es mejor'}"
-            return (
-                False, True, help_txt,
-                thr.get("excelente"), thr.get("bueno"), thr.get("regular"), thr.get("critico"),
-                no_update, no_update
-            )
+            help_txt = f"Tipo: Severidad (4 colores) · Ámbito: {scope_txt} {table_txt} · Orientación: {'Mayor es mejor' if ori == 'higher_is_better' else 'Menor es mejor'}"
+            return (False, True, help_txt,
+                    thr.get("excelente"), thr.get("bueno"), thr.get("regular"), thr.get("critico"),
+                    no_update, no_update)
 
         if is_prog:
-            p_cfg = UM_MANAGER.get_progress(metric, network=network) or UM_MANAGER.get_progress(metric) or {}
-            help_txt = f"Tipo: Progress (min/max) · Ámbito: {scope_txt}"
-            return (
-                True, False, help_txt,
-                no_update, no_update, no_update, no_update,
-                p_cfg.get("min"), p_cfg.get("max")
-            )
+            p_cfg = (UM_MANAGER.get_progress(metric, network=network, profile=profile)
+                     or UM_MANAGER.get_progress(metric, profile=profile) or {})
+            help_txt = f"Tipo: Progress (min/max) · Ámbito: {scope_txt} {table_txt}"
+            return (True, False, help_txt,
+                    no_update, no_update, no_update, no_update,
+                    p_cfg.get("min"), p_cfg.get("max"))
 
         return True, True, "", no_update, no_update, no_update, no_update, no_update, no_update
 
@@ -93,7 +94,8 @@ def umbral_callbacks(app):
         Output("umbral-error", "children"),
         Input("umbral-save", "n_clicks"),
         State("umbral-metric", "value"),
-        State("umbral-network", "value"),  # 👈 NUEVO
+        State("umbral-network", "value"),
+        State("umbral-table", "value"),  # 👈 NUEVO
         State("sev-excelente", "value"),
         State("sev-bueno", "value"),
         State("sev-regular", "value"),
@@ -102,22 +104,22 @@ def umbral_callbacks(app):
         State("progress-max", "value"),
         prevent_initial_call=True,
     )
-    def save_metric(_, metric, net_value, ex, bu, re, cr, pmin, pmax):
+    def save_metric(_, metric, net_value, table_profile, ex, bu, re, cr, pmin, pmax):
+        from dash import no_update
         if not metric:
             raise PreventUpdate
+        network = net_value or None
+        profile = table_profile or "main"
 
-        network = net_value or None  # "" => Global
-
-        if UM_MANAGER.is_severity(metric):
+        if UM_MANAGER.is_severity(metric, profile=profile):
             vals = [ex, bu, re, cr]
             if any(v is None for v in vals):
                 return no_update, "Faltan valores en severidad.", True, True, "Complete los 4 campos."
-
-            cur = UM_MANAGER.get_severity(metric, network=network) or UM_MANAGER.get_severity(metric) or {
-                "orientation": "lower_is_better"}
+            cur = (UM_MANAGER.get_severity(metric, network=network, profile=profile)
+                   or UM_MANAGER.get_severity(metric, profile=profile)
+                   or {"orientation": "lower_is_better"})
             ori = cur.get("orientation", "lower_is_better")
             ex, bu, re, cr = map(float, [ex, bu, re, cr])
-
             if ori == "higher_is_better":
                 if not (ex >= bu >= re >= cr):
                     return no_update, "Orden inválido.", True, True, "Para 'mayor es mejor': excelente ≥ bueno ≥ regular ≥ crítico."
@@ -128,28 +130,24 @@ def umbral_callbacks(app):
             UM_MANAGER.upsert_severity(
                 metric,
                 thresholds={"excelente": ex, "bueno": bu, "regular": re, "critico": cr},
-                network=network,  # 👈 clave!
-                # orientation opcional si permites cambiarla en UI
+                network=network,
+                profile=profile,
             )
             scope = "(Global)" if network is None else f"({network})"
-            return UM_MANAGER.config(), f"Severidad guardada para {metric} {scope}.", True, False, ""
+            return UM_MANAGER.config(), f"Severidad guardada para {metric} {scope} · Tabla {profile}.", True, False, ""
 
-        if UM_MANAGER.is_progress(metric):
+        if UM_MANAGER.is_progress(metric, profile=profile):
             if pmin is None or pmax is None:
                 return no_update, "Faltan valores en progress.", True, True, "Complete min y max."
             pmin = float(pmin)
             pmax = float(pmax)
             if pmax <= pmin:
                 return no_update, "Rango inválido.", True, True, "max debe ser > min."
-
             UM_MANAGER.upsert_progress(
-                metric,
-                min_v=pmin,
-                max_v=pmax,
-                network=network,  # 👈 clave!
+                metric, min_v=pmin, max_v=pmax, network=network, profile=profile
             )
             scope = "(Global)" if network is None else f"({network})"
-            return UM_MANAGER.config(), f"Rango de progress guardado para {metric} {scope}.", True, False, ""
+            return UM_MANAGER.config(), f"Rango guardado para {metric} {scope} · Tabla {profile}.", True, False, ""
 
         return no_update, "Métrica desconocida.", True, True, "Seleccione una métrica válida."
 
