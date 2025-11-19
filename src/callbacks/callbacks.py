@@ -11,8 +11,7 @@ from components.Tables.main_table import (
 )
 import dash_bootstrap_components as dbc
 
-from src.dataAccess.data_access import fetch_kpis, fetch_kpis_paginated, COLMAP, fetch_kpis_paginated_global_sort, \
-    fetch_kpis_paginated_alarm_sort
+from src.dataAccess.data_access import fetch_kpis, fetch_kpis_paginated, COLMAP, fetch_kpis_paginated_severity_global_sort, fetch_kpis_paginated_severity_sort
 from src.config import REFRESH_INTERVAL_MS
 
 from src.Utils.utils_time import now_local
@@ -248,33 +247,42 @@ def register_callbacks(app):
             else:
                 sort_by = col
 
-        # ---------- fuente de datos (paginada) ----------
+        # ---------- fuente de datos ----------
         if sort_mode == "alarmado":
             safe_sort_state = None
-            df, total = fetch_kpis_paginated_alarm_sort(
+            df, total = fetch_kpis_paginated_severity_sort(
                 fecha=fecha, hora=hora,
                 vendors=vendors or None, clusters=clusters or None,
                 networks=networks or None, technologies=technologies or None,
                 page=page, page_size=page_size,
             )
+
+
+
         else:
-            safe_sort_state = sort_state
+            # Nuevo GLOBAL basado en profiles.main.severity
+            safe_sort_state = None  # 👈 importante para no reordenar en render
             if sort_by in COLMAP:
-                df, total = fetch_kpis_paginated_global_sort(
+                df, total = fetch_kpis_paginated_severity_global_sort(
                     fecha=fecha, hora=hora,
                     vendors=vendors or None, clusters=clusters or None,
                     networks=networks or None, technologies=technologies or None,
                     page=page, page_size=page_size,
-                    sort_by_friendly=sort_by, sort_net=sort_net, ascending=ascending,
-                )
-            else:
-                df, total = fetch_kpis_paginated(
-                    fecha=fecha, hora=hora,
-                    vendors=vendors or None, clusters=clusters or None,
-                    networks=networks or None, technologies=technologies or None,
-                    page=page, page_size=page_size,
+                    sort_by_friendly=sort_by,
+                    sort_net=sort_net,
+                    ascending=ascending,
                 )
 
+            else:
+                df, total = fetch_kpis_paginated_severity_global_sort(
+                    fecha=fecha, hora=hora,
+                    vendors=vendors or None, clusters=clusters or None,
+                    networks=networks or None, technologies=technologies or None,
+                    page=page, page_size=page_size,
+                    sort_by_friendly=None,
+                    sort_net=None,
+                    ascending=True,
+                )
         # ---------- si no hay df -> alert ----------
         if df is None or df.empty:
             store_payload = {"columns": [], "rows": []}
