@@ -53,51 +53,29 @@ def _max_date_str(series: pd.Series) -> str | None:
     except Exception:
         return None
 
-def _hora_to_int(series) -> pd.Series:
+def _normalize_profile_cfg(cfg: dict, profile: str = "main") -> dict:
     """
-    Convierte 'HH:MM:SS' o enteros/strings a 0..23; inválidos -> NaN.
+    Si cfg viene con estructura completa (version, profiles, colors),
+    devuelve cfg['profiles'][profile]. Si ya es un perfil, lo regresa tal cual.
     """
-    s = series.astype(str).str.split(":", n=1, expand=True)[0]
-    s = pd.to_numeric(s, errors="coerce")
-    s = s.where((s >= 0) & (s <= 23))
-    return s
-
-
-def _key_label(tech, vend, clus, net, valores):
-    return f"{tech}/{vend}/{clus}/{net}/{valores}"
-
-def build_series_index(df_ts: pd.DataFrame, metrics: set[str]) -> dict:
-    """
-    Indexa df_ts por (fecha, technology, vendor, cluster, network, metric) -> lista 24
-    """
-    if df_ts is None or df_ts.empty:
+    if not isinstance(cfg, dict):
         return {}
 
-    need_cols = {"fecha","hora","technology","vendor","noc_cluster","network"} | set(metrics)
-    miss = [c for c in need_cols if c not in df_ts.columns]
-    if miss:
-        return {}
+    # Si ya parece un perfil (tiene 'severity' o 'progress'), lo dejamos.
+    if "severity" in cfg or "progress" in cfg:
+        return cfg
 
-    df = df_ts.copy()
-    df["fecha"] = pd.to_datetime(df["fecha"]).dt.strftime("%Y-%m-%d")
+    # Si viene con 'profiles', bajamos al perfil
+    profiles = cfg.get("profiles")
+    if isinstance(profiles, dict):
+        return profiles.get(profile) or {}
 
-    index = {}
-    cols_key = ["fecha","technology","vendor","noc_cluster","network"]
-    for (fecha, tech, vend, clus, net), grp in df.groupby(cols_key, sort=False):
-        for metric in metrics:
-            out = _empty24()
-            if metric in grp.columns:
-                for _, r in grp.iterrows():
-                    idx = _safe_hour_to_idx(r["hora"])
-                    if idx is None:
-                        continue
-                    val = r.get(metric, None)
-                    out[idx] = (val if isinstance(val,(int,float)) else None)
-            index[(fecha, tech, vend, clus, net, metric)] = out
-    return index
+    return cfg or {}
+
 
 def _sev_cfg(metric: str, net: str | None, cfg: dict):
     """Obtiene thresholds y orientación para métricas de % (severity)."""
+    cfg = _normalize_profile_cfg(cfg, profile="main")   # 👈 NUEVO
     s = (cfg.get("severity") or {}).get(metric) or {}
     # soporta tanto {"orientation":..., "thresholds":{...}} como {"default":{...}, "per_network":{...}}
     if "thresholds" in s:
@@ -117,25 +95,9 @@ def _sev_cfg(metric: str, net: str | None, cfg: dict):
         thr.setdefault(k, thr.get("regular", 0.0))
     return orient, thr
 
-def _sev_bucket(value: float | None, orient: str, thr: dict) -> int | None:
-    if value is None:
-        return None
-    v = float(value)
-    # Solo implementamos lower_is_better (tu JSON usa eso). Para higher_is_better invierte.
-    if orient == "higher_is_better":
-        # Invertimos los cortes (mejor alto)
-        if v >= thr["excelente"]: return 0
-        elif v >= thr["bueno"]:   return 1
-        elif v >= thr["regular"]: return 2
-        else:                     return 3
-    else:  # lower_is_better
-        if v <= thr["excelente"]: return 0
-        elif v <= thr["bueno"]:   return 1
-        elif v <= thr["regular"]: return 2
-        else:                     return 3
-
 def _prog_cfg(metric: str, net: str | None, cfg: dict):
     """Obtiene min/max para métricas UNIT (progress), con per_network si existe."""
+    cfg = _normalize_profile_cfg(cfg, profile="main")
     p = (cfg.get("progress") or {}).get(metric) or {}
     if "default" in p or "per_network" in p:
         d = p.get("default") or {}
@@ -232,6 +194,61 @@ def _hm_height(nrows: int) -> int:
     total   = MARG_TOP + content + MARG_BOTTOM + EXTRA
     return int(round(total))
 
+
+def _sev_score(value: float | None, orient: str, thr: dict) -> float | None:
+    if value is None:
+        return None
+
+    v = float(value)
+    exc = float(thr["excelente"])
+    cri = float(thr["critico"])
+    if cri == exc:
+        return 0.0  # evita división por cero
+
+    if orient == "higher_is_better":
+        # invertimos: valores altos son buenos
+        r = (cri - v) / (cri - exc)  # 0 en crítico, 1 en excelente
+    else:
+        # lower_is_better: valores bajos son buenos
+        r = (v - exc) / (cri - exc)  # 0 en excelente, 1 en crítico
+
+    # clamp 0..1
+    r = max(0.0, min(1.0, r))
+
+    # escala a 0..3 (como antes), pero continuo
+    return 3.0 * r
+
+def _sev_score_continuo(value: float | None, orient: str, thr: dict, max_ratio: float = 2.0) -> float | None:
+    """
+    Devuelve un score continuo basado en thresholds:
+      - 0   ~ excelente
+      - 1   ~ crítico
+      - >1  ~ peor que crítico (hasta max_ratio)
+    Se usa como z en el heatmap de %.
+    """
+    if value is None:
+        return None
+
+    v = float(value)
+    exc = float(thr.get("excelente", 0.0))
+    cri = float(thr.get("critico", exc))
+
+    if cri == exc:  # evita división por cero
+        return 0.0
+
+    if orient == "higher_is_better":
+        # valores altos son buenos → peor cuando se baja
+        r = (cri - v) / (cri - exc)   # 0 en crítico, 1 en excelente
+        r = 1.0 - r                   # 0 en excelente, 1 en crítico
+    else:
+        # lower_is_better (tu caso): valores altos son peores
+        r = (v - exc) / (cri - exc)   # 0 en excelente, 1 en crítico
+
+    # dejamos que se pase un poco de 1 para ver más “rojez”
+    r = max(0.0, min(r, max_ratio))   # 0..max_ratio
+
+    return r
+
 # =========================
 # Payloads de heatmap (48 columnas: Ayer 0–23 | Hoy 24–47) con paginado
 # =========================
@@ -249,28 +266,41 @@ def build_heatmap_payloads_fast(
     offset=0,
     limit=5,
 ):
-    import numpy as np
-
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
+    # --- redes a usar ---
     if networks is None or not networks:
         networks = _infer_networks(df_ts if df_ts is not None else df_meta)
     if not networks:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
+    # --- fechas hoy/ayer ---
     if today is None:
-        today = _max_date_str(df_ts["fecha"]) if (df_ts is not None and "fecha" in df_ts.columns) else _day_str(datetime.now())
+        if df_ts is not None and "fecha" in df_ts.columns:
+            today = _max_date_str(df_ts["fecha"]) or _day_str(datetime.now())
+        else:
+            today = _day_str(datetime.now())
     if yday is None:
         yday = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    metrics_needed = {m for v in valores_order for m in VALORES_MAP.get(v, (None, None)) if m}
+    # --- métricas requeridas (pct + unit) ---
+    metrics_needed = {
+        m
+        for v in valores_order
+        for m in VALORES_MAP.get(v, (None, None))
+        if m
+    }
     if not metrics_needed:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
+    # --- cartesian (meta x networks) ---
     meta_cols = ["technology", "vendor", "noc_cluster"]
     base = df_meta.drop_duplicates(subset=meta_cols)[meta_cols].reset_index(drop=True)
-    rows_full = base.assign(_tmp=1).merge(pd.DataFrame({"network": networks, "_tmp": 1}), on="_tmp").drop(columns="_tmp")
+    rows_full = base.assign(_tmp=1).merge(
+        pd.DataFrame({"network": networks, "_tmp": 1}),
+        on="_tmp"
+    ).drop(columns="_tmp")
 
     rows_all_list = []
     for v in valores_order:
@@ -281,40 +311,57 @@ def build_heatmap_payloads_fast(
             mask = list(zip(rf["technology"], rf["vendor"], rf["noc_cluster"], rf["network"]))
             rf = rf[[m in keys_ok for m in mask]]
         rows_all_list.append(rf)
+
+    if not rows_all_list:
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+
     rows_all = pd.concat(rows_all_list, ignore_index=True)
 
-    # ---- OPTIMIZADO: calcular Max UNIT en un pass ----
+    # ---- Max UNIT en ayer/hoy (para ordenar filas) ----
     if df_ts is not None and not df_ts.empty:
         um_cols = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
         if um_cols:
-            df_long = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]),
-                                ["technology","vendor","noc_cluster","network"]+um_cols]
-            df_long = df_long.melt(id_vars=["technology","vendor","noc_cluster","network"],
-                                   value_vars=um_cols,
-                                   var_name="metric", value_name="value")
+            df_long = df_ts.loc[
+                df_ts["fecha"].astype(str).isin([yday, today]),
+                ["technology","vendor","noc_cluster","network"] + um_cols
+            ]
+            df_long = df_long.melt(
+                id_vars=["technology","vendor","noc_cluster","network"],
+                value_vars=um_cols,
+                var_name="metric",
+                value_name="value",
+            )
             UM_TO_VAL = {um: name for name, (_, um) in VALORES_MAP.items() if um}
             df_long["valores"] = df_long["metric"].map(UM_TO_VAL)
-            df_maxu = (df_long.dropna(subset=["valores"])
-                               .groupby(["technology","vendor","noc_cluster","network","valores"], as_index=False)["value"]
-                               .max()
-                               .rename(columns={"value":"max_unit"}))
-            rows_all = rows_all.merge(df_maxu,
-                                      on=["technology","vendor","noc_cluster","network","valores"],
-                                      how="left")
+
+            df_maxu = (
+                df_long
+                .dropna(subset=["valores"])
+                .groupby(["technology","vendor","noc_cluster","network","valores"], as_index=False)["value"]
+                .max()
+                .rename(columns={"value":"max_unit"})
+            )
+            rows_all = rows_all.merge(
+                df_maxu,
+                on=["technology","vendor","noc_cluster","network","valores"],
+                how="left"
+            )
         else:
             rows_all["max_unit"] = np.nan
     else:
         rows_all["max_unit"] = np.nan
 
+    # ---- ordenar filas por max_unit DESC ----
     rows_all["__ord_max_unit__"] = rows_all["max_unit"].astype(float).fillna(float("-inf"))
     rows_all = rows_all.sort_values("__ord_max_unit__", ascending=False, kind="stable")
 
-    # --- paginado
+    # --- paginado ---
     total_rows = len(rows_all)
-    start = max(0, int(offset)); end = start + max(1, int(limit))
+    start = max(0, int(offset))
+    end = start + max(1, int(limit))
     rows_page = rows_all.iloc[start:end].reset_index(drop=True)
 
-    # --- df_small reducido
+    # --- df_small reducido (TS solo de las keys visibles) ---
     if df_ts is None or df_ts.empty:
         df_small = pd.DataFrame()
         keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
@@ -322,14 +369,18 @@ def build_heatmap_payloads_fast(
     else:
         keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
         keys_df["rid"] = np.arange(len(keys_df))
-        df_small = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today])].merge(keys_df, on=["technology","vendor","noc_cluster","network"])
+
+        df_small = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today])].merge(
+            keys_df,
+            on=["technology","vendor","noc_cluster","network"]
+        )
         hh = df_small["hora"].astype(str).str.split(":", n=1, expand=True)[0]
-        df_small["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s>=0)&(s<=23))
-        df_small["offset48"] = df_small["h"] + np.where(df_small["fecha"].astype(str)==today, 24, 0)
+        df_small["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s >= 0) & (s <= 23))
+        df_small["offset48"] = df_small["h"] + np.where(df_small["fecha"].astype(str) == today, 24, 0)
         df_small = df_small.dropna(subset=["offset48"])
         df_small["offset48"] = df_small["offset48"].astype(int)
 
-    # --- diccionarios (rid, offset48) → valor
+    # --- diccionarios (rid, offset48) → valor por métrica ---
     metric_maps = {}
     if not df_small.empty:
         for m in metrics_needed:
@@ -339,67 +390,159 @@ def build_heatmap_payloads_fast(
             else:
                 metric_maps[m] = {}
     else:
-        metric_maps = {m:{} for m in metrics_needed}
+        metric_maps = {m: {} for m in metrics_needed}
 
     def _row48_raw(metric, rid):
         mp = metric_maps.get(metric)
-        if not mp: return [None]*48
+        if not mp:
+            return [None] * 48
         return [mp.get((rid, off)) for off in range(48)]
 
-    # --- matrices y stats
-    x_dt = [f"{yday}T{h:02d}:00:00" for h in range(24)] + [f"{today}T{h:02d}:00:00" for h in range(24)]
-    z_pct, z_unit, z_pct_raw, z_unit_raw = [], [], [], []
+    # --- matrices y stats ---
+    x_dt = [
+        f"{yday}T{h:02d}:00:00" for h in range(24)
+    ] + [
+        f"{today}T{h:02d}:00:00" for h in range(24)
+    ]
+
+    z_pct, z_unit = [], []
+    z_pct_raw, z_unit_raw = [], []
+
     y_labels, row_detail = [], []
     row_last_ts, row_max_pct, row_max_unit = [], [], []
 
+    all_scores_pct = []
+    all_scores_unit = []
+
     for rid, r in enumerate(rows_page.itertuples(index=False)):
-        tech, vend, clus, net, valores = r.technology, r.vendor, r.noc_cluster, r.network, r.valores
-        pm, um = VALORES_MAP.get(valores, (None,None))
+        tech, vend, clus, net, valores = (
+            r.technology,
+            r.vendor,
+            r.noc_cluster,
+            r.network,
+            r.valores,
+        )
+        pm, um = VALORES_MAP.get(valores, (None, None))
 
         y_labels.append(f"{clus} | {tech}/{vend}/{valores}")
         row_detail.append(f"{tech}/{vend}/{clus}/{net}/{valores}")
 
-        row_raw = _row48_raw(pm, rid) if pm else [None]*48
-        row_raw_u = _row48_raw(um, rid) if um else [None]*48
+        row_raw = _row48_raw(pm, rid) if pm else [None] * 48
+        row_raw_u = _row48_raw(um, rid) if um else [None] * 48
 
+        # --- % (severity) → score continuo basado en umbrales JSON ---
         if pm:
             orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
-            row_color = [_sev_bucket(v, orient, thr) if v is not None else None for v in row_raw]
-            z_pct.append(row_color); z_pct_raw.append(row_raw)
-        else:
-            z_pct.append([None]*48); z_pct_raw.append(row_raw)
+            row_color = [
+                _sev_score_continuo(v, orient, thr, max_ratio=2.0) if v is not None else None
+                for v in row_raw
+            ]
+            z_pct.append(row_color)
+            z_pct_raw.append(row_raw)
 
+            for s in row_color:
+                if s is not None:
+                    all_scores_pct.append(s)
+        else:
+            z_pct.append([None] * 48)
+            z_pct_raw.append(row_raw)
+
+        # --- UNIT (progress) → normalizado por min/max de config ---
         if um:
             mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
-            row_norm = [_normalize(v, mn, mx) if v is not None else None for v in row_raw_u]
-            z_unit.append(row_norm); z_unit_raw.append(row_raw_u)
-        else:
-            z_unit.append([None]*48); z_unit_raw.append(row_raw_u)
+            row_norm = [
+                _normalize(v, mn, mx) if v is not None else None
+                for v in row_raw_u
+            ]
+            z_unit.append(row_norm)
+            z_unit_raw.append(row_raw_u)
 
-        arr_u = np.array([v if isinstance(v,(int,float)) else np.nan for v in row_raw_u], float)
-        arr_p = np.array([v if isinstance(v,(int,float)) else np.nan for v in row_raw], float)
+            for s in row_norm:
+                if s is not None:
+                    all_scores_unit.append(s)
+        else:
+            z_unit.append([None] * 48)
+            z_unit_raw.append(row_raw_u)
+
+        # --- stats por fila (última muestra / máximos) ---
+        arr_u = np.array(
+            [v if isinstance(v, (int, float)) else np.nan for v in row_raw_u],
+            float
+        )
+        arr_p = np.array(
+            [v if isinstance(v, (int, float)) else np.nan for v in row_raw],
+            float
+        )
+
         if np.isfinite(arr_u).any():
             rmax_u = np.nanmax(arr_u)
             valid_idx = np.where(np.isfinite(arr_u))[0]
         else:
             rmax_u = np.nan
             valid_idx = np.where(np.isfinite(arr_p))[0]
+
         rmax_p = np.nanmax(arr_p) if np.isfinite(arr_p).any() else np.nan
+
         if valid_idx.size:
-            last_label = str(x_dt[int(valid_idx[-1])]).replace("T"," ")[:16]
+            last_label = str(x_dt[int(valid_idx[-1])]).replace("T", " ")[:16]
         else:
             last_label = ""
+
         row_last_ts.append(last_label)
-        row_max_pct.append(rmax_p); row_max_unit.append(rmax_u)
+        row_max_pct.append(rmax_p)
+        row_max_unit.append(rmax_u)
 
-    pct_payload = {"z":z_pct,"z_raw":z_pct_raw,"x_dt":x_dt,"y":y_labels,"color_mode":"severity",
-                   "zmin":-0.5,"zmax":3.5,"title":"% IA / % DC","row_detail":row_detail,
-                   "row_last_ts":row_last_ts,"row_max_pct":row_max_pct,"row_max_unit":row_max_unit}
-    unit_payload = {"z":z_unit,"z_raw":z_unit_raw,"x_dt":x_dt,"y":y_labels,"color_mode":"progress",
-                    "zmin":0.0,"zmax":1.0,"title":"Unidades","row_detail":row_detail,
-                    "row_last_ts":row_last_ts,"row_max_pct":row_max_pct,"row_max_unit":row_max_unit}
+    # --- rangos dinámicos para color (% y UNIT) ---
+    if all_scores_pct:
+        zmin_pct = min(all_scores_pct)
+        zmax_pct = max(all_scores_pct)
+    else:
+        zmin_pct, zmax_pct = 0.0, 1.0
 
-    page_info = {"total_rows": total_rows, "offset": start, "limit": limit, "showing": len(rows_page)}
+    if all_scores_unit:
+        zmin_unit = min(all_scores_unit)
+        zmax_unit = max(all_scores_unit)
+    else:
+        zmin_unit, zmax_unit = 0.0, 1.0
+
+    # --- payloads ---
+    pct_payload = {
+        "z": z_pct,
+        "z_raw": z_pct_raw,
+        "x_dt": x_dt,
+        "y": y_labels,
+        "color_mode": "severity",
+        "zmin": zmin_pct,
+        "zmax": zmax_pct,
+        "title": "% IA / % DC",
+        "row_detail": row_detail,
+        "row_last_ts": row_last_ts,
+        "row_max_pct": row_max_pct,
+        "row_max_unit": row_max_unit,
+    }
+
+    unit_payload = {
+        "z": z_unit,
+        "z_raw": z_unit_raw,
+        "x_dt": x_dt,
+        "y": y_labels,
+        "color_mode": "progress",
+        "zmin": zmin_unit,
+        "zmax": zmax_unit,
+        "title": "Unidades",
+        "row_detail": row_detail,
+        "row_last_ts": row_last_ts,
+        "row_max_pct": row_max_pct,
+        "row_max_unit": row_max_unit,
+    }
+
+    page_info = {
+        "total_rows": total_rows,
+        "offset": start,
+        "limit": limit,
+        "showing": len(rows_page),
+    }
+
     return pct_payload, unit_payload, page_info
 
 
