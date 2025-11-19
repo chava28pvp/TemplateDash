@@ -256,7 +256,7 @@ def build_heatmap_payloads_fast(
     df_meta: pd.DataFrame,
     df_ts: pd.DataFrame,
     *,
-    UMBRAL_CFG: dict,
+    UMBRAL_CFG: dict,   # ya no se usa para colores, pero lo dejamos en la firma
     networks=None,
     valores_order=("PS_RCC","CS_RCC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
     today=None,
@@ -405,14 +405,11 @@ def build_heatmap_payloads_fast(
         f"{today}T{h:02d}:00:00" for h in range(24)
     ]
 
-    z_pct, z_unit = [], []
     z_pct_raw, z_unit_raw = [], []
+    z_pct, z_unit = [], []
 
     y_labels, row_detail = [], []
     row_last_ts, row_max_pct, row_max_unit = [], [], []
-
-    all_scores_pct = []
-    all_scores_unit = []
 
     for rid, r in enumerate(rows_page.itertuples(index=False)):
         tech, vend, clus, net, valores = (
@@ -430,39 +427,32 @@ def build_heatmap_payloads_fast(
         row_raw = _row48_raw(pm, rid) if pm else [None] * 48
         row_raw_u = _row48_raw(um, rid) if um else [None] * 48
 
-        # --- % (severity) → score continuo basado en umbrales JSON ---
-        if pm:
-            orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
-            row_color = [
-                _sev_score_continuo(v, orient, thr, max_ratio=2.0) if v is not None else None
-                for v in row_raw
+        z_pct_raw.append(row_raw)
+        z_unit_raw.append(row_raw_u)
+
+        # --- normalización POR FILA (%)
+        def _norm_row(row):
+            vals = [
+                float(v) for v in row
+                if isinstance(v, (int, float)) and np.isfinite(v)
             ]
-            z_pct.append(row_color)
-            z_pct_raw.append(row_raw)
+            if not vals:
+                return [None] * len(row)
+            vmin = min(vals)
+            vmax = max(vals)
+            if vmax <= vmin:
+                # todos iguales → pon 0.5 para que se vea al menos un color medio
+                return [0.5 if isinstance(v, (int, float)) and np.isfinite(v) else None for v in row]
+            out = []
+            for v in row:
+                if not isinstance(v, (int, float)) or not np.isfinite(v):
+                    out.append(None)
+                else:
+                    out.append(_normalize(v, vmin, vmax))  # 0..1
+            return out
 
-            for s in row_color:
-                if s is not None:
-                    all_scores_pct.append(s)
-        else:
-            z_pct.append([None] * 48)
-            z_pct_raw.append(row_raw)
-
-        # --- UNIT (progress) → normalizado por min/max de config ---
-        if um:
-            mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
-            row_norm = [
-                _normalize(v, mn, mx) if v is not None else None
-                for v in row_raw_u
-            ]
-            z_unit.append(row_norm)
-            z_unit_raw.append(row_raw_u)
-
-            for s in row_norm:
-                if s is not None:
-                    all_scores_unit.append(s)
-        else:
-            z_unit.append([None] * 48)
-            z_unit_raw.append(row_raw_u)
+        z_pct.append(_norm_row(row_raw))
+        z_unit.append(_norm_row(row_raw_u))
 
         # --- stats por fila (última muestra / máximos) ---
         arr_u = np.array(
@@ -492,28 +482,15 @@ def build_heatmap_payloads_fast(
         row_max_pct.append(rmax_p)
         row_max_unit.append(rmax_u)
 
-    # --- rangos dinámicos para color (% y UNIT) ---
-    if all_scores_pct:
-        zmin_pct = min(all_scores_pct)
-        zmax_pct = max(all_scores_pct)
-    else:
-        zmin_pct, zmax_pct = 0.0, 1.0
-
-    if all_scores_unit:
-        zmin_unit = min(all_scores_unit)
-        zmax_unit = max(all_scores_unit)
-    else:
-        zmin_unit, zmax_unit = 0.0, 1.0
-
-    # --- payloads ---
+    # --- payloads (z ya está 0..1 por FILA) ---
     pct_payload = {
         "z": z_pct,
         "z_raw": z_pct_raw,
         "x_dt": x_dt,
         "y": y_labels,
-        "color_mode": "severity",
-        "zmin": zmin_pct,
-        "zmax": zmax_pct,
+        "color_mode": "severity",   # % → rojo
+        "zmin": 0.0,
+        "zmax": 1.0,
         "title": "% IA / % DC",
         "row_detail": row_detail,
         "row_last_ts": row_last_ts,
@@ -526,9 +503,9 @@ def build_heatmap_payloads_fast(
         "z_raw": z_unit_raw,
         "x_dt": x_dt,
         "y": y_labels,
-        "color_mode": "progress",
-        "zmin": zmin_unit,
-        "zmax": zmax_unit,
+        "color_mode": "progress",   # UNIT → azul
+        "zmin": 0.0,
+        "zmax": 1.0,
         "title": "Unidades",
         "row_detail": row_detail,
         "row_last_ts": row_last_ts,
@@ -559,7 +536,7 @@ def build_heatmap_figure(
     if not payload:
         return go.Figure()
 
-    z       = payload["z"]                 # z para COLOR (clase 0..3 o 0..1)
+    z       = payload["z"]                 # z normalizado 0..1
     z_raw   = payload.get("z_raw") or z    # valores reales para hover
     x       = payload.get("x_dt") or payload.get("x")  # usamos datetime si existe
     y       = payload["y"]
@@ -568,18 +545,24 @@ def build_heatmap_figure(
     mode    = payload.get("color_mode", "severity")
     detail  = payload.get("row_detail") or y
 
-    # ----- Colores según modo -----
+    # ----- Colores según modo (puro rojo / puro azul) -----
     if mode == "severity":
+        # % → ROJOS (de claro a muy intenso)
         colorscale = [
-            [0/3, SEV_COLORS["excelente"]],
-            [1/3, SEV_COLORS["bueno"]],
-            [2/3, SEV_COLORS["regular"]],
-            [3/3, SEV_COLORS["critico"]],
+            [0.00, "#fff5f5"],  # casi blanco-rosa
+            [0.25, "#ffc6c6"],  # rojo muy claro
+            [0.50, "#ff7f7f"],  # rojo medio
+            [0.75, "#ff3030"],  # rojo fuerte
+            [1.00, "#800000"],  # rojo muy oscuro
         ]
-    else:  # progress
+    else:  # progress (UNIT)
+        # UNIT → AZULES
         colorscale = [
-            [0.0, "#f8f9fa"],
-            [1.0, "#0d6efd"],
+            [0.00, "#f8f9fa"],  # blanco roto
+            [0.25, "#d0e3ff"],  # azul muy claro
+            [0.50, "#7fb3ff"],  # azul medio
+            [0.75, "#1f78ff"],  # azul intenso
+            [1.00, "#001f7f"],  # azul muy oscuro
         ]
 
     # ----- customdata por celda (DETALLE COMPLETO; sin cambios) -----
@@ -641,8 +624,8 @@ def build_heatmap_figure(
     fig.update_xaxes(
         type="date",
         dtick=THREE_H_MS,
-        showticklabels=False,  # 👈 sin etiquetas
-        ticks="",              # 👈 sin marcas
+        showticklabels=False,
+        ticks="",
         showgrid=False,
         ticklabelmode="instant",
         fixedrange=True,
@@ -663,17 +646,16 @@ def build_heatmap_figure(
         autorange="reversed",
     )
 
-    # Línea de corte entre días (opcional)
+    # Línea de corte entre días
     if isinstance(x, (list, tuple)) and len(x) >= 25:
         fig.add_vline(
             x=x[24],
-            line_width=3,  # más gruesa
-            line_color="rgba(0,0,0,0.75)",  # oscuro
+            line_width=3,
+            line_color="rgba(0,0,0,0.75)",
             line_dash="solid",
-            layer="above"  # por encima del heatmap
+            layer="above"
         )
 
-    # Márgenes ultra compactos; MARG_BOTTOM debe coincidir con _hm_height
     fig.update_layout(
         autosize=False,
         height=height,
@@ -685,6 +667,7 @@ def build_heatmap_figure(
     )
 
     return fig
+
 
 
 def render_heatmap_summary_table(pct_payload, unit_payload, *, pct_decimals=2, unit_decimals=0, asset_url_getter=None, active_y=None):
