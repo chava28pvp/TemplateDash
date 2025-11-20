@@ -102,6 +102,9 @@ SEVERITY_COLS = {
     "rtx_tnl_tx_percent",  # ← también es porcentaje
 }
 
+NON_COMPACT_KEYS = {"fecha", "hora", "nodeb"}
+
+
 # =============== Helpers ===============
 
 def _fmt(v, col=None):
@@ -234,9 +237,28 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
         # keys
         for k in ROW_KEYS:
             val = r.get(k, None)
+            text = _fmt(val, k)
+
+            # clases base
+            cell_classes = ["cell-key"]
+            # si no está en NON_COMPACT_KEYS, la hacemos compacta + hover
+            if k in NON_COMPACT_KEYS:
+                cell_classes.append("cell-key--wide")
+                title = None  # sin tooltip, ya mostramos todo
+            else:
+                cell_classes.append("cell-key--compact")
+                # tooltip con el valor completo
+                title = "" if val is None else str(val)
+
+            div_kwargs = {
+                "className": " ".join(cell_classes),
+            }
+            if title:
+                div_kwargs["title"] = title  # atributo HTML nativo para hover
+
             tds.append(
                 html.Td(
-                    html.Div(_fmt(val, k), className="cell-key"),
+                    html.Div(text, **div_kwargs),
                     className=f"td-key td-{k}",
                 )
             )
@@ -282,6 +304,6 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
         className="kpi-table compact",
     )
     return dbc.Card(
-        dbc.CardBody([html.H4("TopOff - Tabla", className="mb-3"), table]),
+        dbc.CardBody(table),
         className="shadow-sm",
     )

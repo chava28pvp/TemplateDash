@@ -1,10 +1,12 @@
-# src/topoff_data_access.py
+# src/dataAccess/data_acess_topoff.py
 from functools import lru_cache
 from typing import List, Tuple, Dict, Optional
+from datetime import datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import create_engine, text, bindparam
 
+from src.Utils.alarmados import load_threshold_cfg
 from src.config import SQLALCHEMY_URL
 
 # =========================================================
@@ -23,12 +25,10 @@ def get_engine():
 
 # =========================================================
 # Column mapping (friendly -> real DB column)
-# OJO: nombres con % o / requieren backticks
 # =========================================================
 COLMAP = {
-    # Identificadores / claves de negocio
     "id": "ID",
-    "tech": "Tech",  # columna antigua, la mantenemos por compatibilidad
+    "tech": "Tech",
     "technology": "Technology",
     "vendor": "Vendor",
     "region": "REGION",
@@ -36,8 +36,6 @@ COLMAP = {
     "municipality": "MUNICIPALITY",
     "fecha": "DATE",
     "hora": "TIME",
-
-    # Info de sitio
     "site_att": "SITE_ATT",
     "rnc": "RNC",
     "nodeb": "NODEB",
@@ -62,7 +60,7 @@ COLMAP = {
     "cs_drop_dc_percent": "CS_DROP_%DC",
     "cs_drop_abnrel": "CS_DROP_ABNREL",
 
-    # indisponibilidad / TNL
+    # TNL / Unav
     "unav": "Unav",
     "rtx_tnl_tx_percent": "3G_RTX/4G_TNL_%Tx",
     "tnl_abn": "TNL_ABN",
@@ -73,52 +71,35 @@ COLMAP = {
     "fecha_ejecucion": "Fecha_Ejecucion",
 }
 
-# columnas “amigables” que devolvemos por defecto
 BASE_COLUMNS = [
-    "fecha",
-    "hora",
-    "technology",
-    "vendor",
-    "region",
-    "province",
-    "municipality",
-    "site_att",
-    "rnc",
-    "nodeb",
-    "ps_traff_gb",
-    "ps_rrc_ia_percent",
-    "ps_rrc_fail",
-    "ps_rab_ia_percent",
-    "ps_rab_fail",
-    "ps_s1_ia_percent",
-    "ps_s1_fail",
-    "ps_drop_dc_percent",
-    "ps_drop_abnrel",
-    "cs_traff_erl",
-    "cs_rrc_ia_percent",
-    "cs_rrc_fail",
-    "cs_rab_ia_percent",
-    "cs_rab_fail",
-    "cs_drop_dc_percent",
-    "cs_drop_abnrel",
-    "unav",
-    "rtx_tnl_tx_percent",
-    "tnl_abn",
-    "tnl_fail",
-    "archivo_fuente",
-    "fecha_ejecucion",
+    "fecha", "hora", "technology", "vendor", "region", "province",
+    "municipality", "site_att", "rnc", "nodeb",
+    "ps_traff_gb", "ps_rrc_ia_percent", "ps_rrc_fail",
+    "ps_rab_ia_percent", "ps_rab_fail",
+    "ps_s1_ia_percent", "ps_s1_fail",
+    "ps_drop_dc_percent", "ps_drop_abnrel",
+    "cs_traff_erl", "cs_rrc_ia_percent", "cs_rrc_fail",
+    "cs_rab_ia_percent", "cs_rab_fail",
+    "cs_drop_dc_percent", "cs_drop_abnrel",
+    "unav", "rtx_tnl_tx_percent", "tnl_abn", "tnl_fail",
+    "archivo_fuente", "fecha_ejecucion",
 ]
 
-# columnas mínimas “seguras” si algo raro pasa con la resolución
 _MIN_SAFE_COLUMNS = [
-    "fecha",
-    "hora",
-    "technology",
-    "vendor",
-    "region",
-    "province",
-    "municipality",
+    "fecha", "hora", "technology", "vendor", "region", "province", "municipality",
 ]
+
+_SEVERITY_KPIS_TOPOFF = [
+    "ps_rrc_ia_percent",
+    "ps_rab_ia_percent",
+    "ps_s1_ia_percent",
+    "ps_drop_dc_percent",
+    "cs_rrc_ia_percent",
+    "cs_rab_ia_percent",
+    "cs_drop_dc_percent",
+    "rtx_tnl_tx_percent",
+]
+
 
 # =========================================================
 # Helpers internos
@@ -138,6 +119,10 @@ def _prepare_stmt_with_expanding(
     use_muns=False,
     use_technologies=False,
     use_vendors=False,
+    use_fechas=False,
+    use_sites=False,
+    use_rncs=False,
+    use_nodebs=False,
 ):
     stmt = text(sql)
     if use_regions:
@@ -150,6 +135,14 @@ def _prepare_stmt_with_expanding(
         stmt = stmt.bindparams(bindparam("technologies", expanding=True))
     if use_vendors:
         stmt = stmt.bindparams(bindparam("vendors", expanding=True))
+    if use_fechas:
+        stmt = stmt.bindparams(bindparam("fechas", expanding=True))
+    if use_sites:
+        stmt = stmt.bindparams(bindparam("sites", expanding=True))
+    if use_rncs:
+        stmt = stmt.bindparams(bindparam("rncs", expanding=True))
+    if use_nodebs:
+        stmt = stmt.bindparams(bindparam("nodebs", expanding=True))
     return stmt
 
 
@@ -162,6 +155,18 @@ def _as_list(x):
         s = x.strip()
         return [s] if s else []
     return [x]
+
+
+def _fecha_with_prev(fecha: Optional[str]) -> List[str]:
+    """Devuelve [fecha, fecha-1día] si fecha es válida YYYY-MM-DD."""
+    if not fecha:
+        return []
+    try:
+        d = datetime.strptime(fecha, "%Y-%m-%d").date()
+        prev = (d - timedelta(days=1)).strftime("%Y-%m-%d")
+        return [fecha, prev]
+    except Exception:
+        return [fecha]
 
 
 @lru_cache(maxsize=1)
@@ -185,11 +190,8 @@ def _resolve_columns(requested_friendly_cols: List[str]) -> List[str]:
         real = COLMAP.get(friendly)
         if real and real in existing_real:
             cols.append(friendly)
-
     if cols:
         return cols
-
-    # fallback seguro mínimo
     fallback = [c for c in _MIN_SAFE_COLUMNS if COLMAP.get(c) in existing_real]
     return fallback
 
@@ -209,20 +211,31 @@ def _select_list_with_aliases(friendly_cols: List[str]) -> List[str]:
 
 def _filters_where_and_params(
     fecha: Optional[str] = None,
+    fechas: Optional[List[str]] = None,
     hora: Optional[str] = None,
     regions: Optional[List[str]] = None,
     provinces: Optional[List[str]] = None,
     municipalities: Optional[List[str]] = None,
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
+    sites: Optional[List[str]] = None,
+    rncs: Optional[List[str]] = None,
+    nodebs: Optional[List[str]] = None,
 ):
     where = ["1=1"]
     params: Dict[str, object] = {}
 
-    if fecha:
+    # fechas
+    use_fechas = False
+    if fechas:
+        where.append(f"{_quote(COLMAP['fecha'])} IN :fechas")
+        params["fechas"] = fechas
+        use_fechas = True
+    elif fecha:
         where.append(f"{_quote(COLMAP['fecha'])} = :fecha")
         params["fecha"] = fecha
 
+    # hora (TopOff no la usa, pero dejamos helper genérico)
     if hora and str(hora).lower() != "todas":
         where.append(f"{_quote(COLMAP['hora'])} = :hora")
         params["hora"] = hora
@@ -232,8 +245,12 @@ def _filters_where_and_params(
     municipalities = _as_list(municipalities)
     technologies = _as_list(technologies)
     vendors = _as_list(vendors)
+    sites = _as_list(sites)
+    rncs = _as_list(rncs)
+    nodebs = _as_list(nodebs)
 
     use_regions = use_provinces = use_muns = use_technologies = use_vendors = False
+    use_sites = use_rncs = use_nodebs = False
 
     if regions:
         where.append(f"{_quote(COLMAP['region'])} IN :regions")
@@ -256,6 +273,20 @@ def _filters_where_and_params(
         params["vendors"] = vendors
         use_vendors = True
 
+    # nuevos filtros exclusivos topoff
+    if sites:
+        where.append(f"{_quote(COLMAP['site_att'])} IN :sites")
+        params["sites"] = sites
+        use_sites = True
+    if rncs:
+        where.append(f"{_quote(COLMAP['rnc'])} IN :rncs")
+        params["rncs"] = rncs
+        use_rncs = True
+    if nodebs:
+        where.append(f"{_quote(COLMAP['nodeb'])} IN :nodebs")
+        params["nodebs"] = nodebs
+        use_nodebs = True
+
     return (
         " AND ".join(where),
         params,
@@ -264,96 +295,118 @@ def _filters_where_and_params(
         use_muns,
         use_technologies,
         use_vendors,
+        use_fechas,
+        use_sites,
+        use_rncs,
+        use_nodebs,
     )
+
+
+def _build_severity_expr_from_json_topoff(profile: str = "topoff"):
+    """
+    severity_score = SUM_kpi(severity_kpi) usando umbrales JSON.
+    """
+    cfg = load_threshold_cfg()
+    profiles = cfg.get("profiles") or {}
+    prof = profiles.get(profile) or profiles.get("main") or {}
+    sev_cfg = prof.get("severity") or {}
+
+    params: Dict[str, float] = {}
+    kpi_terms: List[str] = []
+
+    def _build_case(num_col: str, prefix: str, orientation: str) -> str:
+        if orientation == "higher_is_better":
+            return (
+                f"CASE "
+                f"WHEN COALESCE({num_col}, 0) <= :{prefix}_cri THEN 4 "
+                f"WHEN COALESCE({num_col}, 0) <= :{prefix}_reg THEN 3 "
+                f"WHEN COALESCE({num_col}, 0) <= :{prefix}_bue THEN 2 "
+                f"WHEN COALESCE({num_col}, 0) <= :{prefix}_exc THEN 1 "
+                f"ELSE 0 END"
+            )
+        return (
+            f"CASE "
+            f"WHEN COALESCE({num_col}, 0) >= :{prefix}_cri THEN 4 "
+            f"WHEN COALESCE({num_col}, 0) >= :{prefix}_reg THEN 3 "
+            f"WHEN COALESCE({num_col}, 0) >= :{prefix}_bue THEN 2 "
+            f"WHEN COALESCE({num_col}, 0) >= :{prefix}_exc THEN 1 "
+            f"ELSE 0 END"
+        )
+
+    for kpi in _SEVERITY_KPIS_TOPOFF:
+        if kpi not in COLMAP:
+            continue
+
+        kcfg = sev_cfg.get(kpi) or {}
+        default_block = (kcfg.get("default") or kcfg) or {}
+        thresholds_def = (default_block.get("thresholds") or {})
+        orientation_def = default_block.get("orientation", "lower_is_better")
+
+        def_exc = float(thresholds_def.get("excelente", 0.0))
+        def_bue = float(thresholds_def.get("bueno", def_exc))
+        def_reg = float(thresholds_def.get("regular", def_bue))
+        def_cri = float(thresholds_def.get("critico", def_reg))
+
+        pfx = f"{kpi}_def"
+        params[f"{pfx}_exc"] = def_exc
+        params[f"{pfx}_bue"] = def_bue
+        params[f"{pfx}_reg"] = def_reg
+        params[f"{pfx}_cri"] = def_cri
+
+        col_sql = _quote(COLMAP[kpi])
+        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+        case_default = _build_case(num_col, pfx, orientation_def)
+        kpi_terms.append(f"({case_default})")
+
+    if not kpi_terms:
+        return "0", {}
+
+    severity_expr = " + ".join(kpi_terms)
+    return severity_expr, params
 
 
 # =========================================================
 # API pública
 # =========================================================
-def fetch_topoff(
-    fecha: Optional[str] = None,
-    hora: Optional[str] = None,
-    regions: Optional[List[str]] = None,
-    provinces: Optional[List[str]] = None,
-    municipalities: Optional[List[str]] = None,
-    technologies: Optional[List[str]] = None,
-    vendors: Optional[List[str]] = None,
-    limit: Optional[int] = 200,
-    na_as_empty: bool = False,
-) -> pd.DataFrame:
-    """
-    Devuelve un DataFrame “amigable” desde dashboard_topoff con filtros básicos.
-    - fecha: 'YYYY-MM-DD'
-    - hora: 'HH:MM:SS' (o 'todas' para ignorar)
-    - regions/provinces/municipalities/technologies/vendors: lista o string
-    """
-    # 1) columnas
-    friendly_cols = _resolve_columns(BASE_COLUMNS)
-    select_cols = _select_list_with_aliases(friendly_cols)
-
-    # 2) where
-    where_sql, params, ur, up, um, utech, uvend = _filters_where_and_params(
-        fecha, hora, regions, provinces, municipalities, technologies, vendors
-    )
-
-    # 3) SELECT
-    sql = f"""
-        SELECT {", ".join(select_cols)}
-        FROM {_quote_table(_TABLE_NAME)}
-        WHERE {where_sql}
-        ORDER BY {_quote(COLMAP['fecha'])} DESC, {_quote(COLMAP['hora'])} DESC
-    """
-    if limit:
-        sql += " LIMIT :limit"
-        params["limit"] = int(limit)
-
-    eng = get_engine()
-    with eng.connect() as conn:
-        stmt = _prepare_stmt_with_expanding(sql, ur, up, um, utech, uvend)
-        df = pd.read_sql(stmt, conn, params=params)
-
-    # 4) orden amigable garantizado
-    df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
-
-    if na_as_empty and not df.empty:
-        df = df.where(pd.notna(df), "")
-
-    return df
-
-
 def fetch_topoff_paginated(
+    *,
     fecha: Optional[str] = None,
-    hora: Optional[str] = None,
+    technologies: Optional[List[str]] = None,
+    vendors: Optional[List[str]] = None,
+    sites: Optional[List[str]] = None,
+    rncs: Optional[List[str]] = None,
+    nodebs: Optional[List[str]] = None,
     regions: Optional[List[str]] = None,
     provinces: Optional[List[str]] = None,
     municipalities: Optional[List[str]] = None,
-    technologies: Optional[List[str]] = None,
-    vendors: Optional[List[str]] = None,
     page: int = 1,
     page_size: int = 50,
     na_as_empty: bool = False,
 ) -> Tuple[pd.DataFrame, int]:
-    """
-    Retorna (df, total_rows) con LIMIT/OFFSET.
-    Mismos filtros que fetch_topoff.
-    """
-    # 1) columnas válidas
     friendly_cols = _resolve_columns(BASE_COLUMNS)
     select_cols = _select_list_with_aliases(friendly_cols)
 
-    # 2) where + params
-    where_sql, params, ur, up, um, utech, uvend = _filters_where_and_params(
-        fecha, hora, regions, provinces, municipalities, technologies, vendors
+    fechas = _fecha_with_prev(fecha)
+    where_sql, params, ur, up, um, utech, uvend, uf, us, urc, unb = _filters_where_and_params(
+        fecha=None,
+        fechas=fechas,
+        hora=None,
+        regions=regions,
+        provinces=provinces,
+        municipalities=municipalities,
+        technologies=technologies,
+        vendors=vendors,
+        sites=sites,
+        rncs=rncs,
+        nodebs=nodebs,
     )
 
-    # 3) COUNT total
     count_sql = f"""
         SELECT COUNT(*) AS total
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
     """
 
-    # 4) SELECT page
     page = max(1, int(page))
     page_size = max(1, int(page_size))
     offset = (page - 1) * page_size
@@ -368,19 +421,15 @@ def fetch_topoff_paginated(
 
     eng = get_engine()
     with eng.connect() as conn:
-        # total
-        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend)
+        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
         total = conn.execute(stmt_count, params).scalar() or 0
 
-        # page
         sel_params = dict(params)
         sel_params.update({"limit": page_size, "offset": offset})
-        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend)
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
         df = pd.read_sql(stmt_sel, conn, params=sel_params)
 
-    # 5) orden de columnas amigables
     df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
-
     if na_as_empty and not df.empty:
         df = df.where(pd.notna(df), "")
 
@@ -388,68 +437,61 @@ def fetch_topoff_paginated(
 
 
 def fetch_topoff_paginated_global_sort(
+    *,
     fecha: Optional[str] = None,
-    hora: Optional[str] = None,
+    technologies: Optional[List[str]] = None,
+    vendors: Optional[List[str]] = None,
+    sites: Optional[List[str]] = None,
+    rncs: Optional[List[str]] = None,
+    nodebs: Optional[List[str]] = None,
     regions: Optional[List[str]] = None,
     provinces: Optional[List[str]] = None,
     municipalities: Optional[List[str]] = None,
-    technologies: Optional[List[str]] = None,
-    vendors: Optional[List[str]] = None,
     page: int = 1,
     page_size: int = 50,
     sort_by_friendly: Optional[str] = None,
     ascending: bool = True,
     na_as_empty: bool = False,
 ) -> Tuple[pd.DataFrame, int]:
-    """
-    Igual a fetch_topoff_paginated, pero ordena en SQL por la columna 'friendly' indicada,
-    empujando vacíos (NULL o '') al final y casteando numéricos cuando aplique.
-    """
     friendly_cols = _resolve_columns(BASE_COLUMNS)
     select_cols = _select_list_with_aliases(friendly_cols)
 
-    where_sql, params, ur, up, um, utech, uvend = _filters_where_and_params(
-        fecha, hora, regions, provinces, municipalities, technologies, vendors
+    fechas = _fecha_with_prev(fecha)
+    where_sql, params, ur, up, um, utech, uvend, uf, us, urc, unb = _filters_where_and_params(
+        fecha=None,
+        fechas=fechas,
+        hora=None,
+        regions=regions,
+        provinces=provinces,
+        municipalities=municipalities,
+        technologies=technologies,
+        vendors=vendors,
+        sites=sites,
+        rncs=rncs,
+        nodebs=nodebs,
     )
 
-    # --- columnas tratadas como numéricas para ordenar ---
     NUMERIC_COLS = {
-        "ps_traff_gb",
-        "ps_rrc_ia_percent",
-        "ps_rrc_fail",
-        "ps_rab_ia_percent",
-        "ps_rab_fail",
-        "ps_s1_ia_percent",
-        "ps_s1_fail",
-        "ps_drop_dc_percent",
-        "ps_drop_abnrel",
-        "cs_traff_erl",
-        "cs_rrc_ia_percent",
-        "cs_rrc_fail",
-        "cs_rab_ia_percent",
-        "cs_rab_fail",
-        "cs_drop_dc_percent",
-        "cs_drop_abnrel",
-        "unav",
-        "rtx_tnl_tx_percent",
-        "tnl_abn",
-        "tnl_fail",
+        "ps_traff_gb", "ps_rrc_ia_percent", "ps_rrc_fail",
+        "ps_rab_ia_percent", "ps_rab_fail",
+        "ps_s1_ia_percent", "ps_s1_fail",
+        "ps_drop_dc_percent", "ps_drop_abnrel",
+        "cs_traff_erl", "cs_rrc_ia_percent", "cs_rrc_fail",
+        "cs_rab_ia_percent", "cs_rab_fail",
+        "cs_drop_dc_percent", "cs_drop_abnrel",
+        "unav", "rtx_tnl_tx_percent", "tnl_abn", "tnl_fail",
     }
 
-    # ORDER BY con NULLS LAST y manejo de '' como NULL
+    if sort_by_friendly:
+        sort_by_friendly = sort_by_friendly or None
+
     if sort_by_friendly and sort_by_friendly in COLMAP:
         real = COLMAP[sort_by_friendly]
         direction = "ASC" if ascending else "DESC"
-
-        # Trata '' como NULL para el ordenamiento
         if sort_by_friendly in NUMERIC_COLS:
-            # Orden numérico real
             real_expr = f"CAST(NULLIF({_quote(real)}, '') AS DECIMAL(18,6))"
         else:
-            # Orden lexicográfico/fecha según tipo de columna en BD
             real_expr = f"NULLIF({_quote(real)}, '')"
-
-        # Empuja NULL al final (NULLS LAST) y luego ordena por el valor
         order_by = (
             f"({real_expr} IS NULL) ASC, "
             f"{real_expr} {direction}, "
@@ -459,14 +501,12 @@ def fetch_topoff_paginated_global_sort(
     else:
         order_by = f"{_quote(COLMAP['fecha'])} DESC, {_quote(COLMAP['hora'])} DESC"
 
-    # COUNT
     count_sql = f"""
         SELECT COUNT(*) AS total
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
     """
 
-    # PAGE
     page = max(1, int(page))
     page_size = max(1, int(page_size))
     offset = (page - 1) * page_size
@@ -481,12 +521,12 @@ def fetch_topoff_paginated_global_sort(
 
     eng = get_engine()
     with eng.connect() as conn:
-        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend)
+        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
         total = conn.execute(stmt_count, params).scalar() or 0
 
         sel_params = dict(params)
         sel_params.update({"limit": page_size, "offset": offset})
-        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend)
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
         df = pd.read_sql(stmt_sel, conn, params=sel_params)
 
     df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
@@ -494,3 +534,193 @@ def fetch_topoff_paginated_global_sort(
         df = df.where(pd.notna(df), "")
 
     return df, int(total)
+
+
+def fetch_topoff_paginated_severity_global_sort(
+    *,
+    fecha: Optional[str] = None,
+    technologies: Optional[List[str]] = None,
+    vendors: Optional[List[str]] = None,
+    sites: Optional[List[str]] = None,
+    rncs: Optional[List[str]] = None,
+    nodebs: Optional[List[str]] = None,
+    regions: Optional[List[str]] = None,
+    provinces: Optional[List[str]] = None,
+    municipalities: Optional[List[str]] = None,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by_friendly: Optional[str] = None,
+    ascending: bool = True,
+    na_as_empty: bool = False,
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Orden global tipo "top offenders" por severidad:
+      1) severity_score DESC
+      2) luego sort_by_friendly (si viene)
+      3) luego fecha/hora DESC
+    """
+    page = max(1, int(page))
+    page_size = max(1, int(page_size))
+    offset = (page - 1) * page_size
+
+    fechas = _fecha_with_prev(fecha)
+    where_sql, params, ur, up, um, utech, uvend, uf, us, urc, unb = _filters_where_and_params(
+        fecha=None,
+        fechas=fechas,
+        hora=None,
+        regions=regions,
+        provinces=provinces,
+        municipalities=municipalities,
+        technologies=technologies,
+        vendors=vendors,
+        sites=sites,
+        rncs=rncs,
+        nodebs=nodebs,
+    )
+
+    severity_expr, thr_params = _build_severity_expr_from_json_topoff(profile="topoff")
+
+    count_sql = f"""
+        SELECT COUNT(*) AS total
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+    """
+
+    if sort_by_friendly and sort_by_friendly in COLMAP:
+        order_dir = "ASC" if ascending else "DESC"
+        metric_expr = _quote(COLMAP[sort_by_friendly])
+        secondary_order_sql = f", {metric_expr} {order_dir}"
+    else:
+        secondary_order_sql = ""
+
+    friendly_cols = _resolve_columns(BASE_COLUMNS)
+    select_cols = _select_list_with_aliases(friendly_cols)
+
+    sel_sql = f"""
+        SELECT
+            {", ".join(select_cols)},
+            ({severity_expr}) AS severity_score
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+        ORDER BY
+            severity_score DESC
+            {secondary_order_sql},
+            {_quote(COLMAP['fecha'])} DESC,
+            {_quote(COLMAP['hora'])} DESC
+        LIMIT :limit OFFSET :offset
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        total = conn.execute(stmt_count, {**params, **thr_params}).scalar() or 0
+
+        sel_params = {**params, **thr_params, "limit": page_size, "offset": offset}
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        df = pd.read_sql(stmt_sel, conn, params=sel_params)
+
+    df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
+    if na_as_empty and not df.empty:
+        df = df.where(pd.notna(df), "")
+
+    return df, int(total)
+
+
+def fetch_topoff_distinct_options(
+    *,
+    fecha: Optional[str] = None,
+    technologies: Optional[List[str]] = None,
+    vendors: Optional[List[str]] = None,
+    regions: Optional[List[str]] = None,
+    provinces: Optional[List[str]] = None,
+    municipalities: Optional[List[str]] = None,
+):
+    """
+    Devuelve listas distintas para poblar Site/RNC/NodeB según filtros base.
+    """
+    fechas = _fecha_with_prev(fecha)
+
+    where_sql, params, ur, up, um, utech, uvend, uf, us, urc, unb = _filters_where_and_params(
+        fecha=None,
+        fechas=fechas,
+        hora=None,
+        regions=regions,
+        provinces=provinces,
+        municipalities=municipalities,
+        technologies=technologies,
+        vendors=vendors,
+    )
+
+    sql = f"""
+        SELECT DISTINCT
+            {_quote(COLMAP['site_att'])} AS site_att,
+            {_quote(COLMAP['rnc'])} AS rnc,
+            {_quote(COLMAP['nodeb'])} AS nodeb
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        df = pd.read_sql(stmt, conn, params=params)
+
+    sites = sorted([x for x in df.get("site_att", pd.Series()).dropna().unique().tolist() if str(x).strip()])
+    rncs = sorted([x for x in df.get("rnc", pd.Series()).dropna().unique().tolist() if str(x).strip()])
+    nodebs = sorted([x for x in df.get("nodeb", pd.Series()).dropna().unique().tolist() if str(x).strip()])
+
+    return sites, rncs, nodebs
+
+def fetch_topoff_distinct(
+    *,
+    regions=None,
+    provinces=None,
+    municipalities=None,
+    technologies=None,
+    vendors=None,
+    fecha: Optional[str] = None,
+):
+    fechas = _fecha_with_prev(fecha)
+
+    where_sql, params, ur, up, um, utech, uvend, uf, *rest = _filters_where_and_params(
+        fecha=fecha,
+        fechas=fechas,
+        hora=None,
+        regions=regions,
+        provinces=provinces,
+        municipalities=municipalities,
+        technologies=technologies,
+        vendors=vendors,
+    )
+
+    sql = f"""
+        SELECT DISTINCT
+            {_quote(COLMAP['fecha'])} AS fecha,
+            {_quote(COLMAP['technology'])} AS technology,
+            {_quote(COLMAP['vendor'])} AS vendor
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(
+            sql,
+            use_regions=ur,
+            use_provinces=up,
+            use_muns=um,
+            use_technologies=utech,
+            use_vendors=uvend
+        )
+        df = pd.read_sql(stmt, conn, params=params)
+
+    fechas = sorted([str(x) for x in df["fecha"].dropna().unique().tolist()], reverse=True)
+    techs  = sorted([str(x) for x in df["technology"].dropna().unique().tolist()])
+    vends  = sorted([str(x) for x in df["vendor"].dropna().unique().tolist()])
+
+    return {
+        "fechas": fechas,
+        "technologies": techs,
+        "vendors": vends,
+    }
+

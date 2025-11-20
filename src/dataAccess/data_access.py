@@ -240,66 +240,6 @@ def _filters_where_and_params(
         use_technologies,
     )
 
-def _build_flag_and_excess_cases(
-    kpi: str,
-    networks: Optional[List[str]],
-    cfg
-) -> Tuple[str, str, Dict[str, object]]:
-    """
-    Devuelve (flag_thr_expr, excess_thr_expr, params) donde:
-      - flag_thr_expr   = CASE por red usando alarm_threshold_for
-      - excess_thr_expr = CASE por red usando excess_base_for
-    Todos con fallback a default/max, sin hardcode.
-    """
-    params: Dict[str, object] = {}
-
-    # redes a considerar dentro del CASE
-    per_net_cfg = (cfg.get("progress", {}).get(kpi, {}).get("per_network") or {})
-    nets = networks or list(per_net_cfg.keys())
-
-    # defaults
-    flag_def = alarm_threshold_for(kpi, "", cfg)
-    exc_def  = excess_base_for(kpi, "", cfg)
-    if flag_def is None:
-        flag_def = 0.0
-    if exc_def is None:
-        # si no hay excess_base ni max en default, cae a flag_def como último recurso
-        exc_def = flag_def
-
-    params[f"{kpi}_flag_thr_def"] = flag_def
-    params[f"{kpi}_exc_thr_def"]  = exc_def
-
-    flag_parts, exc_parts = [], []
-    for i, net in enumerate(nets):
-        flag_thr = alarm_threshold_for(kpi, net or "", cfg)
-        exc_thr  = excess_base_for(kpi, net or "", cfg)
-
-        # si no hay específicos, omite rama; caerá al ELSE default
-        if flag_thr is not None:
-            p_net = f"{kpi}_net_{i}"
-            p_thr = f"{kpi}_flag_thr_{i}"
-            params[p_net] = net
-            params[p_thr] = flag_thr
-            flag_parts.append(f"WHEN {_quote(COLMAP['network'])} = :{p_net} THEN :{p_thr}")
-
-        if exc_thr is not None:
-            p_net_e = f"{kpi}_enet_{i}"
-            p_thr_e = f"{kpi}_exc_thr_{i}"
-            params[p_net_e] = net
-            params[p_thr_e] = exc_thr
-            exc_parts.append(f"WHEN {_quote(COLMAP['network'])} = :{p_net_e} THEN :{p_thr_e}")
-
-    if flag_parts:
-        flag_expr = f"(CASE {' '.join(flag_parts)} ELSE :{kpi}_flag_thr_def END)"
-    else:
-        flag_expr = f":{kpi}_flag_thr_def"
-
-    if exc_parts:
-        exc_expr = f"(CASE {' '.join(exc_parts)} ELSE :{kpi}_exc_thr_def END)"
-    else:
-        exc_expr = f":{kpi}_exc_thr_def"
-
-    return flag_expr, exc_expr, params
 def _build_severity_expressions_from_json(
     cfg=None,
     profile: str = "main",

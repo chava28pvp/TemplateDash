@@ -1,7 +1,7 @@
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
-from components.filters import build_filters
+from components.filters import build_filters, build_topoff_filters
 from src.config import REFRESH_INTERVAL_MS
 from src.Utils.utils_time import default_date_str, default_hour_str
 from components.umbral_config_modal import create_umbral_config_modal
@@ -303,7 +303,31 @@ def serve_layout():
 
             dbc.Row([
                 dbc.Col([
-                    dcc.Store(id="topoff-page-state", data={"page": 1, "page_size": 50}),
+
+                    # Título + toggler
+                    dbc.Row([
+                        dbc.Col(html.H4("TopOff - Tabla", className="mb-2"), width=True),
+                        dbc.Col(
+                            dbc.Button(
+                                "Filtros TopOff",
+                                id="topoff-filters-toggle",
+                                size="sm",
+                                outline=True,
+                                color="secondary",
+                                className="mb-2",
+                            ),
+                            width="auto"
+                        )
+                    ], className="align-items-center g-2"),
+
+                    # Collapse con filtros mini
+                    dbc.Collapse(
+                        id="topoff-filters-collapse",
+                        is_open=False,  # cerrado por defecto
+                        children=build_topoff_filters()
+                    ),
+
+                    # tu card de paginado (igual que ya lo tienes)
                     dbc.Card(dbc.CardBody([
                         dbc.Row([
                             dbc.Col(dbc.Button("« Anterior", id="topoff-page-prev", n_clicks=0), width="auto"),
@@ -323,14 +347,13 @@ def serve_layout():
                                 className="ms-3"
                             ),
                             dbc.Col(html.Div(id="topoff-total-rows-banner", className="text-muted"), width=True),
-                            # (Opcional) botón export — lo puedes wirear después
-                            # dbc.Col(dbc.Button("Exportar Excel", id="topoff-export-excel", color="primary", size="sm"), width="auto"),
                         ], className="g-2 align-items-center"),
                     ]), className="shadow-sm mb-2"),
 
                     html.Div(
                         id="topoff-table-container",
-                        className="kpi-table-wrap kpi-table-container"
+                        className="kpi-table-wrap kpi-table-container",
+                        style={"overflowX": "auto"},
                     ),
                 ], md=12, className="my-3"),
             ])
@@ -357,7 +380,9 @@ def serve_layout():
         dcc.Store(id="histo-params"),
         dcc.Store(id="histo-selected-wave"),
 
+        dcc.Store(id="topoff-page-state", data={"page": 1, "page_size": 50}),
         dcc.Store(id="topoff-sort-state", data={"column": None, "ascending": True}),
+        dcc.Store(id="topoff-sort-last-ts", data=0),
 
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Download(id="download-excel"),

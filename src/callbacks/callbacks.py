@@ -11,10 +11,11 @@ from components.Tables.main_table import (
 )
 import dash_bootstrap_components as dbc
 
-from src.dataAccess.data_access import fetch_kpis, fetch_kpis_paginated, COLMAP, fetch_kpis_paginated_severity_global_sort, fetch_kpis_paginated_severity_sort
+from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, fetch_kpis_paginated_severity_sort
 from src.config import REFRESH_INTERVAL_MS
 
 from src.Utils.utils_time import now_local
+from src.dataAccess.data_acess_topoff import fetch_topoff_distinct
 
 #Cach simple en memoria para df_ts
 _DFTS_CACHE = {}
@@ -99,13 +100,21 @@ def register_callbacks(app):
     )
     def update_network_tech(fecha, hora):
         # Para construir opciones, usa consulta no paginada (solo metadata)
-        df = fetch_kpis(fecha=fecha, hora=hora, limit=None)
+        df_main = fetch_kpis(fecha=fecha, hora=hora, limit=None)
+        networks_main = sorted(df_main["network"].dropna().unique().tolist()) if "network" in df_main.columns else []
+        techs_main = sorted(df_main["technology"].dropna().unique().tolist()) if "technology" in df_main.columns else []
 
-        networks = sorted(df["network"].dropna().unique().tolist()) if "network" in df.columns else []
-        techs = sorted(df["technology"].dropna().unique().tolist()) if "technology" in df.columns else []
+        # TOPOFF (solo para techs fallback/union)
+        top_opts = fetch_topoff_distinct(fecha=fecha)
+        techs_top = top_opts.get("technologies", [])
 
-        net_opts = [{"label": n, "value": n} for n in networks]
+        # UNION techs (si main vacío, te quedan los de topoff)
+        techs = sorted(set(techs_main) | set(techs_top))
+
+        net_opts = [{"label": n, "value": n} for n in networks_main]
         tech_opts = [{"label": t, "value": t} for t in techs]
+
+        # valores por defecto vacíos (como tenías)
         return net_opts, [], tech_opts, []
 
     # -------------------------------------------------
@@ -148,17 +157,32 @@ def register_callbacks(app):
         networks = _as_list(networks)
         technologies = _as_list(technologies)
 
-        df = fetch_kpis(fecha=fecha, hora=hora, limit=None)
-        if networks:
-            df = df[df["network"].isin(networks)]
-        if technologies:
-            df = df[df["technology"].isin(technologies)]
+        # ---------- MAIN ----------
+        df_main = fetch_kpis(fecha=fecha, hora=hora, limit=None)
 
-        vendors = sorted(df["vendor"].dropna().unique().tolist()) if "vendor" in df.columns else []
-        clusters = sorted(df["noc_cluster"].dropna().unique().tolist()) if "noc_cluster" in df.columns else []
+        if networks and "network" in df_main.columns:
+            df_main = df_main[df_main["network"].isin(networks)]
+        if technologies and "technology" in df_main.columns:
+            df_main = df_main[df_main["technology"].isin(technologies)]
+
+        vendors_main = sorted(df_main["vendor"].dropna().unique().tolist()) if "vendor" in df_main.columns else []
+        clusters_main = sorted(
+            df_main["noc_cluster"].dropna().unique().tolist()) if "noc_cluster" in df_main.columns else []
+
+        # ---------- TOPOFF (vendors fallback/union) ----------
+        top_opts = fetch_topoff_distinct(
+            fecha=fecha,
+            technologies=technologies,  # topoff sí tiene technology
+            vendors=None,  # no filtres vendors aquí
+        )
+        vendors_top = top_opts.get("vendors", [])
+
+        # UNION vendors (si main vacío, sobreviven los de topoff)
+        vendors = sorted(set(vendors_main) | set(vendors_top))
 
         vendor_opts = [{"label": v, "value": v} for v in vendors]
-        cluster_opts = [{"label": c, "value": c} for c in clusters]
+        cluster_opts = [{"label": c, "value": c} for c in clusters_main]  # clusters SOLO main
+
         return vendor_opts, [], cluster_opts, []
 
     # -------------------------------------------------
@@ -335,51 +359,10 @@ def register_callbacks(app):
     def sync_intervals(_n):
         return REFRESH_INTERVAL_MS
 
-    # -------------------------------------------------
-    # 6) Tablas simples inferiores (sin paginación)
-    # -------------------------------------------------
-    '''
-    @app.callback(
-        Output("table-bottom-a", "children"),
-        Output("table-bottom-b", "children"),
-        Input("f-fecha", "date"),
-        Input("f-hora", "value"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
-        Input("refresh-timer", "n_intervals"),
-    )
-    def refresh_bottom_tables(fecha, hora, networks, technologies, vendors, clusters, _n):
-        networks = _as_list(networks)
-        technologies = _as_list(technologies)
-        vendors = _as_list(vendors)
-        clusters = _as_list(clusters)
 
-        # A) Top clusters (ejemplo CS)
-        df_top = fetch_kpis(fecha=fecha, hora=hora, vendors=vendors or None, clusters=clusters or None)
-        if networks:
-            df_top = df_top[df_top["network"].isin(networks)]
-        if technologies:
-            df_top = df_top[df_top["technology"].isin(technologies)]
-        cols_top = cols_from_order(TABLE_TOP_ORDER, HEADER_MAP)
-        table_a = render_simple_table(df_top, "Reporte por CS", cols_top)
-
-        # B) Resumen por vendor (ejemplo PS)
-        df_vs = fetch_kpis(fecha=fecha, hora=hora, vendors=vendors or None, clusters=clusters or None)
-        if networks:
-            df_vs = df_vs[df_vs["network"].isin(networks)]
-        if technologies:
-            df_vs = df_vs[df_vs["technology"].isin(technologies)]
-        cols_vs = cols_from_order(TABLE_VENDOR_SUMMARY_ORDER, HEADER_MAP)
-        table_b = render_simple_table(df_vs, "Reporte por PS", cols_vs)
-
-        return table_a, table_b
-        '''
     # -------------------------------------------------
     # 7) Tick: actualizar fecha/hora al inicio de cada hora
     # -------------------------------------------------
-    ''''''
     @app.callback(
         Output("f-hora", "value"),
         Output("f-fecha", "date"),

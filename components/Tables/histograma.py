@@ -3,34 +3,17 @@ from datetime import datetime, timedelta
 import plotly.graph_objs as go
 import numpy as np
 
+from components.Tables.heatmap import _infer_networks, _max_date_str, VALORES_MAP, _day_str, _sev_cfg, _prog_cfg, \
+    _normalize, SEV_COLORS
+
+
 # =========================
 # Config
 # =========================
-VALORES_MAP = {
-    "PS_RCC":  ("ps_rrc_ia_percent", "ps_rrc_fail"),
-    "CS_RCC":  ("cs_rrc_ia_percent", "cs_rrc_fail"),
-    "PS_RAB":  ("ps_rab_ia_percent", "ps_rab_fail"),
-    "CS_RAB":  ("cs_rab_ia_percent", "cs_rab_fail"),
-    "PS_DROP": ("ps_drop_dc_percent", "ps_drop_abnrel"),
-    "CS_DROP": ("cs_drop_dc_percent", "cs_drop_abnrel"),
-}
-SEV_COLORS = {
-    "excelente": "#2ecc71",  # verde
-    "bueno":     "#f1c40f",  # amarillo
-    "regular":   "#e67e22",  # naranja
-    "critico":   "#e74c3c",  # rojo
-}
-SEV_ORDER = ["excelente", "bueno", "regular", "critico"]
+
 # =========================
 # Helpers
 # =========================
-def _infer_networks(df_long: pd.DataFrame) -> list[str]:
-    if df_long is None or df_long.empty or "network" not in df_long.columns:
-        return []
-    return sorted(df_long["network"].dropna().unique().tolist())
-
-def _day_str(d: datetime) -> str:
-    return d.strftime("%Y-%m-%d")
 
 def _safe_hour_to_idx(hhmmss) -> int | None:
     try:
@@ -40,36 +23,6 @@ def _safe_hour_to_idx(hhmmss) -> int | None:
     except Exception:
         pass
     return None
-
-def _empty24():
-    return [None]*24
-
-def _max_date_str(series: pd.Series) -> str | None:
-    try:
-        return max(pd.to_datetime(series).dt.date).strftime("%Y-%m-%d")
-    except Exception:
-        return None
-
-def _sev_cfg(metric: str, net: str | None, cfg: dict):
-    """Obtiene thresholds y orientación para métricas de % (severity)."""
-    s = (cfg.get("severity") or {}).get(metric) or {}
-    # soporta tanto {"orientation":..., "thresholds":{...}} como {"default":{...}, "per_network":{...}}
-    if "thresholds" in s:
-        thresholds = s.get("thresholds") or {}
-        orient = s.get("orientation", s.get("default", {}).get("orientation", "lower_is_better"))
-    else:
-        orient = (s.get("default") or {}).get("orientation", "lower_is_better")
-        pern = (s.get("per_network") or {})
-        if net and net in pern and "thresholds" in pern[net]:
-            thresholds = pern[net]["thresholds"]
-        else:
-            thresholds = (s.get("default") or {}).get("thresholds") or {}
-    # Asegura orden y float
-    thr = {k: float(thresholds.get(k)) for k in SEV_ORDER if k in thresholds}
-    # rellena por si faltan
-    for k in SEV_ORDER:
-        thr.setdefault(k, thr.get("regular", 0.0))
-    return orient, thr
 
 def _sev_bucket(value: float | None, orient: str, thr: dict) -> int | None:
     """Mapea valor → 0..3. None si valor no numérico."""
@@ -88,28 +41,6 @@ def _sev_bucket(value: float | None, orient: str, thr: dict) -> int | None:
         elif v <= thr["bueno"]:   return 1
         elif v <= thr["regular"]: return 2
         else:                     return 3
-
-def _prog_cfg(metric: str, net: str | None, cfg: dict):
-    """Obtiene min/max para métricas UNIT (progress), con per_network si existe."""
-    p = (cfg.get("progress") or {}).get(metric) or {}
-    if "default" in p or "per_network" in p:
-        d = p.get("default") or {}
-        mn = d.get("min", 0.0); mx = d.get("max", 1.0)
-        pern = p.get("per_network") or {}
-        if net and net in pern:
-            mn = pern[net].get("min", mn)
-            mx = pern[net].get("max", mx)
-        return float(mn), float(mx)
-    # forma plana {min,max}
-    return float(p.get("min", 0.0)), float(p.get("max", 1.0))
-
-def _normalize(v: float | None, vmin: float, vmax: float) -> float | None:
-    if v is None:
-        return None
-    if vmax <= vmin:
-        return 0.0
-    x = (float(v) - vmin) / (vmax - vmin)
-    return 0.0 if x < 0 else (1.0 if x > 1 else x)
 
 def _interp_nan(v):
     """Interpola NaN/None en 1D; si todo es NaN devuelve ceros."""
