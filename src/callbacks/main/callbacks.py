@@ -4,7 +4,7 @@ from dash import Input, Output, State, ALL, no_update, ctx
 from hashlib import md5
 import json
 import time
-from components.Tables.main_table import (
+from components.main.main_table import (
     pivot_by_network,
     render_kpi_table_multinet,
     strip_net,

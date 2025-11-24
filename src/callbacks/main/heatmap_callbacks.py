@@ -6,9 +6,9 @@ import json
 import time
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
-from components.Tables.heatmap import build_heatmap_figure, render_heatmap_summary_table, build_heatmap_payloads_fast, \
+from components.main.heatmap import build_heatmap_figure, render_heatmap_summary_table, build_heatmap_payloads_fast, \
     _hm_height, _build_time_header_children, _build_time_header_children_by_dates
-from components.Tables.histograma import \
+from components.main.histograma import \
     build_histo_payloads_fast, build_overlay_waves_figure
 import dash_bootstrap_components as dbc
 
@@ -113,7 +113,7 @@ def heatmap_callbacks(app):
 
         # --- Paginado del HEATMAP ---
         page = int((hm_page_state or {}).get("page", 1))
-        page_sz = int((hm_page_state or {}).get("page_size", 5))
+        page_sz = int((hm_page_state or {}).get("page_size", 50))
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
@@ -229,7 +229,7 @@ def heatmap_callbacks(app):
         prevent_initial_call=False,  # bootstrap
     )
     def hm_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
-        ps = max(1, int(hm_page_size or 5))
+        ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 
     @app.callback(
@@ -240,9 +240,9 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def hm_paginate(n_prev, n_next, state):
-        state = state or {"page": 1, "page_size": 5}
+        state = state or {"page": 1, "page_size": 50}
         page = int(state.get("page", 1))
-        ps = int(state.get("page_size", 5))
+        ps = int(state.get("page_size", 50))
 
         trig = ctx.triggered_id
         if trig == "hm-page-prev":
@@ -294,7 +294,7 @@ def heatmap_callbacks(app):
 
         # Paginado
         page = int((hm_page_state or {}).get("page", 1))
-        page_sz = int((hm_page_state or {}).get("page_size", 5))
+        page_sz = int((hm_page_state or {}).get("page_size", 50))
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
@@ -384,7 +384,7 @@ def heatmap_callbacks(app):
         prevent_initial_call=False,  # bootstrap
     )
     def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
-        ps = max(1, int(hm_page_size or 5))
+        ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 
     @app.callback(
@@ -395,9 +395,9 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def hi_paginate(n_prev, n_next, state):
-        state = state or {"page": 1, "page_size": 5}
+        state = state or {"page": 1, "page_size": 50}
         page = int(state.get("page", 1))
-        ps = int(state.get("page_size", 5))
+        ps = int(state.get("page_size", 50))
 
         trig = ctx.triggered_id
         if trig == "hm-page-prev":

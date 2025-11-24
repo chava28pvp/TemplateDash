@@ -1,0 +1,123 @@
+/* ==============================
+   TOPOFF NAMESPACE
+   ============================== */
+
+.topoff-board{
+  height: 75vh;
+  overflow-y: auto;
+  overflow-x: auto; /* evita colapso de columnas */
+}
+
+.topoff-pane{
+  height: 75vh;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+/* ==============================
+   TABLAS TOPOFF (header-only + body)
+   ============================== */
+
+.topoff-board .topoff-table{
+  table-layout: fixed;
+  width: 100%;
+  font-size: 0.80rem;
+}
+
+.topoff-board .topoff-table td,
+.topoff-board .topoff-table th{
+  padding: 0.20rem 0.35rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* widths TopOff */
+.topoff-board .topoff-table .w-nodeb  { width: 50px; max-width: 50px; }
+.topoff-board .topoff-table .w-tech   { width: 32px; max-width: 32px; text-align:center; }
+.topoff-board .topoff-table .w-vendor { width: 22px; max-width: 22px; min-width: 22px; text-align:center; } /* blindaje */
+.topoff-board .topoff-table .w-valor  { width: 30px; max-width: 30px; text-align:center; }
+.topoff-board .topoff-table .w-ultima { width: 30px; max-width: 30px; text-align:center; }
+.topoff-board .topoff-table .w-num    { width: 40px; max-width: 40px; text-align:center; }
+
+.topoff-board .topoff-table .ta-right  { text-align:right; }
+.topoff-board .topoff-table .ta-center { text-align:center; }
+
+/* ===== Body table TopOff: COMPACT y SIN THEAD ===== */
+.topoff-board .topoff-table.compact{
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* 👇 aquí lo importante: el thead del body NO se muestra */
+.topoff-board .topoff-table.compact thead{
+  display: none !important;
+}
+
+/* filas alineadas con heatmap */
+.topoff-board .topoff-table.compact tbody td{
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 26px;              /* = ROW_H */
+  border-top: 0 !important;
+  border-bottom: 0 !important;
+}
+.topoff-board .topoff-table.compact tbody tr{ height: 26px; }
+.topoff-board .topoff-table.compact td{
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-top: 0;
+  border-bottom: 0;
+}
+
+/* ===== Header-only TopOff (el del layout) ===== */
+.topoff-board .topoff-table.header-only thead{
+  display: table-header-group !important;
+}
+.topoff-board .topoff-table.header-only tbody{
+  display: none !important;
+}
+.topoff-board .topoff-table.header-only th{
+  padding: 0.20rem 0.35rem;
+  line-height: 26px; /* coherente con ROW_H */
+  border-bottom: 0 !important;
+}
+
+/* Header Vendor visual más estrecho (sin cambiar ancho real) */
+.topoff-board .topoff-table.header-only th.w-vendor{
+  padding-left: 0.1rem !important;
+  padding-right: 0.1rem !important;
+  font-size: 0.65rem !important;
+}
+
+/* Vendor inicial visible */
+.topoff-board .topoff-table .td-vendor .vendor-initial{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:20px;
+  height:20px;
+  line-height:20px;
+  font-weight:700;
+  font-size:0.8rem;
+  color:inherit !important;
+  background:transparent !important;
+  border:0 !important;
+  box-shadow:none !important;
+  padding:0 !important;
+  margin:0 !important;
+}
+/* Vendor NO se encoge nunca */
+.topoff-board .topoff-table th.w-vendor,
+.topoff-board .topoff-table td.w-vendor{
+  width: 30px !important;
+  min-width: 30px !important;
+  max-width: 30px !important;
+
+  /* quita padding que roba espacio */
+  padding-left: 0.1rem !important;
+  padding-right: 0.1rem !important;
+
+  text-align: center;
+}
+

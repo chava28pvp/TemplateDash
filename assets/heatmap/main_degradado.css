@@ -1,9 +1,9 @@
 .kpi-table-summary { table-layout: fixed; width: 100%; font-size: 0.80rem; }
 .kpi-table-summary td, .kpi-table-summary th { padding: 0.20rem 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.kpi-table-summary .w-cluster { width: 100px; max-width: 100px;}
+.kpi-table-summary .w-cluster { width: 60px; max-width: 60px;}
 .kpi-table-summary .w-tech    { width: 32px;  max-width: 32px;  text-align:center; }
-.kpi-table-summary .w-vendor  { width: 28px;  max-width: 28px;  text-align:center; }
+.kpi-table-summary .w-vendor  { width: 28px; max-width: 28px; text-align:center; }
 .kpi-table-summary .w-valor   { width: 32px;  max-width: 32px;  text-align:center; }
 .kpi-table-summary .w-ultima  { width: 32px;  max-width: 32px;  text-align:center; }
 .kpi-table-summary .w-num     { width: 32px;  max-width: 32px;  text-align:center; }
@@ -97,4 +97,13 @@
   margin: 0 !important;
 }
 
+.kpi-table-summary td.w-vendor,
+.kpi-table-summary th.w-vendor {
+  width: 24px !important;
+  min-width: 24px !important;
+  max-width: 24px !important;
+  padding-left: 0.1rem !important;
+  padding-right: 0.1rem !important;
+  text-align: center;
+}
 

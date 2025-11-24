@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import plotly.graph_objs as go
 import numpy as np
 
-from components.Tables.heatmap import _infer_networks, _max_date_str, VALORES_MAP, _day_str, _sev_cfg, _prog_cfg, \
+from components.main.heatmap import _infer_networks, _max_date_str, VALORES_MAP, _day_str, _sev_cfg, _prog_cfg, \
     _normalize, SEV_COLORS
 
 

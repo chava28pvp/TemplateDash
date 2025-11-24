@@ -14,7 +14,7 @@ from src.dataAccess.data_access import (
     COLMAP,
 )
 from src.Utils.alarmados import load_threshold_cfg
-from components.Tables.main_table import (
+from components.main.main_table import (
     pivot_by_network,
     expand_groups_for_networks,
     _resolve_sort_col,

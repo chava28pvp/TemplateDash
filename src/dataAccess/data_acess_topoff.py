@@ -724,3 +724,226 @@ def fetch_topoff_distinct(
         "vendors": vends,
     }
 
+def fetch_alarm_meta_for_topoff(
+    *,
+    fecha: str,
+    vendors=None,
+    technologies=None,
+    regions=None,
+    provinces=None,
+    municipalities=None,
+    site_atts=None,
+    rncs=None,
+    nodebs=None,
+):
+    """
+    Devuelve:
+      - df_meta_topoff: ranking de nodos/ubicación ORDENADO por:
+            alarm_score DESC (#KPIs % críticos distintos en el grupo)
+            flag_hits  DESC (ocurrencias críticas totales)
+      - alarm_keys_set: set de keys del grupo con >=1 KPI crítico
+            {(technology, vendor, region, province, municipality, site_att, rnc, nodeb)}
+    """
+    # -------- Fechas (hoy + ayer) --------
+    try:
+        base_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
+    except Exception:
+        base_dt = datetime.utcnow()
+
+    yday_dt = base_dt - timedelta(days=1)
+    today_str = base_dt.strftime("%Y-%m-%d")
+    yday_str  = yday_dt.strftime("%Y-%m-%d")
+
+    cfg = load_threshold_cfg()  # cacheado
+
+    # -------- WHERE sin hora; fechas via IN --------
+    # TopOff no filtra hora. Aquí metemos filtros de vendor/tech/region/etc
+    fechas = _fecha_with_prev(fecha)
+    where_sql, params, ur, up, um, utech, uvend, uf, *_ = _filters_where_and_params(
+        fecha=None,
+        fechas=fechas,
+        hora=None,
+        regions=regions,
+        provinces=provinces,
+        municipalities=municipalities,
+        technologies=technologies,
+        vendors=vendors,
+        sites=site_atts,
+        rncs=rncs,
+        nodebs=nodebs,
+    )
+
+    # filtros extra propios de topoff (si ya los agregaste en _filters_where_and_params, quítalos de aquí)
+    def _as_list_local(x):
+        return _as_list(x)
+
+    site_atts = _as_list_local(site_atts)
+    rncs      = _as_list_local(rncs)
+    nodebs    = _as_list_local(nodebs)
+
+    if site_atts:
+        where_sql += f" AND {_quote(COLMAP['site_att'])} IN :site_atts"
+        params["site_atts"] = site_atts
+        ur_site = True
+    else:
+        ur_site = False
+
+    if rncs:
+        where_sql += f" AND {_quote(COLMAP['rnc'])} IN :rncs"
+        params["rncs"] = rncs
+        ur_rnc = True
+    else:
+        ur_rnc = False
+
+    if nodebs:
+        where_sql += f" AND {_quote(COLMAP['nodeb'])} IN :nodebs"
+        params["nodebs"] = nodebs
+        ur_nb = True
+    else:
+        ur_nb = False
+
+    where_sql = f"({where_sql}) AND {_quote(COLMAP['fecha'])} IN (:f1, :f2)"
+    params = {**params, "f1": yday_str, "f2": today_str}
+
+    # -------- KPIs % evaluables en TopOff --------
+    alarm_kpis = [k for k in _SEVERITY_KPIS_TOPOFF if k in COLMAP]
+    if not alarm_kpis:
+        empty_cols = ["technology","vendor","region","province","municipality","site_att","rnc","nodeb"]
+        return pd.DataFrame(columns=empty_cols), set()
+
+    # -------- Severidad desde JSON profile="topoff" --------
+    profiles = (cfg.get("profiles") or {})
+    prof_top = profiles.get("topoff") or {}
+    sev_cfg  = prof_top.get("severity") or {}
+
+    thr_params_all = {}
+    flag_cols_sql  = []
+
+    def _flag_expr_for(kpi: str) -> str:
+        """CASE=1 si KPI crítico según thresholds del JSON (sin per_network)."""
+        col_sql = _quote(COLMAP[kpi])
+        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+
+        kcfg = sev_cfg.get(kpi) or {}
+        default_block = (kcfg.get("default") or kcfg) or {}
+
+        thresholds_def = (default_block.get("thresholds") or {})
+        orientation_def = default_block.get("orientation", "lower_is_better")
+
+        def_cri = float(thresholds_def.get("critico", 0.0))
+        p_def = f"{kpi}_def"
+        thr_params_all[f"{p_def}_cri"] = def_cri
+
+        if orientation_def == "higher_is_better":
+            cond = f"COALESCE({num_col}, 0) <= :{p_def}_cri"
+        else:
+            cond = f"COALESCE({num_col}, 0) >= :{p_def}_cri"
+
+        return f"(CASE WHEN {cond} THEN 1 ELSE 0 END)"
+
+    for kpi in alarm_kpis:
+        alias = f"f_{kpi}"
+        flag_cols_sql.append(f"{_flag_expr_for(kpi)} AS {alias}")
+
+    flags_list_sql = ",\n            ".join(flag_cols_sql)
+    sum_row_flags  = " + ".join([f"COALESCE(f_{k},0)" for k in alarm_kpis])
+
+    # -------- Nombres SQL --------
+    tbl    = _quote_table(_TABLE_NAME)
+    f_tech = _quote(COLMAP["technology"])
+    f_vend = _quote(COLMAP["vendor"])
+    f_reg  = _quote(COLMAP["region"])
+    f_prov = _quote(COLMAP["province"])
+    f_mun  = _quote(COLMAP["municipality"])
+    f_site = _quote(COLMAP["site_att"])
+    f_rnc  = _quote(COLMAP["rnc"])
+    f_nb   = _quote(COLMAP["nodeb"])
+
+    # -------- SQL (CTEs igual que main) --------
+    sql = f"""
+    WITH base AS (
+        SELECT
+            {f_tech} AS technology,
+            {f_vend} AS vendor,
+            {f_reg}  AS region,
+            {f_prov} AS province,
+            {f_mun}  AS municipality,
+            {f_site} AS site_att,
+            {f_rnc}  AS rnc,
+            {f_nb}   AS nodeb,
+            {", ".join(_quote(COLMAP[k]) for k in alarm_kpis)}
+        FROM {tbl}
+        WHERE {where_sql}
+    ),
+    flags_raw AS (
+        SELECT
+            technology, vendor, region, province, municipality, site_att, rnc, nodeb,
+            {flags_list_sql}
+        FROM base
+    ),
+    flags AS (
+        SELECT
+            fr.*,
+            ({sum_row_flags}) AS row_flag_sum
+        FROM flags_raw fr
+    ),
+    agg_node AS (
+        SELECT
+            technology, vendor, region, province, municipality, site_att, rnc, nodeb,
+            {", ".join([f"MAX(f_{k}) AS mx_{k}" for k in alarm_kpis])},
+            SUM(row_flag_sum) AS flag_hits
+        FROM flags
+        GROUP BY technology, vendor, region, province, municipality, site_att, rnc, nodeb
+    ),
+    ranked AS (
+        SELECT
+            technology, vendor, region, province, municipality, site_att, rnc, nodeb,
+            ({' + '.join([f"COALESCE(mx_{k},0)" for k in alarm_kpis])}) AS alarm_score,
+            flag_hits
+        FROM agg_node
+    )
+    SELECT
+        technology, vendor, region, province, municipality, site_att, rnc, nodeb,
+        alarm_score, flag_hits
+    FROM ranked
+    ORDER BY alarm_score DESC, flag_hits DESC, vendor ASC, technology ASC, nodeb ASC
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(
+            sql,
+            use_regions=ur,
+            use_provinces=up,
+            use_muns=um,
+            use_technologies=utech,
+            use_vendors=uvend,
+            use_fechas=False,  # ya metimos f1,f2
+        )
+
+        # bindparams expanding extras:
+        if ur_site:
+            stmt = stmt.bindparams(bindparam("site_atts", expanding=True))
+        if ur_rnc:
+            stmt = stmt.bindparams(bindparam("rncs", expanding=True))
+        if ur_nb:
+            stmt = stmt.bindparams(bindparam("nodebs", expanding=True))
+
+        df_meta_topoff = pd.read_sql(stmt, conn, params={**params, **thr_params_all})
+
+    if df_meta_topoff is None or df_meta_topoff.empty:
+        empty_cols = ["technology","vendor","region","province","municipality","site_att","rnc","nodeb"]
+        return pd.DataFrame(columns=empty_cols), set()
+
+    alarm_keys_set = set(
+        tuple(x) for x in df_meta_topoff[
+            ["technology","vendor","region","province","municipality","site_att","rnc","nodeb"]
+        ].itertuples(index=False, name=None)
+        if (x[-2] is not None or x[-1] is not None)  # rnc/nodeb presentes
+    )
+
+    df_out = df_meta_topoff[
+        ["technology","vendor","region","province","municipality","site_att","rnc","nodeb"]
+    ].drop_duplicates().reset_index(drop=True)
+
+    return df_out, alarm_keys_set

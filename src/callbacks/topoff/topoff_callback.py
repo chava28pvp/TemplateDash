@@ -10,7 +10,7 @@ from src.dataAccess.data_acess_topoff import (
     fetch_topoff_paginated_severity_global_sort,
     fetch_topoff_distinct_options,
 )
-from components.Tables.topoff import render_topoff_table
+from components.topoff.topoff import render_topoff_table
 
 DEFAULT_PAGE_SIZE = 50
 DEFAULT_SORT_STATE = {"column": None, "ascending": True}
