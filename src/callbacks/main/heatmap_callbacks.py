@@ -152,6 +152,7 @@ def heatmap_callbacks(app):
             vendors=vendors or None, clusters=clusters or None,
             networks=nets_heat or None, technologies=technologies or None,
         )
+        # DEBUG: ver si el cluster TBD / 3G / NOKIA aparece en df_meta_heat
 
         # --- Payloads ---
         if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
@@ -163,7 +164,7 @@ def heatmap_callbacks(app):
                 valores_order=("PS_RCC", "CS_RCC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
-                alarm_only=True,
+                alarm_only=False,
                 offset=offset,
                 limit=limit,
             )
@@ -335,7 +336,7 @@ def heatmap_callbacks(app):
                 valores_order=("PS_RCC", "CS_RCC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
-                alarm_only=True,
+                alarm_only=False,
                 offset=offset, limit=limit,
             )
         else:

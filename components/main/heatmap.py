@@ -348,6 +348,13 @@ def build_heatmap_payloads_fast(
             )
         else:
             rows_all["max_unit"] = np.nan
+        mask_debug = (
+                (rows_all["noc_cluster"] == "TBD") &
+                (rows_all["technology"] == "3G") &
+                (rows_all["vendor"].str.upper() == "NOKIA") &
+                (rows_all["network"] == "NET")
+        )
+
     else:
         rows_all["max_unit"] = np.nan
 
@@ -380,6 +387,11 @@ def build_heatmap_payloads_fast(
         df_small = df_small.dropna(subset=["offset48"])
         df_small["offset48"] = df_small["offset48"].astype(int)
 
+        rows_page = rows_page.merge(
+            keys_df,
+            on=["technology", "vendor", "noc_cluster", "network"],
+            how="left",
+        )
     # --- diccionarios (rid, offset48) → valor por métrica ---
     metric_maps = {}
     if not df_small.empty:
@@ -414,13 +426,14 @@ def build_heatmap_payloads_fast(
     all_scores_pct = []
     all_scores_unit = []
 
-    for rid, r in enumerate(rows_page.itertuples(index=False)):
-        tech, vend, clus, net, valores = (
+    for r in rows_page.itertuples(index=False):
+        tech, vend, clus, net, valores, rid = (
             r.technology,
             r.vendor,
             r.noc_cluster,
             r.network,
             r.valores,
+            r.rid,  # 👈 rid real de keys_df
         )
         pm, um = VALORES_MAP.get(valores, (None, None))
 

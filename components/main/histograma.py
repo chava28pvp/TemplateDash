@@ -207,37 +207,44 @@ def build_histo_payloads_fast(
     rows_page = rows_all.iloc[start:end].reset_index(drop=True)
 
     # --- reducir df_ts a visibles
+    # --- reducir df_ts a visibles (mismo patrón que el heatmap) ---
+    keys_df = rows_page[["technology", "vendor", "noc_cluster", "network"]].drop_duplicates().reset_index(drop=True)
+    keys_df["rid"] = np.arange(len(keys_df), dtype=int)
+
     if df_ts is None or df_ts.empty:
-        df_small = pd.DataFrame()
-        keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
-        keys_df["rid"] = np.arange(len(keys_df), dtype=int)
+        # sin datos de time-series, dejamos df_small vacío pero con columnas esperadas
+        df_small = pd.DataFrame(columns=["fecha", "h", "rid", *metrics_needed])
     else:
-        keys_df = rows_page[["technology","vendor","noc_cluster","network"]].drop_duplicates().reset_index(drop=True)
-        keys_df["rid"] = np.arange(len(keys_df), dtype=int)
-
+        # igual que el heatmap: filtra solo por fecha y luego mergea por las 4 claves
         df_small = df_ts.loc[
-            df_ts["fecha"].astype(str).isin([yday, today]) &
-            df_ts["network"].astype(str).isin(keys_df["network"].astype(str))
-        ].copy()
-
-        df_small = df_small.merge(
+            df_ts["fecha"].astype(str).isin([yday, today])
+        ].merge(
             keys_df,
-            on=["technology","vendor","noc_cluster","network"],
+            on=["technology", "vendor", "noc_cluster", "network"],
             how="inner",
             validate="many_to_one"
         )
-        # hora 0..23
-        hh = df_small["hora"].astype(str).str.split(":", n=1, expand=True)[0]
-        df_small["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s>=0) & (s<=23)).astype("Int64")
 
-        keep_cols = {"fecha","h","rid"} | set(metrics_needed)
-        df_small = df_small[[c for c in keep_cols if c in df_small.columns]].dropna(subset=["h"])
-        df_small["h"] = df_small["h"].astype(int)
+        if df_small.empty or "hora" not in df_small.columns:
+            df_small = pd.DataFrame(columns=["fecha", "h", "rid", *metrics_needed])
+        else:
+            # hora 0..23 (más robusto, sin expand=True)
+            hh = df_small["hora"].astype(str).str.split(":", n=1).str[0]
+            df_small["h"] = pd.to_numeric(hh, errors="coerce").where(
+                lambda s: (s >= 0) & (s <= 23)
+            ).astype("Int64")
 
-    # --- map fila -> rid
+            keep_cols = {"fecha", "h", "rid"} | set(metrics_needed)
+            df_small = (
+                df_small[[c for c in keep_cols if c in df_small.columns]]
+                .dropna(subset=["h"])
+            )
+            df_small["h"] = df_small["h"].astype(int)
+
+    # --- map fila -> rid (igual que heatmap) ---
     rows_page = rows_page.merge(
         keys_df,
-        on=["technology","vendor","noc_cluster","network"],
+        on=["technology", "vendor", "noc_cluster", "network"],
         how="left",
         validate="many_to_one"
     )
