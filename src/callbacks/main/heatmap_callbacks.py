@@ -161,7 +161,7 @@ def heatmap_callbacks(app):
                 df_ts=df_ts,
                 UMBRAL_CFG=UM_MANAGER.config(),
                 networks=nets_heat,
-                valores_order=("PS_RCC", "CS_RCC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                valores_order=("PS_RRC", "CS_RRC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
                 alarm_only=False,
@@ -333,7 +333,7 @@ def heatmap_callbacks(app):
                 df_ts=df_ts,
                 UMBRAL_CFG=UM_MANAGER.config(),
                 networks=nets_heat,
-                valores_order=("PS_RCC", "CS_RCC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                valores_order=("PS_RRC", "CS_RRC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
                 alarm_only=False,
@@ -468,3 +468,53 @@ def heatmap_callbacks(app):
         if is_autosize(r1) or is_autosize(r2):
             return {}  # ← limpia la selección (deselecciona la wave)
         return no_update
+
+    @app.callback(
+        Output("hi-unit", "figure", allow_duplicate=True),
+        Input("hi-pct", "restyleData"),
+        State("hi-unit", "figure"),
+        State("hi-pct", "figure"),
+        prevent_initial_call=True,
+    )
+    def sync_legend_from_pct_to_unit(restyle, unit_fig, pct_fig):
+        # Si no hay interacción o figuras, no hacemos nada
+        if not restyle or not unit_fig or not pct_fig:
+            return no_update
+
+        # restyle = [update_dict, [indices]]
+        try:
+            update, idxs = restyle
+        except Exception:
+            return no_update
+
+        if "visible" not in update:
+            # Nos interesa solo cuando cambia la visibilidad vía leyenda
+            return no_update
+
+        vis_update = update["visible"]
+        # normaliza a lista
+        if not isinstance(vis_update, (list, tuple)):
+            vis_update = [vis_update] * len(idxs)
+
+        # Copia mutable de la figura de UNIT
+        new_unit_fig = unit_fig.copy()
+        data_unit = new_unit_fig.get("data", [])
+        data_pct = pct_fig.get("data", [])
+
+        # Por cada traza afectada en hi-pct…
+        for v, idx in zip(vis_update, idxs):
+            if idx is None or idx >= len(data_pct):
+                continue
+            trace_pct = data_pct[idx]
+            # cluster viene del legendgroup o del name
+            cluster = trace_pct.get("legendgroup") or trace_pct.get("name")
+            if not cluster:
+                continue
+
+            # …aplicamos la misma visibilidad a TODAS las trazas
+            # del mismo cluster en hi-unit
+            for t in data_unit:
+                if t.get("legendgroup") == cluster or t.get("name") == cluster:
+                    t["visible"] = v
+
+        return new_unit_fig

@@ -21,8 +21,8 @@ from components.main.heatmap import (
 # =========================================================
 
 VALORES_MAP_TOPOFF = {
-    "PS_RCC":  ("ps_rrc_ia_percent", "ps_rrc_fail"),
-    "CS_RCC":  ("cs_rrc_ia_percent", "cs_rrc_fail"),
+    "PS_RRC":  ("ps_rrc_ia_percent", "ps_rrc_fail"),
+    "CS_RRC":  ("cs_rrc_ia_percent", "cs_rrc_fail"),
     "PS_RAB":  ("ps_rab_ia_percent", "ps_rab_fail"),
     "CS_RAB":  ("cs_rab_ia_percent", "cs_rab_fail"),
     "PS_DROP": ("ps_drop_dc_percent", "ps_drop_abnrel"),
@@ -89,7 +89,7 @@ def build_heatmap_payloads_topoff(
     df_ts: pd.DataFrame,
     *,
     UMBRAL_CFG: dict,
-    valores_order=("PS_RCC","CS_RCC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
+    valores_order=("PS_RRC","CS_RRC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
     today: Optional[str] = None,
     yday: Optional[str] = None,
     alarm_keys: Optional[set] = None,

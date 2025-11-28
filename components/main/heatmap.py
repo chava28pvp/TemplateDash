@@ -10,8 +10,8 @@ import plotly.graph_objs as go
 # Config
 # =========================
 VALORES_MAP = {
-    "PS_RCC":  ("ps_rrc_ia_percent", "ps_rrc_fail"),
-    "CS_RCC":  ("cs_rrc_ia_percent", "cs_rrc_fail"),
+    "PS_RRC":  ("ps_rrc_ia_percent", "ps_rrc_fail"),
+    "CS_RRC":  ("cs_rrc_ia_percent", "cs_rrc_fail"),
     "PS_RAB":  ("ps_rab_ia_percent", "ps_rab_fail"),
     "CS_RAB":  ("cs_rab_ia_percent", "cs_rab_fail"),
     "PS_DROP": ("ps_drop_dc_percent", "ps_drop_abnrel"),
@@ -258,7 +258,7 @@ def build_heatmap_payloads_fast(
     *,
     UMBRAL_CFG: dict,
     networks=None,
-    valores_order=("PS_RCC","CS_RCC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
+    valores_order=("PS_RRC","CS_RRC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
     today=None,
     yday=None,
     alarm_keys=None,
@@ -654,8 +654,8 @@ def build_heatmap_figure(
     fig.update_xaxes(
         type="date",
         dtick=THREE_H_MS,
-        showticklabels=False,  # 👈 sin etiquetas
-        ticks="",              # 👈 sin marcas
+        showticklabels=False,  #
+        ticks="",              #
         showgrid=False,
         ticklabelmode="instant",
         fixedrange=True,

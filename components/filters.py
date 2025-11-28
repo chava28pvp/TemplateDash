@@ -191,6 +191,7 @@ def build_topoff_filters(
                         options=[
                             {"label": "Reciente (Fecha/Hora)", "value": "recent"},
                             {"label": "Alarmado", "value": "alarmado"},
+                            {"label": "Sitio (Site ATT A-Z)", "value": "sitio"},
                         ],
                         value="recent",
                         clearable=False,

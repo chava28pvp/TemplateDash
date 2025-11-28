@@ -571,14 +571,23 @@ def fetch_kpis_paginated_severity_global_sort(
     na_as_empty=False,
 ):
     """
-    Nuevo GLOBAL basado en umbrales del JSON (profiles.main.severity):
+    GLOBAL basado en umbrales del JSON (profiles.main.severity):
 
       - NO descarta registros (incluye todos los que cumplan el WHERE).
-      - Ordena primero por severity_score DESC (sumatoria de KPIs % usando thresholds).
-      - Luego ordena por la columna elegida (sort_by_friendly / sort_net).
-      - Luego por fecha/hora para desempatar.
 
-    Los thresholds salen de data/umbrales.json → profiles.main.severity.
+      MODO POR DEFECTO (sin columna seleccionada):
+        ORDER BY
+            severity_score DESC,
+            Date DESC,
+            Time DESC
+
+      MODO CON COLUMNA (sort_by_friendly válido):
+        ORDER BY
+            (metric_expr IS NULL) ASC,   -- NULLS LAST
+            metric_expr {ASC|DESC},      -- criterio principal
+            severity_score DESC,         -- desempate
+            Date DESC,
+            Time DESC
     """
     page = max(1, int(page))
     page_size = max(1, int(page_size))
@@ -599,27 +608,47 @@ def fetch_kpis_paginated_severity_global_sort(
         WHERE {where_sql}
     """
 
-    # Orden secundario (columna elegida)
-    order_dir = "ASC" if ascending else "DESC"
-
-    if sort_by_friendly and sort_by_friendly in COLMAP:
-        real_metric = _quote(COLMAP[sort_by_friendly])
-    else:
-        # fallback a fecha si no hay columna válida
-        real_metric = _quote(COLMAP["fecha"])
-
-    if sort_net:
-        metric_expr = (
-            f"CASE WHEN {_quote(COLMAP['network'])} = :_sort_net "
-            f"THEN {real_metric} ELSE {real_metric} END"
-        )
-        base_params["_sort_net"] = sort_net
-    else:
-        metric_expr = real_metric
-
-    # SELECT paginado
+    # columnas amigables
     friendly_cols = _resolve_columns(BASE_COLUMNS)
     select_cols = _select_list_with_aliases(friendly_cols)
+
+    order_dir = "ASC" if ascending else "DESC"
+
+    # -------- ¿hay columna seleccionada? --------
+    has_custom_sort = sort_by_friendly and (sort_by_friendly in COLMAP)
+
+    if has_custom_sort:
+        # métrica real a ordenar
+        real_metric = _quote(COLMAP[sort_by_friendly])
+
+        if sort_net:
+            metric_expr = (
+                f"CASE WHEN {_quote(COLMAP['network'])} = :_sort_net "
+                f"THEN {real_metric} ELSE {real_metric} END"
+            )
+            base_params["_sort_net"] = sort_net
+        else:
+            metric_expr = real_metric
+
+        nulls_last_expr = f"({metric_expr} IS NULL)"
+
+        # MODO COLUMNA: la métrica es el criterio principal
+        order_clause = f"""
+            ORDER BY
+                {nulls_last_expr} ASC,          -- primero no-nulos
+                {metric_expr} {order_dir},      -- métrica clickeada
+                severity_score DESC,            -- desempate global
+                {_quote(COLMAP['fecha'])} DESC,
+                {_quote(COLMAP['hora'])} DESC
+        """
+    else:
+        # MODO POR DEFECTO: EXACTO y estable, sin depender de ascending
+        order_clause = f"""
+            ORDER BY
+                severity_score DESC,
+                {_quote(COLMAP['fecha'])} DESC,
+                {_quote(COLMAP['hora'])} DESC
+        """
 
     sel_sql = f"""
         SELECT
@@ -627,11 +656,7 @@ def fetch_kpis_paginated_severity_global_sort(
             ({severity_expr}) AS severity_score
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
-        ORDER BY
-            severity_score DESC,
-            {metric_expr} {order_dir},
-            {_quote(COLMAP['fecha'])} DESC,
-            {_quote(COLMAP['hora'])} DESC
+        {order_clause}
         LIMIT :limit OFFSET :offset
     """
 
@@ -645,7 +670,12 @@ def fetch_kpis_paginated_severity_global_sort(
         ).scalar() or 0
 
         # PAGE
-        sel_params = {**base_params, **thr_params, "limit": page_size, "offset": offset}
+        sel_params = {
+            **base_params,
+            **thr_params,
+            "limit": page_size,
+            "offset": offset,
+        }
         stmt_sel = _prepare_stmt_with_expanding(sel_sql, uv, uc, un, ut)
         df = pd.read_sql(stmt_sel, conn, params=sel_params)
 
@@ -656,6 +686,7 @@ def fetch_kpis_paginated_severity_global_sort(
         df = df.where(pd.notna(df), "")
 
     return df, int(total)
+
 
 
 def fetch_kpis_paginated_severity_sort(

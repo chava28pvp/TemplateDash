@@ -95,7 +95,7 @@ def build_histo_payloads_fast(
     *,
     UMBRAL_CFG: dict,
     networks=None,
-    valores_order=("PS_RCC","CS_RCC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
+    valores_order=("PS_RRC","CS_RRC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
     today=None,
     yday=None,
     alarm_keys=None,

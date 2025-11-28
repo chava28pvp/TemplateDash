@@ -281,8 +281,6 @@ def register_callbacks(app):
                 page=page, page_size=page_size,
             )
 
-
-
         else:
             # Nuevo GLOBAL basado en profiles.main.severity
             safe_sort_state = None  # 👈 importante para no reordenar en render
@@ -413,3 +411,17 @@ def register_callbacks(app):
     def toggle_filters(n, is_open):
         return not is_open
 
+    @app.callback(
+        Output("sort-state", "data", allow_duplicate=True),
+        Input("f-fecha", "date"),
+        Input("f-hora", "value"),
+        Input("f-network", "value"),
+        Input("f-technology", "value"),
+        Input("f-vendor", "value"),
+        Input("f-cluster", "value"),
+        Input("f-sort-mode", "value"),  # si cambia entre 'global' y 'alarmado'
+        prevent_initial_call=True,
+    )
+    def reset_sort_state_on_filters(_fecha, _hora, _net, _tech, _ven, _clu, _mode):
+        # Vuelve al estado “sin columna seleccionada”
+        return {"column": None, "ascending": True}

@@ -124,10 +124,11 @@ def register_topoff_callbacks(app):
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-sort-state", "data"),
+        Input("f-hora", "value"),  # <--- NUEVO
         State("topoff-page-state", "data"),
         prevent_initial_call=True,
     )
-    def reset_page_on_any_change(ps, _mode, _s, _r, _n, _sort, page_state):
+    def reset_page_on_any_change(ps, _mode, _s, _r, _n, _sort, _hora, page_state):
         ps = max(1, int(ps or DEFAULT_PAGE_SIZE))
         current_page = int((page_state or {}).get("page", 1))
         current_ps = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
@@ -147,6 +148,7 @@ def register_topoff_callbacks(app):
         Input("topoff-page-state", "data"),
         Input("topoff-sort-state", "data"),
         Input("f-fecha", "date"),
+        Input("f-hora", "value"),  # <--- NUEVO
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
         Input("topoff-site-filter", "value"),
@@ -157,7 +159,7 @@ def register_topoff_callbacks(app):
     )
     def refresh_table(
         page_state, sort_state,
-        fecha, technologies, vendors,
+        fecha, hora, technologies, vendors,
         sites, rncs, nodebs,
         sort_mode
     ):
@@ -172,10 +174,16 @@ def register_topoff_callbacks(app):
             ascending = bool(sort_state.get("ascending", True))
 
         sort_mode = (sort_mode or "recent").lower()
-        order_mode = "alarmado" if sort_mode == "alarmado" else "recent"
+        if sort_mode == "alarmado":
+            order_mode = "alarmado"
+        elif sort_mode == "sitio":  # <--- NUEVO MODO
+            order_mode = "sitio"
+        else:
+            order_mode = "recent"
 
         common_kwargs = dict(
             fecha=fecha,
+            hora=hora,  # <--- PASAR HORA AL DATA ACCESS
             technologies=technologies,
             vendors=vendors,
             sites=sites,
@@ -186,12 +194,21 @@ def register_topoff_callbacks(app):
         )
 
         if order_mode == "alarmado":
+            # orden global por severidad
             df, total = fetch_topoff_paginated_severity_global_sort(
                 **common_kwargs,
                 sort_by_friendly=sort_by,
                 ascending=ascending,
             )
+        elif order_mode == "sitio":
+            # orden alfabético por Site ATT (ignoramos sort_by manual)
+            df, total = fetch_topoff_paginated_global_sort(
+                **common_kwargs,
+                sort_by_friendly="site_att",  # <--- clave del Site ATT
+                ascending=True,  # A-Z
+            )
         else:
+            # modo "recent" como antes
             if sort_by:
                 df, total = fetch_topoff_paginated_global_sort(
                     **common_kwargs,
@@ -218,3 +235,19 @@ def register_topoff_callbacks(app):
 
         return table, indicator, banner
 
+    @app.callback(
+            Output("topoff-sort-state", "data", allow_duplicate=True),
+            Input("topoff-order-mode", "value"),   # recent / alarmado / sitio
+            Input("f-fecha", "date"),
+            Input("f-hora", "value"),
+            Input("f-technology", "value"),
+            Input("f-vendor", "value"),
+            Input("topoff-site-filter", "value"),
+            Input("topoff-rnc-filter", "value"),
+            Input("topoff-nodeb-filter", "value"),
+            prevent_initial_call=True,
+        )
+    def reset_sort_on_filters(_mode, *_):
+    # siempre que cambie cualquiera de estos inputs,
+    # regresamos el sort al estado "sin columna"
+        return {"column": None, "ascending": True}

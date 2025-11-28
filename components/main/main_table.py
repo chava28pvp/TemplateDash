@@ -3,6 +3,7 @@ import math
 import dash_bootstrap_components as dbc
 import pandas as pd
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
+import numpy as np
 
 # =========================
 # Configuración / Constantes
@@ -100,20 +101,48 @@ def _label_base(base: str) -> str:
 def _fmt_number(v, colname=None):
     if v is None:
         return ""
+
+    # Caso especial: hora 'HH:MM:SS' -> 'HH:MM'
+    if colname == "hora":
+        if isinstance(v, str):
+            # Si viene como '06:00:00' o '06:00'
+            return v[:5]
+        # Por si algún día viene como datetime/time:
+        try:
+            from datetime import time, datetime
+            if isinstance(v, (time, datetime)):
+                return v.strftime("%H:%M")
+        except Exception:
+            pass
+
     if isinstance(v, float):
         if pd.isna(v) or math.isinf(v):
             return ""
         if colname == "ps_traff_gb":
             return f"{int(v):,}"
         return f"{v:,.1f}"
+
     if isinstance(v, int):
         return f"{v:,}"
+
     return str(v)
 
-def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
-                   color=None, striped=True, animated=True, decimals=1,
-                   width_px=140, show_value_right=False):
-    # Detecta faltantes/inválidos
+
+def _progress_cell(
+    value,
+    *,
+    vmin=0.0,
+    vmax=100.0,
+    label_tpl="{value:.1f}",
+    color=None,
+    striped=True,
+    animated=True,
+    decimals=1,
+    width_px=140,
+    show_value_right=False,
+    scale="linear",          # "linear" o "log"
+):
+    # Detecta faltantes/inválidos -> solo pista gris, sin número
     try:
         real = float(value)
     except (TypeError, ValueError):
@@ -125,11 +154,63 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
     if vmax <= vmin:
         vmax = vmin + 1.0
 
-    pct = (real - vmin) / (vmax - vmin) * 100.0
+    # --- normalización según escala ---
+    if scale == "log":
+        def _log(x: float) -> float:
+            return math.log10(max(x, 0.0) + 1.0)  # evita log(0)
+
+        vmin_n = _log(vmin)
+        vmax_n = _log(vmax)
+        real_n = _log(real)
+    else:
+        vmin_n = vmin
+        vmax_n = vmax
+        real_n = real
+
+    if vmax_n <= vmin_n:
+        vmax_n = vmin_n + 1.0
+
+    pct = (real_n - vmin_n) / (vmax_n - vmin_n) * 100.0
     pct = max(0.0, min(pct, 100.0))
 
-    label = label_tpl.format(value=real) if label_tpl else f"{real:.{decimals}f}"
+    # --- etiqueta (valor real) ---
+    if label_tpl:
+        try:
+            label = label_tpl.format(value=real)
+        except Exception:
+            label = f"{real:.{decimals}f}"
+    else:
+        label = f"{real:.{decimals}f}"
 
+    # ============================
+    # Caso especial: pct == 0  → valor 0 (o igual a min)
+    # ============================
+    if pct <= 0.0:
+        # Pista gris, SIN barra de color, pero con el texto centrado y más oscuro
+        inner = html.Div(
+            label,
+            className="kb-zero-label",
+            style={
+                "width": "100%",
+                "height": "100%",
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "center",
+                "fontSize": "0.70rem",
+                "fontWeight": "700",
+                "color": "#343a40",  # texto más oscuro para que no se pierda
+                "lineHeight": "1",
+            },
+        )
+        bar = html.Div(
+            inner,
+            className="kb kb--empty kb--zero",
+            style={"--kb-width": f"{width_px}px"},
+        )
+        # Para 0 ignoramos show_value_right: siempre adentro del track
+        return bar
+
+    # --- caso normal (pct > 0): barra coloreada con el label dentro ---
     classes = ["kb", "kb--primary"]
     if striped:
         classes.append("is-striped")
@@ -155,6 +236,8 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
     if show_value_right:
         return html.Div([bar, html.Div(label, className="kb-value")], className="kb-wrap")
     return bar
+
+
 
 def vendor_badge(val):
     """
@@ -300,6 +383,18 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     PROGRESS_COLS = prefixed_progress_cols(networks)
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
+
+    PROGRESS_MAX_BY_COL = {}
+    for col in PROGRESS_COLS:
+        if col in df_wide.columns:
+            serie = df_wide[col]
+            # ignorar NaN / inf
+            valid = serie.replace([np.inf, -np.inf], np.nan).dropna()
+            if not valid.empty:
+                PROGRESS_MAX_BY_COL[col] = float(valid.max())
+            else:
+                PROGRESS_MAX_BY_COL[col] = None
+
     if sort_state:
         sort_col_req = (sort_state or {}).get("column")
         resolved = _resolve_sort_col(df_wide, METRIC_ORDER, sort_col_req)
@@ -350,14 +445,40 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
 
             if col in PROGRESS_COLS:
                 cfg = progress_cfg(base_name, network=net, profile="main")
+
+                col_max = PROGRESS_MAX_BY_COL.get(col)
+                vmin = cfg.get("min", 0.0)
+
+                # --- vmax: siempre el máximo real cuando exista, para que solo el mayor llegue al 100% ---
+                if col_max is not None and col_max > vmin:
+                    vmax = col_max
+                else:
+                    vmax = cfg.get("max", 100.0)
+
+                # --- decidir si usamos escala log o lineal ---
+                use_log = False
+                if col in df_wide.columns:
+                    serie = df_wide[col].replace([math.inf, -math.inf], math.nan).dropna()
+                    min_pos = None
+                    if not serie.empty:
+                        serie_pos = serie[serie > 0]
+                        if not serie_pos.empty:
+                            min_pos = float(serie_pos.min())
+
+                    if min_pos is not None and col_max and col_max > 0:
+                        ratio = col_max / max(min_pos, 1.0)
+                        # ajusta el umbral a tu gusto (10, 20, 50, etc.)
+                        use_log = ratio >= 20
+
                 cell = _progress_cell(
                     val,
-                    vmin=cfg.get("min", 0.0),
-                    vmax=cfg.get("max", 100.0),
+                    vmin=vmin,
+                    vmax=vmax,
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
                     width_px=140,
                     show_value_right=False,
+                    scale="log" if use_log else "linear",
                 )
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val

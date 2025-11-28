@@ -364,6 +364,29 @@ def _build_severity_expr_from_json_topoff(profile: str = "topoff"):
     severity_expr = " + ".join(kpi_terms)
     return severity_expr, params
 
+def _hora_with_prev(hora: Optional[str]):
+    """
+    Devuelve (hora, hora_anterior) en formato 'HH:MM:SS'.
+    Si hora es None o 'Todas', devuelve None.
+    """
+    if not hora:
+        return None
+    s = str(hora).strip()
+    if not s or s.lower() == "todas":
+        return None
+
+    # Acepta 'HH:MM:SS' o 'HH:MM'
+    fmt = "%H:%M:%S" if len(s) > 5 else "%H:%M"
+    try:
+        dt = datetime.strptime(s, fmt)
+    except ValueError:
+        return None
+
+    prev = dt - timedelta(hours=1)
+
+    h1 = dt.strftime("%H:%M:%S")
+    h2 = prev.strftime("%H:%M:%S")
+    return h1, h2
 
 # =========================================================
 # API pública
@@ -371,6 +394,7 @@ def _build_severity_expr_from_json_topoff(profile: str = "topoff"):
 def fetch_topoff_paginated(
     *,
     fecha: Optional[str] = None,
+    hora: Optional[str] = None,  # <--- NUEVO
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
     sites: Optional[List[str]] = None,
@@ -400,6 +424,12 @@ def fetch_topoff_paginated(
         rncs=rncs,
         nodebs=nodebs,
     )
+    hpair = _hora_with_prev(hora)
+    if hpair:
+        h1, h2 = hpair
+        where_sql = f"({where_sql}) AND {_quote(COLMAP['hora'])} IN (:h1, :h2)"
+        params["h1"] = h1
+        params["h2"] = h2
 
     count_sql = f"""
         SELECT COUNT(*) AS total
@@ -439,6 +469,7 @@ def fetch_topoff_paginated(
 def fetch_topoff_paginated_global_sort(
     *,
     fecha: Optional[str] = None,
+    hora: Optional[str] = None,  # <--- NUEVO
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
     sites: Optional[List[str]] = None,
@@ -470,6 +501,13 @@ def fetch_topoff_paginated_global_sort(
         rncs=rncs,
         nodebs=nodebs,
     )
+
+    hpair = _hora_with_prev(hora)
+    if hpair:
+        h1, h2 = hpair
+        where_sql = f"({where_sql}) AND {_quote(COLMAP['hora'])} IN (:h1, :h2)"
+        params["h1"] = h1
+        params["h2"] = h2
 
     NUMERIC_COLS = {
         "ps_traff_gb", "ps_rrc_ia_percent", "ps_rrc_fail",
@@ -539,6 +577,7 @@ def fetch_topoff_paginated_global_sort(
 def fetch_topoff_paginated_severity_global_sort(
     *,
     fecha: Optional[str] = None,
+    hora: Optional[str] = None,  # <--- NUEVO
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
     sites: Optional[List[str]] = None,
@@ -577,6 +616,13 @@ def fetch_topoff_paginated_severity_global_sort(
         rncs=rncs,
         nodebs=nodebs,
     )
+
+    hpair = _hora_with_prev(hora)
+    if hpair:
+        h1, h2 = hpair
+        where_sql = f"({where_sql}) AND {_quote(COLMAP['hora'])} IN (:h1, :h2)"
+        params["h1"] = h1
+        params["h2"] = h2
 
     severity_expr, thr_params = _build_severity_expr_from_json_topoff(profile="topoff")
 

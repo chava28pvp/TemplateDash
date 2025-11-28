@@ -26,7 +26,7 @@ def build_histo_payloads_topoff(
     df_ts: pd.DataFrame,
     *,
     UMBRAL_CFG: dict,
-    valores_order=("PS_RCC","CS_RCC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
+    valores_order=("PS_RRC","CS_RRC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
     today: Optional[str] = None,
     yday: Optional[str] = None,
     alarm_keys: Optional[set] = None,
