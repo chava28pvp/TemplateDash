@@ -39,6 +39,7 @@ COLMAP = {
     "site_att": "SITE_ATT",
     "rnc": "RNC",
     "nodeb": "NODEB",
+    "cluster": "NOC_CLUSTER",
 
     # PS
     "ps_traff_gb": "PS_TRAFF_GB",
@@ -73,7 +74,7 @@ COLMAP = {
 
 BASE_COLUMNS = [
     "fecha", "hora", "technology", "vendor", "region", "province",
-    "municipality", "site_att", "rnc", "nodeb",
+    "municipality", "cluster", "site_att", "rnc", "nodeb",
     "ps_traff_gb", "ps_rrc_ia_percent", "ps_rrc_fail",
     "ps_rab_ia_percent", "ps_rab_fail",
     "ps_s1_ia_percent", "ps_s1_fail",
@@ -86,7 +87,7 @@ BASE_COLUMNS = [
 ]
 
 _MIN_SAFE_COLUMNS = [
-    "fecha", "hora", "technology", "vendor", "region", "province", "municipality",
+    "fecha", "hora", "technology", "vendor", "region", "province", "municipality", "cluster"
 ]
 
 _SEVERITY_KPIS_TOPOFF = [
@@ -120,6 +121,7 @@ def _prepare_stmt_with_expanding(
     use_technologies=False,
     use_vendors=False,
     use_fechas=False,
+    use_clusters=False,
     use_sites=False,
     use_rncs=False,
     use_nodebs=False,
@@ -137,6 +139,8 @@ def _prepare_stmt_with_expanding(
         stmt = stmt.bindparams(bindparam("vendors", expanding=True))
     if use_fechas:
         stmt = stmt.bindparams(bindparam("fechas", expanding=True))
+    if use_clusters:
+        stmt = stmt.bindparams(bindparam("clusters", expanding=True))
     if use_sites:
         stmt = stmt.bindparams(bindparam("sites", expanding=True))
     if use_rncs:
@@ -218,6 +222,7 @@ def _filters_where_and_params(
     municipalities: Optional[List[str]] = None,
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
+    clusters: Optional[List[str]] = None,   # <--- NUEVO
     sites: Optional[List[str]] = None,
     rncs: Optional[List[str]] = None,
     nodebs: Optional[List[str]] = None,
@@ -225,7 +230,9 @@ def _filters_where_and_params(
     where = ["1=1"]
     params: Dict[str, object] = {}
 
-    # fechas
+    # ========================
+    # Fechas
+    # ========================
     use_fechas = False
     if fechas:
         where.append(f"{_quote(COLMAP['fecha'])} IN :fechas")
@@ -235,53 +242,88 @@ def _filters_where_and_params(
         where.append(f"{_quote(COLMAP['fecha'])} = :fecha")
         params["fecha"] = fecha
 
-    # hora (TopOff no la usa, pero dejamos helper genérico)
+    # ========================
+    # Hora
+    # ========================
     if hora and str(hora).lower() != "todas":
         where.append(f"{_quote(COLMAP['hora'])} = :hora")
         params["hora"] = hora
 
-    regions = _as_list(regions)
-    provinces = _as_list(provinces)
+    # ========================
+    # Normalizar listas
+    # ========================
+    regions        = _as_list(regions)
+    provinces      = _as_list(provinces)
     municipalities = _as_list(municipalities)
-    technologies = _as_list(technologies)
-    vendors = _as_list(vendors)
-    sites = _as_list(sites)
-    rncs = _as_list(rncs)
-    nodebs = _as_list(nodebs)
+    technologies   = _as_list(technologies)
+    vendors        = _as_list(vendors)
+    clusters       = _as_list(clusters)   # <--- NUEVO
+    sites          = _as_list(sites)
+    rncs           = _as_list(rncs)
+    nodebs         = _as_list(nodebs)
 
-    use_regions = use_provinces = use_muns = use_technologies = use_vendors = False
-    use_sites = use_rncs = use_nodebs = False
+    # ========================
+    # Inicializar SIEMPRE flags
+    # ========================
+    use_regions      = False
+    use_provinces    = False
+    use_muns         = False
+    use_technologies = False
+    use_vendors      = False
+    use_clusters     = False   # <--- CLAVE
+    use_sites        = False
+    use_rncs         = False
+    use_nodebs       = False
 
+    # ========================
+    # Filtros estándar
+    # ========================
     if regions:
         where.append(f"{_quote(COLMAP['region'])} IN :regions")
         params["regions"] = regions
         use_regions = True
+
     if provinces:
         where.append(f"{_quote(COLMAP['province'])} IN :provinces")
         params["provinces"] = provinces
         use_provinces = True
+
     if municipalities:
         where.append(f"{_quote(COLMAP['municipality'])} IN :muns")
         params["muns"] = municipalities
         use_muns = True
+
     if technologies:
         where.append(f"{_quote(COLMAP['technology'])} IN :technologies")
         params["technologies"] = technologies
         use_technologies = True
+
     if vendors:
         where.append(f"{_quote(COLMAP['vendor'])} IN :vendors")
         params["vendors"] = vendors
         use_vendors = True
 
-    # nuevos filtros exclusivos topoff
+    # ========================
+    # NUEVO: filtro por cluster
+    # ========================
+    if clusters:
+        where.append(f"{_quote(COLMAP['cluster'])} IN :clusters")
+        params["clusters"] = clusters
+        use_clusters = True
+
+    # ========================
+    # Filtros exclusivos TopOff
+    # ========================
     if sites:
         where.append(f"{_quote(COLMAP['site_att'])} IN :sites")
         params["sites"] = sites
         use_sites = True
+
     if rncs:
         where.append(f"{_quote(COLMAP['rnc'])} IN :rncs")
         params["rncs"] = rncs
         use_rncs = True
+
     if nodebs:
         where.append(f"{_quote(COLMAP['nodeb'])} IN :nodebs")
         params["nodebs"] = nodebs
@@ -296,10 +338,12 @@ def _filters_where_and_params(
         use_technologies,
         use_vendors,
         use_fechas,
+        use_clusters,
         use_sites,
         use_rncs,
         use_nodebs,
     )
+
 
 
 def _build_severity_expr_from_json_topoff(profile: str = "topoff"):
@@ -397,6 +441,7 @@ def fetch_topoff_paginated(
     hora: Optional[str] = None,  # <--- NUEVO
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
+    clusters: Optional[List[str]] = None,
     sites: Optional[List[str]] = None,
     rncs: Optional[List[str]] = None,
     nodebs: Optional[List[str]] = None,
@@ -411,7 +456,7 @@ def fetch_topoff_paginated(
     select_cols = _select_list_with_aliases(friendly_cols)
 
     fechas = _fecha_with_prev(fecha)
-    where_sql, params, ur, up, um, utech, uvend, uf, us, urc, unb = _filters_where_and_params(
+    where_sql, params, ur, up, um, utech, uvend, uf, uclu, us, urc, unb = _filters_where_and_params(
         fecha=None,
         fechas=fechas,
         hora=None,
@@ -420,6 +465,7 @@ def fetch_topoff_paginated(
         municipalities=municipalities,
         technologies=technologies,
         vendors=vendors,
+        clusters=clusters,
         sites=sites,
         rncs=rncs,
         nodebs=nodebs,
@@ -451,12 +497,12 @@ def fetch_topoff_paginated(
 
     eng = get_engine()
     with eng.connect() as conn:
-        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, uclu, us, urc, unb)
         total = conn.execute(stmt_count, params).scalar() or 0
 
         sel_params = dict(params)
         sel_params.update({"limit": page_size, "offset": offset})
-        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, uclu, us, urc, unb)
         df = pd.read_sql(stmt_sel, conn, params=sel_params)
 
     df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
@@ -472,6 +518,7 @@ def fetch_topoff_paginated_global_sort(
     hora: Optional[str] = None,  # <--- NUEVO
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
+    clusters: Optional[List[str]] = None,
     sites: Optional[List[str]] = None,
     rncs: Optional[List[str]] = None,
     nodebs: Optional[List[str]] = None,
@@ -488,7 +535,7 @@ def fetch_topoff_paginated_global_sort(
     select_cols = _select_list_with_aliases(friendly_cols)
 
     fechas = _fecha_with_prev(fecha)
-    where_sql, params, ur, up, um, utech, uvend, uf, us, urc, unb = _filters_where_and_params(
+    where_sql, params, ur, up, um, utech, uvend, uf, uclu, us, urc, unb = _filters_where_and_params(
         fecha=None,
         fechas=fechas,
         hora=None,
@@ -497,6 +544,7 @@ def fetch_topoff_paginated_global_sort(
         municipalities=municipalities,
         technologies=technologies,
         vendors=vendors,
+        clusters=clusters,
         sites=sites,
         rncs=rncs,
         nodebs=nodebs,
@@ -559,12 +607,12 @@ def fetch_topoff_paginated_global_sort(
 
     eng = get_engine()
     with eng.connect() as conn:
-        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, uclu, us, urc, unb)
         total = conn.execute(stmt_count, params).scalar() or 0
 
         sel_params = dict(params)
         sel_params.update({"limit": page_size, "offset": offset})
-        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, uclu, us, urc, unb)
         df = pd.read_sql(stmt_sel, conn, params=sel_params)
 
     df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
@@ -580,6 +628,7 @@ def fetch_topoff_paginated_severity_global_sort(
     hora: Optional[str] = None,  # <--- NUEVO
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
+    clusters: Optional[List[str]] = None,
     sites: Optional[List[str]] = None,
     rncs: Optional[List[str]] = None,
     nodebs: Optional[List[str]] = None,
@@ -603,7 +652,7 @@ def fetch_topoff_paginated_severity_global_sort(
     offset = (page - 1) * page_size
 
     fechas = _fecha_with_prev(fecha)
-    where_sql, params, ur, up, um, utech, uvend, uf, us, urc, unb = _filters_where_and_params(
+    where_sql, params, ur, up, um, utech, uvend, uf, uclu, us, urc, unb = _filters_where_and_params(
         fecha=None,
         fechas=fechas,
         hora=None,
@@ -612,6 +661,7 @@ def fetch_topoff_paginated_severity_global_sort(
         municipalities=municipalities,
         technologies=technologies,
         vendors=vendors,
+        clusters=clusters,
         sites=sites,
         rncs=rncs,
         nodebs=nodebs,
@@ -658,11 +708,11 @@ def fetch_topoff_paginated_severity_global_sort(
 
     eng = get_engine()
     with eng.connect() as conn:
-        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        stmt_count = _prepare_stmt_with_expanding(count_sql, ur, up, um, utech, uvend, uf, uclu, us, urc, unb)
         total = conn.execute(stmt_count, {**params, **thr_params}).scalar() or 0
 
         sel_params = {**params, **thr_params, "limit": page_size, "offset": offset}
-        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, ur, up, um, utech, uvend, uf, uclu, us, urc, unb)
         df = pd.read_sql(stmt_sel, conn, params=sel_params)
 
     df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
@@ -677,6 +727,7 @@ def fetch_topoff_distinct_options(
     fecha: Optional[str] = None,
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
+    clusters: Optional[List[str]] = None,
     regions: Optional[List[str]] = None,
     provinces: Optional[List[str]] = None,
     municipalities: Optional[List[str]] = None,
@@ -686,7 +737,7 @@ def fetch_topoff_distinct_options(
     """
     fechas = _fecha_with_prev(fecha)
 
-    where_sql, params, ur, up, um, utech, uvend, uf, us, urc, unb = _filters_where_and_params(
+    where_sql, params, ur, up, um, utech, uvend, uf, uclu, us, urc, unb = _filters_where_and_params(
         fecha=None,
         fechas=fechas,
         hora=None,
@@ -695,6 +746,7 @@ def fetch_topoff_distinct_options(
         municipalities=municipalities,
         technologies=technologies,
         vendors=vendors,
+        clusters=clusters,
     )
 
     sql = f"""
@@ -708,7 +760,7 @@ def fetch_topoff_distinct_options(
 
     eng = get_engine()
     with eng.connect() as conn:
-        stmt = _prepare_stmt_with_expanding(sql, ur, up, um, utech, uvend, uf, us, urc, unb)
+        stmt = _prepare_stmt_with_expanding(sql, ur, up, um, utech, uvend, uf, uclu, us, urc, unb)
         df = pd.read_sql(stmt, conn, params=params)
 
     sites = sorted([x for x in df.get("site_att", pd.Series()).dropna().unique().tolist() if str(x).strip()])
@@ -778,6 +830,7 @@ def fetch_alarm_meta_for_topoff(
     regions=None,
     provinces=None,
     municipalities=None,
+    clusters=None,
     site_atts=None,
     rncs=None,
     nodebs=None,
@@ -788,7 +841,7 @@ def fetch_alarm_meta_for_topoff(
             alarm_score DESC (#KPIs % críticos distintos en el grupo)
             flag_hits  DESC (ocurrencias críticas totales)
       - alarm_keys_set: set de keys del grupo con >=1 KPI crítico
-            {(technology, vendor, region, province, municipality, site_att, rnc, nodeb)}
+            {(technology, vendor, region, province, municipality, cluster, site_att, rnc, nodeb)}
     """
     # -------- Fechas (hoy + ayer) --------
     try:
@@ -802,59 +855,34 @@ def fetch_alarm_meta_for_topoff(
 
     cfg = load_threshold_cfg()  # cacheado
 
-    # -------- WHERE sin hora; fechas via IN --------
-    # TopOff no filtra hora. Aquí metemos filtros de vendor/tech/region/etc
-    fechas = _fecha_with_prev(fecha)
-    where_sql, params, ur, up, um, utech, uvend, uf, *_ = _filters_where_and_params(
+    # -------- WHERE sin hora; fechas via IN (f1,f2) --------
+    # Filtros por vendor/tech/region/etc + cluster + site/rnc/nodeb
+    where_sql, params, ur, up, um, utech, uvend, uf, uclu, us, urc, unb = _filters_where_and_params(
         fecha=None,
-        fechas=fechas,
+        fechas=None,   # fechas las metemos aparte con f1,f2
         hora=None,
         regions=regions,
         provinces=provinces,
         municipalities=municipalities,
         technologies=technologies,
         vendors=vendors,
+        clusters=clusters,
         sites=site_atts,
         rncs=rncs,
         nodebs=nodebs,
     )
 
-    # filtros extra propios de topoff (si ya los agregaste en _filters_where_and_params, quítalos de aquí)
-    def _as_list_local(x):
-        return _as_list(x)
-
-    site_atts = _as_list_local(site_atts)
-    rncs      = _as_list_local(rncs)
-    nodebs    = _as_list_local(nodebs)
-
-    if site_atts:
-        where_sql += f" AND {_quote(COLMAP['site_att'])} IN :site_atts"
-        params["site_atts"] = site_atts
-        ur_site = True
-    else:
-        ur_site = False
-
-    if rncs:
-        where_sql += f" AND {_quote(COLMAP['rnc'])} IN :rncs"
-        params["rncs"] = rncs
-        ur_rnc = True
-    else:
-        ur_rnc = False
-
-    if nodebs:
-        where_sql += f" AND {_quote(COLMAP['nodeb'])} IN :nodebs"
-        params["nodebs"] = nodebs
-        ur_nb = True
-    else:
-        ur_nb = False
-
+    # Fechas específicas: ayer + hoy
     where_sql = f"({where_sql}) AND {_quote(COLMAP['fecha'])} IN (:f1, :f2)"
     params = {**params, "f1": yday_str, "f2": today_str}
 
     # -------- KPIs % evaluables en TopOff --------
     alarm_kpis = [k for k in _SEVERITY_KPIS_TOPOFF if k in COLMAP]
     if not alarm_kpis:
-        empty_cols = ["technology","vendor","region","province","municipality","site_att","rnc","nodeb"]
+        empty_cols = [
+            "technology", "vendor", "region", "province", "municipality",
+            "cluster", "site_att", "rnc", "nodeb"
+        ]
         return pd.DataFrame(columns=empty_cols), set()
 
     # -------- Severidad desde JSON profile="topoff" --------
@@ -877,13 +905,13 @@ def fetch_alarm_meta_for_topoff(
         orientation_def = default_block.get("orientation", "lower_is_better")
 
         def_cri = float(thresholds_def.get("critico", 0.0))
-        p_def = f"{kpi}_def"
-        thr_params_all[f"{p_def}_cri"] = def_cri
+        pfx = f"{kpi}_def"
+        thr_params_all[f"{pfx}_cri"] = def_cri
 
         if orientation_def == "higher_is_better":
-            cond = f"COALESCE({num_col}, 0) <= :{p_def}_cri"
+            cond = f"COALESCE({num_col}, 0) <= :{pfx}_cri"
         else:
-            cond = f"COALESCE({num_col}, 0) >= :{p_def}_cri"
+            cond = f"COALESCE({num_col}, 0) >= :{pfx}_cri"
 
         return f"(CASE WHEN {cond} THEN 1 ELSE 0 END)"
 
@@ -901,11 +929,12 @@ def fetch_alarm_meta_for_topoff(
     f_reg  = _quote(COLMAP["region"])
     f_prov = _quote(COLMAP["province"])
     f_mun  = _quote(COLMAP["municipality"])
+    f_clu  = _quote(COLMAP["cluster"])
     f_site = _quote(COLMAP["site_att"])
     f_rnc  = _quote(COLMAP["rnc"])
     f_nb   = _quote(COLMAP["nodeb"])
 
-    # -------- SQL (CTEs igual que main) --------
+    # -------- SQL (CTEs) --------
     sql = f"""
     WITH base AS (
         SELECT
@@ -914,6 +943,7 @@ def fetch_alarm_meta_for_topoff(
             {f_reg}  AS region,
             {f_prov} AS province,
             {f_mun}  AS municipality,
+            {f_clu}  AS cluster,
             {f_site} AS site_att,
             {f_rnc}  AS rnc,
             {f_nb}   AS nodeb,
@@ -923,7 +953,7 @@ def fetch_alarm_meta_for_topoff(
     ),
     flags_raw AS (
         SELECT
-            technology, vendor, region, province, municipality, site_att, rnc, nodeb,
+            technology, vendor, region, province, municipality, cluster, site_att, rnc, nodeb,
             {flags_list_sql}
         FROM base
     ),
@@ -935,21 +965,22 @@ def fetch_alarm_meta_for_topoff(
     ),
     agg_node AS (
         SELECT
-            technology, vendor, region, province, municipality, site_att, rnc, nodeb,
+            technology, vendor, region, province, municipality, cluster, site_att, rnc, nodeb,
             {", ".join([f"MAX(f_{k}) AS mx_{k}" for k in alarm_kpis])},
             SUM(row_flag_sum) AS flag_hits
         FROM flags
-        GROUP BY technology, vendor, region, province, municipality, site_att, rnc, nodeb
+        GROUP BY
+            technology, vendor, region, province, municipality, cluster, site_att, rnc, nodeb
     ),
     ranked AS (
         SELECT
-            technology, vendor, region, province, municipality, site_att, rnc, nodeb,
+            technology, vendor, region, province, municipality, cluster, site_att, rnc, nodeb,
             ({' + '.join([f"COALESCE(mx_{k},0)" for k in alarm_kpis])}) AS alarm_score,
             flag_hits
         FROM agg_node
     )
     SELECT
-        technology, vendor, region, province, municipality, site_att, rnc, nodeb,
+        technology, vendor, region, province, municipality, cluster, site_att, rnc, nodeb,
         alarm_score, flag_hits
     FROM ranked
     ORDER BY alarm_score DESC, flag_hits DESC, vendor ASC, technology ASC, nodeb ASC
@@ -964,32 +995,34 @@ def fetch_alarm_meta_for_topoff(
             use_muns=um,
             use_technologies=utech,
             use_vendors=uvend,
-            use_fechas=False,  # ya metimos f1,f2
+            use_fechas=False,      # ya metimos f1,f2 manualmente
+            use_clusters=uclu,
+            use_sites=us,
+            use_rncs=urc,
+            use_nodebs=unb,
         )
-
-        # bindparams expanding extras:
-        if ur_site:
-            stmt = stmt.bindparams(bindparam("site_atts", expanding=True))
-        if ur_rnc:
-            stmt = stmt.bindparams(bindparam("rncs", expanding=True))
-        if ur_nb:
-            stmt = stmt.bindparams(bindparam("nodebs", expanding=True))
 
         df_meta_topoff = pd.read_sql(stmt, conn, params={**params, **thr_params_all})
 
     if df_meta_topoff is None or df_meta_topoff.empty:
-        empty_cols = ["technology","vendor","region","province","municipality","site_att","rnc","nodeb"]
+        empty_cols = [
+            "technology", "vendor", "region", "province", "municipality",
+            "cluster", "site_att", "rnc", "nodeb"
+        ]
         return pd.DataFrame(columns=empty_cols), set()
 
+    cols_key = [
+        "technology", "vendor", "region", "province", "municipality",
+        "cluster", "site_att", "rnc", "nodeb"
+    ]
+
     alarm_keys_set = set(
-        tuple(x) for x in df_meta_topoff[
-            ["technology","vendor","region","province","municipality","site_att","rnc","nodeb"]
-        ].itertuples(index=False, name=None)
+        tuple(x) for x in df_meta_topoff[cols_key].itertuples(index=False, name=None)
         if (x[-2] is not None or x[-1] is not None)  # rnc/nodeb presentes
     )
 
-    df_out = df_meta_topoff[
-        ["technology","vendor","region","province","municipality","site_att","rnc","nodeb"]
-    ].drop_duplicates().reset_index(drop=True)
+    df_out = df_meta_topoff[cols_key].drop_duplicates().reset_index(drop=True)
 
     return df_out, alarm_keys_set
+
+

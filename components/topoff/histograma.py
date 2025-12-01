@@ -61,7 +61,7 @@ def build_histo_payloads_topoff(
     if not metrics_needed:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-    # base meta
+    # base meta (ahora incluye cluster vía META_COLS_TOPOFF)
     base = df_meta.drop_duplicates(subset=META_COLS_TOPOFF)[META_COLS_TOPOFF].reset_index(drop=True)
 
     # expand por métricas
@@ -72,9 +72,10 @@ def build_histo_payloads_topoff(
 
         if alarm_only and alarm_keys is not None:
             keys_ok = set(alarm_keys)
+            # key completa con cluster
             mask = list(zip(
                 rf["technology"], rf["vendor"], rf["region"], rf["province"],
-                rf["municipality"], rf["site_att"], rf["rnc"], rf["nodeb"]
+                rf["municipality"], rf["cluster"], rf["site_att"], rf["rnc"], rf["nodeb"]
             ))
             rf = rf[[m in keys_ok for m in mask]]
 
@@ -125,7 +126,7 @@ def build_histo_payloads_topoff(
     end = start + max(1, int(limit))
     rows_page = rows_all.iloc[start:end].reset_index(drop=True)
 
-    # keys visibles
+    # keys visibles (incluye cluster)
     keys_df = rows_page[META_COLS_TOPOFF].drop_duplicates().reset_index(drop=True)
     keys_df["rid"] = np.arange(len(keys_df), dtype=int)
 
@@ -203,6 +204,7 @@ def build_histo_payloads_topoff(
         region = r.region
         province = r.province
         municipality = r.municipality
+        cluster = getattr(r, "cluster", "") or ""
         site_att = r.site_att
         rnc = r.rnc
         nodeb = r.nodeb
@@ -212,8 +214,9 @@ def build_histo_payloads_topoff(
 
         y_labels.append(str(nodeb))
 
+        # detail ahora: tech/vendor/region/prov/mun/cluster/site/rnc/nodeb/valores
         row_detail.append(
-            f"{tech}/{vend}/{region}/{province}/{municipality}/{site_att}/{rnc}/{nodeb}/{valores}"
+            f"{tech}/{vend}/{region}/{province}/{municipality}/{cluster}/{site_att}/{rnc}/{nodeb}/{valores}"
         )
 
         # % raw + buckets
@@ -268,8 +271,6 @@ def build_histo_payloads_topoff(
     }
     return pct_payload, unit_payload, page_info
 
-
-
 # =========================================================
 # FIGURA HISTO TOPOFF (overlay waves)
 # =========================================================
@@ -292,7 +293,8 @@ def build_overlay_waves_figure_topoff(
 ):
     """
     Igual a build_overlay_waves_figure del main,
-    pero parsea detail TopOff: tech/vendor/region/prov/mun/site/rnc/nodeb/valores
+    pero parsea detail TopOff:
+      tech/vendor/region/prov/mun/cluster/site/rnc/nodeb/valores
     """
 
     if not payload:
@@ -336,17 +338,19 @@ def build_overlay_waves_figure_topoff(
         row_vals = z_raw[i] if i < len(z_raw) else []
         raw = _interp_nan(row_vals)
 
-        # parse TopOff detail
-        parts = (detail[i] if i < len(detail) else "").split("/", 8)
-        tech   = parts[0] if len(parts) > 0 else ""
-        vendor = parts[1] if len(parts) > 1 else ""
-        region = parts[2] if len(parts) > 2 else ""
-        prov   = parts[3] if len(parts) > 3 else ""
-        mun    = parts[4] if len(parts) > 4 else ""
-        site   = parts[5] if len(parts) > 5 else ""
-        rnc    = parts[6] if len(parts) > 6 else ""
-        nodeb  = parts[7] if len(parts) > 7 else ""
-        valores= parts[8] if len(parts) > 8 else ""
+        # parse TopOff detail:
+        # tech/vendor/region/prov/mun/cluster/site/rnc/nodeb/valores
+        parts = (detail[i] if i < len(detail) else "").split("/", 9)
+        tech    = parts[0] if len(parts) > 0 else ""
+        vendor  = parts[1] if len(parts) > 1 else ""
+        region  = parts[2] if len(parts) > 2 else ""
+        prov    = parts[3] if len(parts) > 3 else ""
+        mun     = parts[4] if len(parts) > 4 else ""
+        cluster = parts[5] if len(parts) > 5 else ""
+        site    = parts[6] if len(parts) > 6 else ""
+        rnc     = parts[7] if len(parts) > 7 else ""
+        nodeb   = parts[8] if len(parts) > 8 else ""
+        valores = parts[9] if len(parts) > 9 else ""
 
         series_key = detail[i]
 
@@ -409,34 +413,36 @@ def build_overlay_waves_figure_topoff(
             showlegend=showlegend,
             opacity=overall_alpha,
             customdata=np.column_stack([
-                np.full(len(x), series_key, dtype=object),
-                raw if raw.size else np.zeros(len(x)),
-                np.full(len(x), tech, dtype=object),
-                np.full(len(x), vendor, dtype=object),
-                np.full(len(x), region, dtype=object),
-                np.full(len(x), prov, dtype=object),
-                np.full(len(x), mun, dtype=object),
-                np.full(len(x), site, dtype=object),
-                np.full(len(x), rnc, dtype=object),
-                np.full(len(x), nodeb, dtype=object),
-                np.full(len(x), valores, dtype=object),
-                np.full(len(x), bucket, dtype=object),
+                np.full(len(x), series_key, dtype=object),   # 0
+                raw if raw.size else np.zeros(len(x)),       # 1
+                np.full(len(x), tech, dtype=object),         # 2
+                np.full(len(x), vendor, dtype=object),       # 3
+                np.full(len(x), region, dtype=object),       # 4
+                np.full(len(x), prov, dtype=object),         # 5
+                np.full(len(x), mun, dtype=object),          # 6
+                np.full(len(x), cluster, dtype=object),      # 7
+                np.full(len(x), site, dtype=object),         # 8
+                np.full(len(x), rnc, dtype=object),          # 9
+                np.full(len(x), nodeb, dtype=object),        # 10
+                np.full(len(x), valores, dtype=object),      # 11
+                np.full(len(x), bucket, dtype=object),       # 12
             ]),
             hovertemplate=(
                 "<b>%{customdata[0]}</b><br>"
                 "%{x|%Y-%m-%d %H:%M}<br>"
                 + ("Valor: " if mode=="severity" else "Unidad: ")
                 + f"%{{customdata[1]:{val_fmt}}}"
-                + "<br><span style='opacity:0.85'>Bucket:</span> %{customdata[11]}"
+                + "<br><span style='opacity:0.85'>Bucket:</span> %{customdata[12]}"
                 + "<br><span style='opacity:0.85'>Tech:</span> %{customdata[2]} | "
                   "<span style='opacity:0.85'>Vendor:</span> %{customdata[3]}"
                 + "<br><span style='opacity:0.85'>Region:</span> %{customdata[4]} | "
                   "<span style='opacity:0.85'>Prov:</span> %{customdata[5]} | "
                   "<span style='opacity:0.85'>Mun:</span> %{customdata[6]}"
-                + "<br><span style='opacity:0.85'>Site:</span> %{customdata[7]} | "
-                  "<span style='opacity:0.85'>RNC:</span> %{customdata[8]} | "
-                  "<span style='opacity:0.85'>NodeB:</span> %{customdata[9]}"
-                + "<br><span style='opacity:0.85'>Valor:</span> %{customdata[10]}"
+                + "<br><span style='opacity:0.85'>Cluster:</span> %{customdata[7]}"
+                + "<br><span style='opacity:0.85'>Site:</span> %{customdata[8]} | "
+                  "<span style='opacity:0.85'>RNC:</span> %{customdata[9]} | "
+                  "<span style='opacity:0.85'>NodeB:</span> %{customdata[10]}"
+                + "<br><span style='opacity:0.85'>Valor:</span> %{customdata[11]}"
                 + "<extra></extra>"
             )
         ))
@@ -502,3 +508,4 @@ def build_overlay_waves_figure_topoff(
         uirevision="keep",
     )
     return fig
+

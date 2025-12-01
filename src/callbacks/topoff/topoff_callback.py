@@ -41,13 +41,15 @@ def register_topoff_callbacks(app):
         Input("f-fecha", "date"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
+        Input("f-cluster", "value"),
         prevent_initial_call=False,
     )
-    def load_topoff_options(fecha, technologies, vendors):
+    def load_topoff_options(fecha, technologies, vendors, clusters):
         sites, rncs, nodebs = fetch_topoff_distinct_options(
             fecha=fecha,
             technologies=technologies,
             vendors=vendors,
+            clusters=clusters,
         )
         return (
             [{"label": s, "value": s} for s in sites],
@@ -124,11 +126,12 @@ def register_topoff_callbacks(app):
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-sort-state", "data"),
-        Input("f-hora", "value"),  # <--- NUEVO
+        Input("f-hora", "value"),
+        Input("f-cluster", "value"),
         State("topoff-page-state", "data"),
         prevent_initial_call=True,
     )
-    def reset_page_on_any_change(ps, _mode, _s, _r, _n, _sort, _hora, page_state):
+    def reset_page_on_any_change(ps, _mode, _s, _r, _n, _sort, _hora,  _cluster, page_state):
         ps = max(1, int(ps or DEFAULT_PAGE_SIZE))
         current_page = int((page_state or {}).get("page", 1))
         current_ps = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
@@ -148,9 +151,10 @@ def register_topoff_callbacks(app):
         Input("topoff-page-state", "data"),
         Input("topoff-sort-state", "data"),
         Input("f-fecha", "date"),
-        Input("f-hora", "value"),  # <--- NUEVO
+        Input("f-hora", "value"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
+        Input("f-cluster", "value"),
         Input("topoff-site-filter", "value"),
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
@@ -160,6 +164,7 @@ def register_topoff_callbacks(app):
     def refresh_table(
         page_state, sort_state,
         fecha, hora, technologies, vendors,
+        clusters,
         sites, rncs, nodebs,
         sort_mode
     ):
@@ -183,9 +188,10 @@ def register_topoff_callbacks(app):
 
         common_kwargs = dict(
             fecha=fecha,
-            hora=hora,  # <--- PASAR HORA AL DATA ACCESS
+            hora=hora,
             technologies=technologies,
             vendors=vendors,
+            clusters=clusters,
             sites=sites,
             rncs=rncs,
             nodebs=nodebs,
@@ -242,6 +248,7 @@ def register_topoff_callbacks(app):
             Input("f-hora", "value"),
             Input("f-technology", "value"),
             Input("f-vendor", "value"),
+            Input("f-cluster", "value"),
             Input("topoff-site-filter", "value"),
             Input("topoff-rnc-filter", "value"),
             Input("topoff-nodeb-filter", "value"),

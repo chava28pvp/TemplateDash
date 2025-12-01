@@ -3,7 +3,6 @@ import dash_bootstrap_components as dbc
 import math
 import pandas as pd
 
-# Reutilizamos tus utilidades de umbrales
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
 
 # =============== Configuración visual ===============
@@ -13,12 +12,10 @@ ROW_KEYS = [
     "hora",
     "technology",
     "vendor",
-    "region",
-    "province",
-    "municipality",
     "site_att",
     "rnc",
     "nodeb",
+    "cluster",
 ]
 
 BASE_GROUPS = [
@@ -47,6 +44,7 @@ DISPLAY = {
     "site_att": "Site ATT",
     "rnc": "RNC",
     "nodeb": "NodeB",
+    "cluster": "Cluster",
 
     # PS
     "ps_traff_gb": "GB",
@@ -99,7 +97,7 @@ SEVERITY_COLS = {
     "rtx_tnl_tx_percent",
 }
 
-NON_COMPACT_KEYS = {"fecha", "hora", "nodeb"}
+NON_COMPACT_KEYS = {"fecha", "hora", "nodeb", "cluster"}
 
 
 # =============== Helpers ===============
@@ -244,8 +242,6 @@ def _progress_cell(
     if show_value_right:
         return html.Div([bar, html.Div(label, className="kb-value")], className="kb-wrap")
     return bar
-
-
 
 
 # =============== Header 2 niveles ===============

@@ -39,10 +39,11 @@ SEV_COLORS = {
 }
 SEV_ORDER = ["excelente", "bueno", "regular", "critico"]
 
-# Meta que define UNA FILA única en TopOff (sin network/cluster)
+# Meta que define UNA FILA única en TopOff (ahora con cluster)
 META_COLS_TOPOFF = [
     "technology", "vendor",
     "region", "province", "municipality",
+    "cluster",          # 👈 NOC_CLUSTER
     "site_att", "rnc", "nodeb",
 ]
 
@@ -63,6 +64,7 @@ def _build_x_dt_15m(day_str):
         for m in (0, 15, 30, 45)
     ]
 
+
 def _safe_q15_to_idx(hhmmss):
     """
     hhmmss: '10:15:00' -> 10*4 + 1 = 41
@@ -79,6 +81,7 @@ def _safe_q15_to_idx(hhmmss):
     except Exception:
         pass
     return None
+
 
 # =========================================================
 # PAYLOADS TOPOFF (AYER/Hoy, 48 columnas)
@@ -100,7 +103,7 @@ def build_heatmap_payloads_topoff(
     """
     Igual a build_heatmap_payloads_fast del main pero adaptado a TopOff:
     - SIN network
-    - SIN noc_cluster
+    - CON noc_cluster (cluster) a nivel sitio/nodo
     - meta por sitio/nodo
     """
     if df_meta is None or df_meta.empty:
@@ -133,9 +136,10 @@ def build_heatmap_payloads_topoff(
 
         if alarm_only and alarm_keys is not None:
             keys_ok = set(alarm_keys)
+            # ahora la llave incluye también cluster
             mask = list(zip(
                 rf["technology"], rf["vendor"], rf["region"], rf["province"],
-                rf["municipality"], rf["site_att"], rf["rnc"], rf["nodeb"]
+                rf["municipality"], rf["cluster"], rf["site_att"], rf["rnc"], rf["nodeb"]
             ))
             rf = rf[[m in keys_ok for m in mask]]
 
@@ -230,7 +234,7 @@ def build_heatmap_payloads_topoff(
         mp = metric_maps.get(metric) or {}
         return [mp.get((rid, off)) for off in range(192)]
 
-    # 👈 FIX 1: amarrar rid real a cada fila (aunque se repita por valores_order)
+    # amarrar rid real a cada fila (aunque se repita por valores_order)
     rows_page = rows_page.merge(
         keys_df,
         on=META_COLS_TOPOFF,
@@ -250,7 +254,7 @@ def build_heatmap_payloads_topoff(
     all_scores_pct, all_scores_unit = [], []
 
     for r in rows_page.itertuples(index=False):
-        rid = int(getattr(r, "rid"))  # 👈 FIX 1
+        rid = int(getattr(r, "rid"))
 
         valores = r.valores
         pm, um = VALORES_MAP_TOPOFF.get(valores, (None, None))
@@ -265,9 +269,12 @@ def build_heatmap_payloads_topoff(
         site_att = getattr(r, "site_att", "") or ""
         rnc = getattr(r, "rnc", "") or ""
 
+        # etiqueta visual (no incluimos cluster aquí, pero sí participa en la llave/meta)
         y_labels.append(f"{nodeb} | {tech}/{vend}/{valores}")
 
-        # 👈 FIX 2: detail completo consistente con el parser del hover
+        # detail consistente con parser del hover:
+        # tech/vendor/region/province/municipality/site/rnc/nodeb/valores
+        # (cluster no se incluye en este string para no romper los parsers actuales)
         row_detail.append(
             f"{tech}/{vend}/{region}/{province}/{municipality}/{site_att}/{rnc}/{nodeb}/{valores}"
         )
@@ -489,7 +496,6 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
     )
     return fig
 
-
 # =========================================================
 # SUMMARY TABLE TOPOFF
 # =========================================================
@@ -611,3 +617,5 @@ def build_time_header_children_by_dates(fecha_str: str):
         hours_children.append(html.Div(label, className=" ".join(cls)))
 
     return dates_children, hours_children
+
+

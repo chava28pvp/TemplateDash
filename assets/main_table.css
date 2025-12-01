@@ -231,7 +231,7 @@
 .kpi-table .td-key.td-noc_cluster {
   width: 100px;         /* ↑ antes ~120 */
   min-width: 140px;
-  max-width: 280px;
+  max-width: 200px;
 }
 
 /* Permitir 2 líneas y cortar con ellipsis si excede */
@@ -302,9 +302,9 @@
 .kpi-table.compact th.th-noc_cluster,
 .kpi-table.compact td.td-noc_cluster,
 {
-  width: 110px;
-  min-width: 90px;
-  max-width: 140px;
+  width: 70px;
+  min-width: 70px;
+  max-width: 70px;
 }
 
 /* Texto interno: hasta 2 líneas y ellipsis SOLO para Cluster */
