@@ -3,6 +3,7 @@ import math
 import dash_bootstrap_components as dbc
 import pandas as pd
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
+import numpy as np
 
 # =========================
 # Configuración / Constantes
@@ -72,7 +73,6 @@ DISPLAY_NAME_BASE = {
 INDEX_KEYS = ROW_KEYS
 VALUE_COLS = sorted({c for _, cols in BASE_GROUPS for c in cols} | {"integrity"})
 
-
 # =========================
 # Helpers
 # =========================
@@ -101,39 +101,116 @@ def _label_base(base: str) -> str:
 def _fmt_number(v, colname=None):
     if v is None:
         return ""
+
+    # Caso especial: hora 'HH:MM:SS' -> 'HH:MM'
+    if colname == "hora":
+        if isinstance(v, str):
+            # Si viene como '06:00:00' o '06:00'
+            return v[:5]
+        # Por si algún día viene como datetime/time:
+        try:
+            from datetime import time, datetime
+            if isinstance(v, (time, datetime)):
+                return v.strftime("%H:%M")
+        except Exception:
+            pass
+
     if isinstance(v, float):
         if pd.isna(v) or math.isinf(v):
             return ""
-        # Caso especial para ps_traff_gb → sin decimales
         if colname == "ps_traff_gb":
             return f"{int(v):,}"
         return f"{v:,.1f}"
+
     if isinstance(v, int):
         return f"{v:,}"
+
     return str(v)
 
 
-def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
-                   color=None, striped=True, animated=True, decimals=1,
-                   width_px=140, show_value_right=False):
-    # Detecta faltantes/inválidos
+def _progress_cell(
+    value,
+    *,
+    vmin=0.0,
+    vmax=100.0,
+    label_tpl="{value:.1f}",
+    color=None,
+    striped=True,
+    animated=True,
+    decimals=1,
+    width_px=140,
+    show_value_right=False,
+    scale="linear",          # "linear" o "log"
+):
+    # Detecta faltantes/inválidos -> solo pista gris, sin número
     try:
         real = float(value)
     except (TypeError, ValueError):
         real = None
 
     if real is None or pd.isna(real) or math.isinf(real):
-        # Celda vacía (sin barra ni label)
         return html.Div("", className="kb kb--empty", style={"--kb-width": f"{width_px}px"})
 
     if vmax <= vmin:
         vmax = vmin + 1.0
 
-    pct = (real - vmin) / (vmax - vmin) * 100.0
+    # --- normalización según escala ---
+    if scale == "log":
+        def _log(x: float) -> float:
+            return math.log10(max(x, 0.0) + 1.0)  # evita log(0)
+
+        vmin_n = _log(vmin)
+        vmax_n = _log(vmax)
+        real_n = _log(real)
+    else:
+        vmin_n = vmin
+        vmax_n = vmax
+        real_n = real
+
+    if vmax_n <= vmin_n:
+        vmax_n = vmin_n + 1.0
+
+    pct = (real_n - vmin_n) / (vmax_n - vmin_n) * 100.0
     pct = max(0.0, min(pct, 100.0))
 
-    label = label_tpl.format(value=real) if label_tpl else f"{real:.{decimals}f}"
+    # --- etiqueta (valor real) ---
+    if label_tpl:
+        try:
+            label = label_tpl.format(value=real)
+        except Exception:
+            label = f"{real:.{decimals}f}"
+    else:
+        label = f"{real:.{decimals}f}"
 
+    # ============================
+    # Caso especial: pct == 0  → valor 0 (o igual a min)
+    # ============================
+    if pct <= 0.0:
+        # Pista gris, SIN barra de color, pero con el texto centrado y más oscuro
+        inner = html.Div(
+            label,
+            className="kb-zero-label",
+            style={
+                "width": "100%",
+                "height": "100%",
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "center",
+                "fontSize": "0.70rem",
+                "fontWeight": "700",
+                "color": "#343a40",  # texto más oscuro para que no se pierda
+                "lineHeight": "1",
+            },
+        )
+        bar = html.Div(
+            inner,
+            className="kb kb--empty kb--zero",
+            style={"--kb-width": f"{width_px}px"},
+        )
+        # Para 0 ignoramos show_value_right: siempre adentro del track
+        return bar
+
+    # --- caso normal (pct > 0): barra coloreada con el label dentro ---
     classes = ["kb", "kb--primary"]
     if striped:
         classes.append("is-striped")
@@ -161,6 +238,27 @@ def _progress_cell(value, *, vmin=0.0, vmax=100.0, label_tpl="{value:.1f}",
     return bar
 
 
+
+def vendor_badge(val):
+    """
+    Muestra solo la inicial del vendor (E, N, H, S...), con tooltip.
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return html.Span("", className="vendor-empty")
+
+    raw = str(val).strip()
+    initial = (raw[0]).upper() if raw else "?"
+
+    return html.Div(
+        html.Span(
+            initial,
+            title=raw,  # tooltip nativo
+            className="vendor-initial"
+        ),
+        className="cell-key",
+        **{"aria-label": f"Vendor {raw}"}
+    )
+
 # =========================
 # Lógica multi-network
 # =========================
@@ -175,10 +273,8 @@ def expand_groups_for_networks(networks: list[str]):
             end_of_group.add(cols[-1])
     return groups_3lvl, visible_order, end_of_group
 
-
 def prefixed_progress_cols(networks: list[str]):
     return {f"{net}__{c}" for net in networks for c in BASE_PROGRESS_COLS}
-
 
 def prefixed_severity_cols(networks: list[str]):
     return {f"{net}__{c}" for net in networks for c in BASE_SEVERITY_COLS}
@@ -195,8 +291,6 @@ def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
     wide = wide.reset_index()
     return wide
 
-
-
 # =========================
 # Header 3 niveles (keys + grupos por network)
 # =========================
@@ -209,7 +303,7 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
     left = [
         html.Th(DISPLAY_NAME_BASE.get(k, k).title(),
                 rowSpan=3,
-                className=f"th-left th-{k}")  # 👈 clase específica por columna
+                className=f"th-left th-{k}")  # clase específica por columna
         for k in ROW_KEYS
     ]
 
@@ -229,7 +323,6 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
     for _, _, cols in groups_3lvl:
         for c in cols:
             base = strip_net(c)
-            # ¿esta columna es la actualmente ordenada?
             is_sorted = (sort_col == c) or (sort_col == base)
             arrow = "▲" if (is_sorted and ascending) else ("▼" if is_sorted else "↕")
 
@@ -237,7 +330,7 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
                 html.Span(_label_base(base), className="th-label"),
                 html.Button(
                     arrow,
-                    id={"type": "sort-btn", "col": c},  # ← pattern-matching ID
+                    id={"type": "sort-btn", "col": c},
                     n_clicks=0,
                     className="sort-btn",
                     **{"aria-label": f"Ordenar {c}"}
@@ -253,19 +346,16 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
 
     return html.Thead([html.Tr(row1), html.Tr(row2), html.Tr(row3)])
 
-
-
 # =========================
 # Render principal
 # =========================
 
-# --- firma nueva (nota: agrega sort_state) ---
-def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=None):
+def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=None, progress_max_by_col=None):
     if df_in is None or df_in.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
 
     # 1) Detectar si es long o wide
-    is_long = "network" in df_in.columns  # long si tiene esta columna
+    is_long = "network" in df_in.columns
     df_long = df_in.copy()
 
     # 2) Derivar networks si no se especifican explícitamente
@@ -273,7 +363,6 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
         if is_long:
             networks = sorted(df_long["network"].dropna().unique().tolist())
         else:
-            # inferir de columnas wide: prefijo antes de "__"
             nets = set()
             for c in df_in.columns:
                 if "__" in c:
@@ -294,7 +383,20 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     PROGRESS_COLS = prefixed_progress_cols(networks)
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
-    # ↓↓↓ APLICAR ORDEN ↓↓↓
+    if progress_max_by_col is not None:
+        PROGRESS_MAX_BY_COL = progress_max_by_col
+    else:
+        PROGRESS_MAX_BY_COL = {}
+        for col in PROGRESS_COLS:
+            if col in df_wide.columns:
+                serie = df_wide[col]
+                # ignorar NaN / inf
+                valid = serie.replace([np.inf, -np.inf], np.nan).dropna()
+                if not valid.empty:
+                    PROGRESS_MAX_BY_COL[col] = float(valid.max())
+                else:
+                    PROGRESS_MAX_BY_COL[col] = None
+
     if sort_state:
         sort_col_req = (sort_state or {}).get("column")
         resolved = _resolve_sort_col(df_wide, METRIC_ORDER, sort_col_req)
@@ -321,48 +423,69 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     for row in df_wide.itertuples(index=False, name=None):
         tds = []
 
-        # keys a la izquierda (si no existen en wide, intenta buscarlas en df_in)
+        # keys a la izquierda (con vendor inicial y tooltips en todas)
         for key in ROW_KEYS:
             val = _safe_get(row, key)
-            if val is None and key in df_in.columns:
-                val = df_in.iloc[0][key]
 
-            # Mostrar solo inicial en 'vendor' (y dejar el valor completo como tooltip)
             if key == "vendor":
-                txt = (str(val)[0]).upper() if val not in (None, "") else ""
-                content = html.Span(txt, title=str(val) if val not in (None, "") else "")
+                cell_content = vendor_badge(val)
+                tds.append(html.Td(cell_content, className=f"td-key td-{key}"))
             else:
-                # Pasa el nombre de la columna para que _fmt_number pueda decidir formatos especiales
                 content = _fmt_number(val, key)
-
-            tds.append(
-                html.Td(
-                    html.Div(content, className="cell-key"),
-                    className=f"td-key td-{key}"  # 👈 clase específica por columna
+                tds.append(
+                    html.Td(
+                        html.Div(content, className="cell-key", title=str(content) if content else ""),
+                        className=f"td-key td-{key}"
+                    )
                 )
-            )
 
-        # métricas
+        # métricas (centradas por CSS)
         for col in METRIC_ORDER:
             val = _safe_get(row, col)
             base_name = strip_net(col)
             net = col.split("__", 1)[0] if "__" in col else None
 
             if col in PROGRESS_COLS:
-                cfg = progress_cfg(base_name, network=net)
+                cfg = progress_cfg(base_name, network=net, profile="main")
+
+                col_max = PROGRESS_MAX_BY_COL.get(col)
+                vmin = cfg.get("min", 0.0)
+
+                # --- vmax: siempre el máximo real cuando exista, para que solo el mayor llegue al 100% ---
+                if col_max is not None and col_max > vmin:
+                    vmax = col_max
+                else:
+                    vmax = cfg.get("max", 100.0)
+
+                # --- decidir si usamos escala log o lineal ---
+                use_log = False
+                if col in df_wide.columns:
+                    serie = df_wide[col].replace([math.inf, -math.inf], math.nan).dropna()
+                    min_pos = None
+                    if not serie.empty:
+                        serie_pos = serie[serie > 0]
+                        if not serie_pos.empty:
+                            min_pos = float(serie_pos.min())
+
+                    if min_pos is not None and col_max and col_max > 0:
+                        ratio = col_max / max(min_pos, 1.0)
+                        # ajusta el umbral a tu gusto (10, 20, 50, etc.)
+                        use_log = ratio >= 20
+
                 cell = _progress_cell(
                     val,
-                    vmin=cfg.get("min", 0.0),
-                    vmax=cfg.get("max", 100.0),
+                    vmin=vmin,
+                    vmax=vmax,
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
                     width_px=140,
                     show_value_right=False,
+                    scale="log" if use_log else "linear",
                 )
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
                 if (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
-                    cls = f"cell-{cell_severity(base_name, float(num_val), network=net)}"
+                    cls = f"cell-{cell_severity(base_name, float(num_val), network=net, profile='main')}"
                 else:
                     cls = "cell-neutral"
                 cell = html.Div(_fmt_number(val, base_name), className=cls)
@@ -376,4 +499,3 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     table = dbc.Table([header, body], bordered=False, hover=True, responsive=True, striped=True, size="sm",
                       className="kpi-table compact")
     return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
-

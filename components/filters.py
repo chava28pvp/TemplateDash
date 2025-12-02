@@ -54,7 +54,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-network",
                         options=[{"label": n, "value": n} for n in network_options],
-                        value=network_options,          # << todas por defecto
+                        value=[],          # << todas por defecto
                         multi=True,
                         clearable=False,
                         placeholder="Selecciona network",
@@ -67,7 +67,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-technology",
                         options=[{"label": t, "value": t} for t in technology_options],
-                        value=technology_options,       # << todas por defecto si vienen
+                        value=[],       # << todas por defecto si vienen
                         multi=True,
                         placeholder="Selecciona technology",
                         persistence=True, persistence_type="session"
@@ -82,7 +82,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-vendor",
                         options=[{"label": v, "value": v} for v in vendor_options],
-                        value=vendor_options,            # << todas por defecto si vienen
+                        value=[],            # << todas por defecto si vienen
                         multi=True,
                         placeholder="Selecciona vendor",
                         persistence=True, persistence_type="session"
@@ -94,7 +94,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-cluster",
                         options=[{"label": c, "value": c} for c in cluster_options],
-                        value=cluster_options,           # << todas por defecto si vienen
+                        value=[],           # << todas por defecto si vienen
                         multi=True,
                         placeholder="Selecciona cluster",
                         persistence=True, persistence_type="session"
@@ -125,4 +125,81 @@ def build_filters(
 
         ]),
         className="shadow-sm filtros-card"
+    )
+def build_topoff_filters(
+    site_options=None,
+    rnc_options=None,
+    nodeb_options=None,
+):
+    site_options = site_options or []
+    rnc_options  = rnc_options  or []
+    nodeb_options= nodeb_options or []
+
+    return dbc.Card(
+        dbc.CardBody([
+            # 3 dropdowns mini
+            dbc.Row([
+                dbc.Col([
+                    dbc.Label("Site ATT", className="mb-1"),
+                    dcc.Dropdown(
+                        id="topoff-site-filter",
+                        options=[{"label": s, "value": s} for s in site_options],
+                        value=[],
+                        multi=True,
+                        searchable=True,
+                        clearable=True,
+                        placeholder="Sites...",
+                        persistence=False,
+                    ),
+                ], md=4),
+
+                dbc.Col([
+                    dbc.Label("RNC", className="mb-1"),
+                    dcc.Dropdown(
+                        id="topoff-rnc-filter",
+                        options=[{"label": s, "value": s} for s in rnc_options],
+                        value=[],
+                        multi=True,
+                        searchable=True,
+                        clearable=True,
+                        placeholder="RNCs...",
+                        persistence=False,
+                    ),
+                ], md=4),
+
+                dbc.Col([
+                    dbc.Label("NodeB", className="mb-1"),
+                    dcc.Dropdown(
+                        id="topoff-nodeb-filter",
+                        options=[{"label": s, "value": s} for s in nodeb_options],
+                        value=[],
+                        multi=True,
+                        searchable=True,
+                        clearable=True,
+                        placeholder="NodeBs...",
+                        persistence=False,
+                    ),
+                ], md=4),
+            ], className="g-2 mb-2"),
+
+            # dropdown de orden debajo
+            dbc.Row([
+                dbc.Col([
+                    dbc.Label("Orden", className="mb-1"),
+                    dcc.Dropdown(
+                        id="topoff-order-mode",
+                        options=[
+                            {"label": "Reciente (Fecha/Hora)", "value": "recent"},
+                            {"label": "Alarmado", "value": "alarmado"},
+                            {"label": "Sitio (Site ATT A-Z)", "value": "sitio"},
+                        ],
+                        value="recent",
+                        clearable=False,
+                        searchable=False,
+                        persistence=False,
+                    )
+                ], md=4),
+            ], className="g-2"),
+        ]),
+        className="shadow-sm filtros-card mini-filtros",
     )

@@ -6,17 +6,23 @@ from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
 def create_umbral_config_modal(network_options=None):
     """
-    Construye el modal para configurar umbrales.
-    - Incluye selector de Métrica y de Network (Global/ATT/NET/TEF, etc.)
-    - Los paneles de Severity y Progress se rellenarán vía callbacks usando:
-        UM_MANAGER.get_severity(metric, network or None)
-        UM_MANAGER.get_progress(metric, network or None)
-    - Para guardar:
-        UM_MANAGER.upsert_severity(metric, thresholds=..., network=(value or None))
-        UM_MANAGER.upsert_progress(metric, min_v=..., max_v=..., decimals=..., label=..., network=(value or None))
-    - Para restablecer override (botón "Restablecer override"):
-        borrar per_network[network] en el manager (o usar un helper clear_network_override).
+    Modal para configurar umbrales por Tabla/Perfil (main/topoff) y por Network.
+    - Selecciona primero la Tabla (perfil) -> 'umbral-table'
+    - Luego la Métrica -> 'umbral-metric'
+    - Y el Ámbito de Network -> 'umbral-network'
+    Los callbacks usarán el valor de 'umbral-table' como 'profile' al leer/guardar:
+        UM_MANAGER.get_severity(..., profile=table)
+        UM_MANAGER.get_progress(..., profile=table)
+        UM_MANAGER.upsert_severity(..., profile=table)
+        UM_MANAGER.upsert_progress(..., profile=table)
     """
+    # Opciones de tablas/perfiles (puedes extenderlas si agregas más tablas)
+    table_options = [
+        {"label": "Tabla principal (Main)", "value": "main"},
+        {"label": "TopOff", "value": "topoff"},
+    ]
+
+    # Métricas disponibles (unión de perfiles, así no depende del orden inicial)
     metrics = UM_MANAGER.list_metrics()
 
     # Opciones para el selector de network (ámbito).
@@ -51,6 +57,23 @@ def create_umbral_config_modal(network_options=None):
             dbc.ModalHeader(dbc.ModalTitle("Configurar umbrales")),
             dbc.ModalBody([
 
+                # Selector de Tabla / Perfil
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Tabla / Perfil"),
+                        dcc.Dropdown(
+                            id="umbral-table",
+                            options=table_options,
+                            value="main",            # por defecto 'main'
+                            clearable=False,
+                        ),
+                        html.Small(
+                            "Selecciona qué tabla vas a configurar (perfiles independientes).",
+                            className="text-muted d-block mt-1",
+                        ),
+                    ], md=8),
+                ], className="mb-3"),
+
                 # Selector de métrica
                 dbc.Row([
                     dbc.Col([
@@ -68,7 +91,7 @@ def create_umbral_config_modal(network_options=None):
                     ])
                 ], className="mb-3"),
 
-                # Selector de network (ámbito) + botón de restablecer override
+                # Selector de network (ámbito)
                 dbc.Row([
                     dbc.Col([
                         html.Label("Network (ámbito)"),
@@ -79,14 +102,13 @@ def create_umbral_config_modal(network_options=None):
                             clearable=False,
                         ),
                         html.Small(
-                            "Selecciona una red",
+                            "Selecciona una red (o Global) para aplicar overrides por network.",
                             className="text-muted d-block mt-1",
                         ),
                     ], md=8),
-
                 ], className="mb-3"),
 
-                # Panel de Severity (4 colores)
+                # Panel de Severidad (4 colores)
                 html.Div([
                     dbc.Badge("4 niveles", color="primary", className="me-2"),
                     html.Span("Use valores de corte apropiados según la orientación."),
@@ -96,7 +118,6 @@ def create_umbral_config_modal(network_options=None):
                         dbc.Col(_severity_card("regular", "#e67e22"), md=6),
                         dbc.Col(_severity_card("critico", "#e74c3c"), md=6),
                     ], className="g-3 mt-1"),
-
                 ], id="severity-panel", hidden=True, className="mb-3"),
 
                 # Panel de Progress (min/max)
@@ -106,7 +127,6 @@ def create_umbral_config_modal(network_options=None):
                         dbc.Col(dbc.Input(id="progress-min", type="number", placeholder="Mínimo", step="any"), md=6),
                         dbc.Col(dbc.Input(id="progress-max", type="number", placeholder="Máximo", step="any"), md=6),
                     ], className="g-3 mt-1"),
-
                 ], id="progress-panel", hidden=True, className="mb-3"),
 
                 # Área de errores
@@ -124,7 +144,10 @@ def _severity_card(label: str, color: str) -> dbc.Card:
     return dbc.Card(
         dbc.CardBody([
             html.Div([
-                html.Span(style={"display": "inline-block", "width": 12, "height": 12, "background": color, "borderRadius": 2, "marginRight": 6}),
+                html.Span(style={
+                    "display": "inline-block", "width": 12, "height": 12,
+                    "background": color, "borderRadius": 2, "marginRight": 6
+                }),
                 html.Strong(label.title()),
             ], className="mb-2 d-flex align-items-center"),
             dbc.Input(id=f"sev-{label}", type="number", placeholder="Valor", step="any"),

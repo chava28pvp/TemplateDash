@@ -1,11 +1,8 @@
 """
 
 
-/* Optional: keep compact table look */
 .kpi-table.compact td, .kpi-table.compact th { padding: .25rem .4rem; vertical-align: middle; }
 
-/* Progress bar container width is handled inline via --kb-width (already in your code) */
-"""
 body {
     background-color: #121212 !important;
     color: #f1f1f1;
@@ -38,7 +35,7 @@ body {
   background-color: #3d3d3d;
   color: #fff;
 }
-/* Eleva por encima del “glass” y su backdrop */
+/* Eleva por encima del glass y su backdrop */
 .modal         { z-index: 2000; }
 .modal-backdrop{ z-index: 1900; }
 

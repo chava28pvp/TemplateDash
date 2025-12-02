@@ -6,9 +6,8 @@ from functools import lru_cache
 from sqlalchemy import create_engine, text, bindparam
 from typing import Dict, Tuple, Optional, List
 
-from components.Tables.histograma import VALORES_MAP
-from .Utils.alarmados import alarm_threshold_for, load_threshold_cfg, excess_base_for
-from .config import SQLALCHEMY_URL
+from src.Utils.alarmados import alarm_threshold_for, load_threshold_cfg, excess_base_for
+from src.config import SQLALCHEMY_URL
 
 # =========================================================
 # Engine / Config
@@ -81,20 +80,14 @@ BASE_COLUMNS = [
 # Mínimo seguro si ninguna columna mapea (evita SELECT *)
 _MIN_SAFE_COLUMNS = ["fecha", "hora", "vendor", "noc_cluster", "network", "technology"]
 
-_ALARM_KPIS = [
-    "ps_rrc_fail",
-    "ps_rab_fail",
-    "ps_s1_fail",
-    "ps_drop_abnrel",
-    "cs_rrc_fail",
-    "cs_rab_fail",
-]
-_ALARM_KPIS_heatmap = [
-    "ps_rrc_fail",
-    "ps_rab_fail",
-    "ps_drop_abnrel",
-    "cs_rrc_fail",
-    "cs_rab_fail",
+_SEVERITY_KPIS = [
+    "ps_rrc_ia_percent",
+    "ps_rab_ia_percent",
+    "ps_s1_ia_percent",
+    "ps_drop_dc_percent",
+    "cs_rrc_ia_percent",
+    "cs_rab_ia_percent",
+    "cs_drop_dc_percent",
 ]
 # =========================================================
 # Helpers internos
@@ -247,66 +240,202 @@ def _filters_where_and_params(
         use_technologies,
     )
 
-def _build_flag_and_excess_cases(
-    kpi: str,
-    networks: Optional[List[str]],
-    cfg
-) -> Tuple[str, str, Dict[str, object]]:
+def _build_severity_expressions_from_json(
+    cfg=None,
+    profile: str = "main",
+):
     """
-    Devuelve (flag_thr_expr, excess_thr_expr, params) donde:
-      - flag_thr_expr   = CASE por red usando alarm_threshold_for
-      - excess_thr_expr = CASE por red usando excess_base_for
-    Todos con fallback a default/max, sin hardcode.
+    Construye:
+      - severity_sum_expr: expresión SQL que suma las severidades (0..4) de todos los KPIs
+      - crit_count_expr: expresión SQL que cuenta cuántos KPIs están en nivel 'critico'
+      - params: dict de parámetros para las expresiones (umbrales)
+    Usa profiles[profile].severity del JSON.
     """
-    params: Dict[str, object] = {}
+    if cfg is None:
+        cfg = load_threshold_cfg()  # debe devolver el JSON completo que mostraste
 
-    # redes a considerar dentro del CASE
-    per_net_cfg = (cfg.get("progress", {}).get(kpi, {}).get("per_network") or {})
-    nets = networks or list(per_net_cfg.keys())
+    prof = (cfg.get("profiles") or {}).get(profile) or {}
+    sev_cfg = prof.get("severity") or {}
 
-    # defaults
-    flag_def = alarm_threshold_for(kpi, "", cfg)
-    exc_def  = excess_base_for(kpi, "", cfg)
-    if flag_def is None:
-        flag_def = 0.0
-    if exc_def is None:
-        # si no hay excess_base ni max en default, cae a flag_def como último recurso
-        exc_def = flag_def
+    sev_terms = []
+    crit_terms = []
+    params = {}
 
-    params[f"{kpi}_flag_thr_def"] = flag_def
-    params[f"{kpi}_exc_thr_def"]  = exc_def
+    for kpi in _SEVERITY_KPIS:
+        if kpi not in COLMAP:
+            continue
 
-    flag_parts, exc_parts = [], []
-    for i, net in enumerate(nets):
-        flag_thr = alarm_threshold_for(kpi, net or "", cfg)
-        exc_thr  = excess_base_for(kpi, net or "", cfg)
+        kcfg = sev_cfg.get(kpi) or {}
+        # soporta estructuras:
+        # - { "orientation": ..., "thresholds": {...} }
+        # - { "default": {...}, "per_network": {...} }
+        base = (kcfg.get("default") or kcfg)
+        thresholds = (base.get("thresholds") or {})
 
-        # si no hay específicos, omite rama; caerá al ELSE default
-        if flag_thr is not None:
-            p_net = f"{kpi}_net_{i}"
-            p_thr = f"{kpi}_flag_thr_{i}"
-            params[p_net] = net
-            params[p_thr] = flag_thr
-            flag_parts.append(f"WHEN {_quote(COLMAP['network'])} = :{p_net} THEN :{p_thr}")
+        # Umbrales; caen a 0 si falta alguno
+        exc = float(thresholds.get("excelente", 0.0))
+        bue = float(thresholds.get("bueno", exc))
+        reg = float(thresholds.get("regular", bue))
+        cri = float(thresholds.get("critico", reg))
 
-        if exc_thr is not None:
-            p_net_e = f"{kpi}_enet_{i}"
-            p_thr_e = f"{kpi}_exc_thr_{i}"
-            params[p_net_e] = net
-            params[p_thr_e] = exc_thr
-            exc_parts.append(f"WHEN {_quote(COLMAP['network'])} = :{p_net_e} THEN :{p_thr_e}")
+        # De momento asumimos orientation = lower_is_better
+        # (es lo que tienes en el JSON)
+        col_sql = _quote(COLMAP[kpi])
+        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
 
-    if flag_parts:
-        flag_expr = f"(CASE {' '.join(flag_parts)} ELSE :{kpi}_flag_thr_def END)"
-    else:
-        flag_expr = f":{kpi}_flag_thr_def"
+        p_prefix = kpi  # p.ej. "ps_rrc_ia_percent"
+        params[f"{p_prefix}_exc"] = exc
+        params[f"{p_prefix}_bue"] = bue
+        params[f"{p_prefix}_reg"] = reg
+        params[f"{p_prefix}_cri"] = cri
 
-    if exc_parts:
-        exc_expr = f"(CASE {' '.join(exc_parts)} ELSE :{kpi}_exc_thr_def END)"
-    else:
-        exc_expr = f":{kpi}_exc_thr_def"
+        sev_expr = (
+            f"CASE "
+            f"WHEN COALESCE({num_col}, 0) >= :{p_prefix}_cri THEN 4 "
+            f"WHEN COALESCE({num_col}, 0) >= :{p_prefix}_reg THEN 3 "
+            f"WHEN COALESCE({num_col}, 0) >= :{p_prefix}_bue THEN 2 "
+            f"WHEN COALESCE({num_col}, 0) >= :{p_prefix}_exc THEN 1 "
+            f"ELSE 0 END"
+        )
 
-    return flag_expr, exc_expr, params
+        crit_expr = (
+            f"CASE WHEN COALESCE({num_col}, 0) >= :{p_prefix}_cri "
+            f"THEN 1 ELSE 0 END"
+        )
+
+        sev_terms.append(sev_expr)
+        crit_terms.append(crit_expr)
+
+    if not sev_terms:
+        # si nada mapea, regresamos expresiones neutras
+        return "0", "0", {}
+
+    severity_sum_expr = " + ".join(sev_terms)
+    crit_count_expr = " + ".join(crit_terms)
+    return severity_sum_expr, crit_count_expr, params
+
+def _build_severity_expr_from_json(profile: str = "main"):
+    """
+    Construye una expresión SQL de severidad tipo:
+
+        severity_score = SUM_kpi( severity_kpi )
+
+    donde cada severidad de KPI viene de profiles[profile].severity en el JSON
+    de umbrales (data/umbrales.json).
+
+    Para cada KPI:
+      - Usa 'orientation' (lower_is_better / higher_is_better).
+      - Usa thresholds.excelente/bueno/regular/critico.
+      - Soporta valores por red en per_network.
+
+    Devuelve: (severity_expr_sql, params_dict)
+    """
+    cfg = load_threshold_cfg()  # JSON completo
+    profiles = cfg.get("profiles") or {}
+    prof = profiles.get(profile) or {}
+    sev_cfg = prof.get("severity") or {}
+
+    params = {}
+    kpi_terms = []
+
+    def _build_case(num_col: str, prefix: str, orientation: str) -> str:
+        """
+        Devuelve el CASE de severidad para un KPI y un set de thresholds ligado
+        al prefijo de parámetros (prefix_*).
+        """
+        # lower_is_better: valores altos son malos
+        if orientation == "higher_is_better":
+            # invertido: valores bajos son malos
+            return (
+                f"CASE "
+                f"WHEN COALESCE({num_col}, 0) <= :{prefix}_cri THEN 4 "
+                f"WHEN COALESCE({num_col}, 0) <= :{prefix}_reg THEN 3 "
+                f"WHEN COALESCE({num_col}, 0) <= :{prefix}_bue THEN 2 "
+                f"WHEN COALESCE({num_col}, 0) <= :{prefix}_exc THEN 1 "
+                f"ELSE 0 END"
+            )
+        else:
+            # default: lower_is_better → valores altos son peores
+            return (
+                f"CASE "
+                f"WHEN COALESCE({num_col}, 0) >= :{prefix}_cri THEN 4 "
+                f"WHEN COALESCE({num_col}, 0) >= :{prefix}_reg THEN 3 "
+                f"WHEN COALESCE({num_col}, 0) >= :{prefix}_bue THEN 2 "
+                f"WHEN COALESCE({num_col}, 0) >= :{prefix}_exc THEN 1 "
+                f"ELSE 0 END"
+            )
+
+    for kpi in _SEVERITY_KPIS:
+        if kpi not in COLMAP:
+            continue
+
+        kcfg = sev_cfg.get(kpi) or {}
+        # puede venir como:
+        #   { "orientation":.., "thresholds":.., "per_network":.. }
+        # o como:
+        #   { "default": {...}, "per_network": {...} }
+        default_block = (kcfg.get("default") or kcfg) or {}
+        per_net_block = kcfg.get("per_network") or {}
+
+        thresholds_def = (default_block.get("thresholds") or {})
+        orientation_def = default_block.get("orientation", "lower_is_better")
+
+        # thresholds default
+        def_exc = float(thresholds_def.get("excelente", 0.0))
+        def_bue = float(thresholds_def.get("bueno", def_exc))
+        def_reg = float(thresholds_def.get("regular", def_bue))
+        def_cri = float(thresholds_def.get("critico", def_reg))
+
+        pfx_def = f"{kpi}_def"
+        params[f"{pfx_def}_exc"] = def_exc
+        params[f"{pfx_def}_bue"] = def_bue
+        params[f"{pfx_def}_reg"] = def_reg
+        params[f"{pfx_def}_cri"] = def_cri
+
+        col_sql = _quote(COLMAP[kpi])
+        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+
+        case_default = _build_case(num_col, pfx_def, orientation_def)
+
+        # Si hay per_network, armamos un CASE grande por red
+        if per_net_block:
+            when_parts = []
+
+            for idx, (net_name, net_cfg) in enumerate(per_net_block.items()):
+                thresholds_net = (net_cfg.get("thresholds") or thresholds_def) or {}
+                orientation_net = net_cfg.get("orientation", orientation_def)
+
+                net_exc = float(thresholds_net.get("excelente", def_exc))
+                net_bue = float(thresholds_net.get("bueno", def_bue))
+                net_reg = float(thresholds_net.get("regular", def_reg))
+                net_cri = float(thresholds_net.get("critico", def_cri))
+
+                pfx_net = f"{kpi}_net{idx}"
+                params[f"{pfx_net}_exc"] = net_exc
+                params[f"{pfx_net}_bue"] = net_bue
+                params[f"{pfx_net}_reg"] = net_reg
+                params[f"{pfx_net}_cri"] = net_cri
+                params[f"{pfx_net}_name"] = net_name
+
+                case_net = _build_case(num_col, pfx_net, orientation_net)
+
+                when_parts.append(
+                    f"WHEN {_quote(COLMAP['network'])} = :{pfx_net}_name THEN ({case_net})"
+                )
+
+            kpi_expr = f"(CASE {' '.join(when_parts)} ELSE ({case_default}) END)"
+        else:
+            # sin per_network, usamos sólo el default
+            kpi_expr = f"({case_default})"
+
+        kpi_terms.append(kpi_expr)
+
+    if not kpi_terms:
+        return "0", {}
+
+    severity_expr = " + ".join(kpi_terms)
+    return severity_expr, params
+
 # =========================================================
 # API pública
 # =========================================================
@@ -425,7 +554,8 @@ def fetch_kpis_paginated(
 
     return df, int(total)
 
-def fetch_kpis_paginated_global_sort(
+
+def fetch_kpis_paginated_severity_global_sort(
     *,
     fecha=None,
     hora=None,
@@ -440,194 +570,181 @@ def fetch_kpis_paginated_global_sort(
     ascending=True,
     na_as_empty=False,
 ):
+    """
+    GLOBAL basado en umbrales del JSON (profiles.main.severity):
+
+      - NO descarta registros (incluye todos los que cumplan el WHERE).
+
+      MODO POR DEFECTO (sin columna seleccionada):
+        ORDER BY
+            severity_score DESC,
+            Date DESC,
+            Time DESC
+
+      MODO CON COLUMNA (sort_by_friendly válido):
+        ORDER BY
+            (metric_expr IS NULL) ASC,   -- NULLS LAST
+            metric_expr {ASC|DESC},      -- criterio principal
+            severity_score DESC,         -- desempate
+            Date DESC,
+            Time DESC
+    """
     page = max(1, int(page))
     page_size = max(1, int(page_size))
     offset = (page - 1) * page_size
 
+    # WHERE base + params
     where_sql, base_params, uv, uc, un, ut = _filters_where_and_params(
         fecha, hora, vendors, clusters, networks, technologies
     )
 
+    # Expresión de severidad desde el JSON
+    severity_expr, thr_params = _build_severity_expr_from_json(profile="main")
+
+    # COUNT total
     count_sql = f"""
         SELECT COUNT(*) AS total
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
     """
 
+    # columnas amigables
+    friendly_cols = _resolve_columns(BASE_COLUMNS)
+    select_cols = _select_list_with_aliases(friendly_cols)
+
     order_dir = "ASC" if ascending else "DESC"
 
-    if sort_by_friendly and sort_by_friendly in COLMAP:
+    # -------- ¿hay columna seleccionada? --------
+    has_custom_sort = sort_by_friendly and (sort_by_friendly in COLMAP)
+
+    if has_custom_sort:
+        # métrica real a ordenar
         real_metric = _quote(COLMAP[sort_by_friendly])
+
+        if sort_net:
+            metric_expr = (
+                f"CASE WHEN {_quote(COLMAP['network'])} = :_sort_net "
+                f"THEN {real_metric} ELSE {real_metric} END"
+            )
+            base_params["_sort_net"] = sort_net
+        else:
+            metric_expr = real_metric
+
+        nulls_last_expr = f"({metric_expr} IS NULL)"
+
+        # MODO COLUMNA: la métrica es el criterio principal
+        order_clause = f"""
+            ORDER BY
+                {nulls_last_expr} ASC,          -- primero no-nulos
+                {metric_expr} {order_dir},      -- métrica clickeada
+                severity_score DESC,            -- desempate global
+                {_quote(COLMAP['fecha'])} DESC,
+                {_quote(COLMAP['hora'])} DESC
+        """
     else:
-        real_metric = f"{_quote(COLMAP['fecha'])}"
+        # MODO POR DEFECTO: EXACTO y estable, sin depender de ascending
+        order_clause = f"""
+            ORDER BY
+                severity_score DESC,
+                {_quote(COLMAP['fecha'])} DESC,
+                {_quote(COLMAP['hora'])} DESC
+        """
 
-    if sort_net:
-        metric_expr = f"MAX(CASE WHEN {_quote(COLMAP['network'])} = :_sort_net THEN {real_metric} END)"
-    else:
-        metric_expr = f"MAX({real_metric})"
-
-    key_cols_real = [
-        COLMAP["fecha"], COLMAP["hora"], COLMAP["vendor"], COLMAP["noc_cluster"], COLMAP["technology"]
-    ]
-    key_cols_sel = ", ".join(_quote(c) for c in key_cols_real)
-
-    # 👇 Reemplazo de NULLS LAST por (expr IS NULL)
-    # Esto empuja NULL al final tanto en ASC como en DESC
-    nulls_last_prefix = f"({metric_expr} IS NULL), "
-
-    base_params_page = dict(base_params)
-    if sort_net:
-        base_params_page["_sort_net"] = sort_net
-    base_params_page.update({"_limit": page_size, "_offset": offset})
-
-    keys_sql = f"""
-        SELECT {key_cols_sel}
+    sel_sql = f"""
+        SELECT
+            {", ".join(select_cols)},
+            ({severity_expr}) AS severity_score
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
-        GROUP BY {key_cols_sel}
-        ORDER BY
-          {nulls_last_prefix}{metric_expr} {order_dir},
-          {_quote(COLMAP['fecha'])} DESC,
-          {_quote(COLMAP['hora'])} DESC
-        LIMIT :_limit OFFSET :_offset
+        {order_clause}
+        LIMIT :limit OFFSET :offset
     """
 
     eng = get_engine()
     with eng.connect() as conn:
-        total = conn.execute(text(count_sql), base_params).scalar() or 0
-        stmt_keys = _prepare_stmt_with_expanding(keys_sql, uv, uc, un, ut)
-        key_rows = conn.execute(stmt_keys, base_params_page).fetchall()
+        # COUNT
+        stmt_count = _prepare_stmt_with_expanding(count_sql, uv, uc, un, ut)
+        total = conn.execute(
+            stmt_count,
+            {**base_params, **thr_params}
+        ).scalar() or 0
 
-    if not key_rows:
-        return pd.DataFrame(columns=BASE_COLUMNS), int(total)
+        # PAGE
+        sel_params = {
+            **base_params,
+            **thr_params,
+            "limit": page_size,
+            "offset": offset,
+        }
+        stmt_sel = _prepare_stmt_with_expanding(sel_sql, uv, uc, un, ut)
+        df = pd.read_sql(stmt_sel, conn, params=sel_params)
 
-    params_b = {}
-    or_parts = []
-    for i, (d, t, v, c, tech) in enumerate(key_rows, start=1):
-        or_parts.append(
-            f"({_quote(COLMAP['fecha'])} = :d{i} AND {_quote(COLMAP['hora'])} = :t{i} "
-            f"AND {_quote(COLMAP['vendor'])} = :v{i} AND {_quote(COLMAP['noc_cluster'])} = :c{i} "
-            f"AND {_quote(COLMAP['technology'])} = :tech{i})"
-        )
-        params_b[f"d{i}"] = d
-        params_b[f"t{i}"] = t
-        params_b[f"v{i}"] = v
-        params_b[f"c{i}"] = c
-        params_b[f"tech{i}"] = tech
+    # Orden de columnas amigables
+    df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
 
-    friendly_cols = _resolve_columns(BASE_COLUMNS)
-    select_cols = _select_list_with_aliases(friendly_cols)
+    if na_as_empty and not df.empty:
+        df = df.where(pd.notna(df), "")
 
-    sql_b = f"""
-        SELECT {", ".join(select_cols)}
-        FROM {_quote_table(_TABLE_NAME)}
-        WHERE {" OR ".join(or_parts)}
-    """
+    return df, int(total)
 
-    with eng.connect() as conn:
-        df_page = pd.read_sql(text(sql_b), conn, params=params_b)
 
-    df_page = df_page.reindex(columns=[c for c in friendly_cols if c in df_page.columns])
-    if na_as_empty and not df_page.empty:
-        df_page = df_page.where(pd.notna(df_page), "")
 
-    return df_page, int(total)
-
-#ALARMADOS DATA ACCESS
-
-def fetch_kpis_paginated_alarm_sort(
+def fetch_kpis_paginated_severity_sort(
     *,
     fecha=None,
     hora=None,
     vendors=None,
     clusters=None,
-    networks=None,        # puede ser 1 o varias; aplica CASE por fila
+    networks=None,
     technologies=None,
     page=1,
     page_size=50,
     na_as_empty=False,
 ):
     """
-    Ordena por:
-      1) número de KPIs en alarma (>= alarm del JSON por red),
-      2) exceso total sobre umbrales (col - excess_base del JSON por red),
-      3) Noc_Cluster (desempate).
-    Incluye solo filas con >=1 KPI en alarma.
+    Ordena por severidad tipo:
+      - severity_score (suma de 0..4 por KPI usando thresholds de profiles.main.severity)
+      - crit_count (cuántos KPIs están en 'critico')
+    Incluye sólo filas con al menos 1 KPI en 'critico' (crit_count > 0),
+    replicando el comportamiento de tu query original.
     """
     page = max(1, int(page))
     page_size = max(1, int(page_size))
     offset = (page - 1) * page_size
 
-    cfg = load_threshold_cfg()  # cacheado
-
-    # WHERE base y params
+    # WHERE base y params (sin tocar JSON todavía)
     where_sql, params, uv, uc, un, ut = _filters_where_and_params(
         fecha, hora, vendors, clusters, networks, technologies
     )
 
-    nets_list = _as_list(networks) or []
+    # Construye expresiones de severidad a partir del JSON
+    cfg = load_threshold_cfg()  # data/umbrales.json
+    severity_expr, crit_expr, thr_params = _build_severity_expressions_from_json(cfg, profile="main")
 
-    flag_terms: List[str] = []   # (col >= flag_thr_expr)
-    excess_terms: List[str] = [] # GREATEST(COALESCE(col,0) - exc_thr_expr, 0)
-    thr_params_all: Dict[str, object] = {}
-
-    for kpi in _ALARM_KPIS:
-        if kpi not in COLMAP:
-            continue
-        col_sql = _quote(COLMAP[kpi])
-
-        # Si hay posibilidad de texto, fuerza CAST:
-        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
-
-        flag_thr_expr, exc_thr_expr, p = _build_flag_and_excess_cases(kpi, nets_list, cfg)
-        thr_params_all.update(p)
-
-        flag_terms.append(
-            f"(CASE WHEN COALESCE({num_col}, 0) >= {flag_thr_expr} THEN 1 ELSE 0 END)"
-        )
-
-        # 2) exceso truncado a 0
-        excess_terms.append(
-            f"GREATEST(COALESCE({num_col}, 0) - {exc_thr_expr}, 0)"
-        )
-
-    # si no hay KPIs válidos, cae al orden normal
-    if not flag_terms:
-        return fetch_kpis_paginated(
-            fecha=fecha, hora=hora, vendors=vendors, clusters=clusters,
-            networks=networks, technologies=technologies,
-            page=page, page_size=page_size, na_as_empty=na_as_empty
-        )
-
-    flags_sum  = " + ".join(flag_terms)
-    excess_sum = " + ".join(excess_terms)
-
-    # COUNT con al menos 1 alarma
+    # COUNT con al menos un KPI en nivel 'critico'
     count_sql = f"""
         SELECT COUNT(*) AS total
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
-          AND ( ({flags_sum}) >= 1 )
+          AND ( {crit_expr} ) > 0
     """
 
-    # SELECT paginado aplicando el ORDER deseado
+    # SELECT paginado
     friendly_cols = _resolve_columns(BASE_COLUMNS)
     select_cols = _select_list_with_aliases(friendly_cols)
 
-    select_cols_debug = select_cols + [
-        f"({flags_sum}) AS kpis_alarmados",
-        f"({excess_sum}) AS exceso_total"
-    ]
-
     sel_sql = f"""
-        SELECT {", ".join(select_cols_debug)}
+        SELECT
+            {", ".join(select_cols)},
+            ({severity_expr}) AS severity_score,
+            ({crit_expr})      AS crit_count
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
-          AND ( ({flags_sum}) >= 1 )
+          AND ( {crit_expr} ) > 0
         ORDER BY
-          ({flags_sum}) DESC,
-          ({excess_sum}) DESC,
-          {_quote(COLMAP['noc_cluster'])} ASC
+            severity_score DESC,
+            crit_count     DESC,
+            {_quote(COLMAP['noc_cluster'])} ASC
         LIMIT :_limit OFFSET :_offset
     """
 
@@ -635,10 +752,13 @@ def fetch_kpis_paginated_alarm_sort(
     with eng.connect() as conn:
         # COUNT
         stmt_count = _prepare_stmt_with_expanding(count_sql, uv, uc, un, ut)
-        total = conn.execute(stmt_count, {**params, **thr_params_all}).scalar() or 0
+        total = conn.execute(
+            stmt_count,
+            {**params, **thr_params}
+        ).scalar() or 0
 
         # PAGE
-        sel_params = {**params, **thr_params_all, "_limit": page_size, "_offset": offset}
+        sel_params = {**params, **thr_params, "_limit": page_size, "_offset": offset}
         stmt_sel = _prepare_stmt_with_expanding(sel_sql, uv, uc, un, ut)
         df = pd.read_sql(stmt_sel, conn, params=sel_params)
 
@@ -647,6 +767,7 @@ def fetch_kpis_paginated_alarm_sort(
         df = df.where(pd.notna(df), "")
 
     return df, int(total)
+
 
 #ALARMADOS HEADMAP
 def fetch_alarm_meta_for_heatmap(
@@ -683,11 +804,7 @@ def fetch_alarm_meta_for_heatmap(
     params = {**params, "f1": yday_str, "f2": today_str}
 
     # KPIs a evaluar como "alarmados"
-    try:
-        alarm_kpis = list(_ALARM_KPIS_heatmap)  # si ya tienes lista global
-    except NameError:
-        # Fallback: toma todos los percent de VALORES_MAP
-        alarm_kpis = sorted({pm for (_name, (pm, _um)) in VALORES_MAP.items() if pm and pm in COLMAP})
+    alarm_kpis = [k for k in _SEVERITY_KPIS if k in COLMAP]
 
     if not alarm_kpis:
         return pd.DataFrame(columns=["technology","vendor","noc_cluster"]), set()
@@ -696,16 +813,67 @@ def fetch_alarm_meta_for_heatmap(
     flag_cols_sql = []
     thr_params_all = {}
 
-    # Esta función devuelve un SQL que probablemente use el nombre físico de columna (p.ej. `Network`).
-    # Para este nivel (SELECT desde CTE base) debemos comparar contra el ALIAS 'network'.
+    # Bloques de severidad desde el JSON
+    profiles = (cfg.get("profiles") or {})
+    prof_main = profiles.get("main") or {}
+    sev_cfg = prof_main.get("severity") or {}
+
+    # Construye expresión CASE que vale 1 si el KPI está en nivel "crítico" según severity
     def _flag_expr_for(kpi: str) -> str:
         col_sql = _quote(COLMAP[kpi])
         num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
-        flag_thr_expr, _exc_thr_expr, p = _build_flag_and_excess_cases(kpi, nets_list, cfg)
-        thr_params_all.update(p)
-        # Fuerza a usar el alias 'network' en el CASE, no el nombre físico:
-        flag_thr_expr_alias = flag_thr_expr.replace(_quote(COLMAP['network']), "network")
-        return f"(CASE WHEN COALESCE({num_col}, 0) >= {flag_thr_expr_alias} THEN 1 ELSE 0 END)"
+
+        kcfg = sev_cfg.get(kpi) or {}
+        # puede venir como:
+        #   { "orientation":..., "thresholds":..., "per_network":... }
+        # o como:
+        #   { "default": {...}, "per_network": {...} }
+        default_block = (kcfg.get("default") or kcfg) or {}
+        per_net_block = kcfg.get("per_network") or {}
+
+        thresholds_def = (default_block.get("thresholds") or {})
+        orientation_def = default_block.get("orientation", "lower_is_better")
+
+        # Umbral crítico default
+        def_cri = float(thresholds_def.get("critico", 0.0))
+        p_def = f"{kpi}_def"
+        thr_params_all[f"{p_def}_cri"] = def_cri
+
+        # Condición de alarma para el default
+        if orientation_def == "higher_is_better":
+            # valores bajos son peores -> alarma si valor <= crítico
+            def_cond = f"COALESCE({num_col}, 0) <= :{p_def}_cri"
+        else:
+            # lower_is_better (tu caso) -> valores altos son peores -> alarma si valor >= crítico
+            def_cond = f"COALESCE({num_col}, 0) >= :{p_def}_cri"
+
+        # Si hay per_network, armamos CASE por red usando alias "network"
+        if per_net_block:
+            when_parts = []
+            for idx, (net_name, net_cfg) in enumerate(per_net_block.items()):
+                thresholds_net = (net_cfg.get("thresholds") or thresholds_def) or {}
+                orientation_net = net_cfg.get("orientation", orientation_def)
+
+                net_cri = float(thresholds_net.get("critico", def_cri))
+                p_net = f"{kpi}_net{idx}"
+                thr_params_all[f"{p_net}_cri"] = net_cri
+                thr_params_all[f"{p_net}_name"] = net_name
+
+                if orientation_net == "higher_is_better":
+                    cond_net = f"COALESCE({num_col}, 0) <= :{p_net}_cri"
+                else:
+                    cond_net = f"COALESCE({num_col}, 0) >= :{p_net}_cri"
+
+                # OJO: aquí comparamos contra el alias 'network', no contra `Network`
+                when_parts.append(
+                    f"WHEN network = :{p_net}_name AND {cond_net} THEN 1"
+                )
+
+            # Si ninguna red coincide, cae al default
+            return f"(CASE {' '.join(when_parts)} ELSE (CASE WHEN {def_cond} THEN 1 ELSE 0 END) END)"
+        else:
+            # sin per_network, sólo default
+            return f"(CASE WHEN {def_cond} THEN 1 ELSE 0 END)"
 
     for kpi in alarm_kpis:
         if kpi not in COLMAP:

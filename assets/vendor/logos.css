@@ -1,0 +1,31 @@
+.td-key.td-vendor {
+  width: 56px;               /* ancho de columna */
+  text-align: center;
+  vertical-align: middle;
+}
+
+.vendor-icon {
+  width: 65px;               /* prueba 28–32px */
+  height: 32px;
+  display: inline-block;
+  object-fit: contain;       /* por si algún SVG trae width/height */
+}
+
+.vendor-initial {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  line-height: 24px;
+  text-align: center;
+  border-radius: 9999px;
+  font-weight: 600;
+  background: var(--bs-gray-200);
+  color: var(--bs-gray-800);
+}
+
+/* Si quieres un “badge” con padding */
+.vendor-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

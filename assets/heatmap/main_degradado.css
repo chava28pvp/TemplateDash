@@ -1,0 +1,109 @@
+.kpi-table-summary { table-layout: fixed; width: 100%; font-size: 0.80rem; }
+.kpi-table-summary td, .kpi-table-summary th { padding: 0.20rem 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.kpi-table-summary .w-cluster { width: 60px; max-width: 60px;}
+.kpi-table-summary .w-tech    { width: 32px;  max-width: 32px;  text-align:center; }
+.kpi-table-summary .w-vendor  { width: 28px; max-width: 28px; text-align:center; }
+.kpi-table-summary .w-valor   { width: 32px;  max-width: 32px;  text-align:center; }
+.kpi-table-summary .w-ultima  { width: 32px;  max-width: 32px;  text-align:center; }
+.kpi-table-summary .w-num     { width: 32px;  max-width: 32px;  text-align:center; }
+.kpi-table-summary .ta-right  { text-align: right; }
+.kpi-table-summary .ta-center { text-align: center; }
+
+
+/* cada panel (tabla, hm % y hm unit) scrollea dentro de la misma altura */
+.hm-pane { height: 75vh; overflow-y: auto; overflow-x: hidden; }
+
+/* Un solo scroll para toda la board */
+.hm-board {
+  height: 75vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* altura por fila en la tabla (ajústalo fino 26–28) */
+.kpi-table-summary.compact {
+  border-collapse: separate;   /* evita variaciones del collapse */
+  border-spacing: 0;           /* sin espacios entre celdas */
+}
+/* La tabla: fila compacta y SIN header */
+.kpi-table-summary.compact thead { display: none; }  /* 👈 para que la primera fila de datos alinee con la primera del heatmap */
+.kpi-table.kpi-table-summary.compact tbody td {
+  padding-top: 0; padding-bottom: 0;       /* 👈 sin padding vertical */
+  line-height: 26px;                        /* 👈 centra y fija la altura efectiva */
+  border-top: 0 !important; border-bottom: 0 !important; /* evita 1px acumulativos */
+}
+/* Thead con altura fija; sincronízalo con MARG_TOP si quieres alinear con “primera fila” del heatmap */
+.kpi-table.kpi-table-summary.compact thead th {
+  height: 36px; line-height: 36px; padding-top: 0; padding-bottom: 0;
+  border-bottom: 0 !important;
+}
+.kpi-table-summary.compact tbody tr { height: 26px; }  /* = ROW_H */
+.kpi-table-summary.compact td {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-top: 0;               /* evita que 1px sume en cada fila */
+  border-bottom: 0;            /* ídem */
+}
+/* Opcional: reduce cualquier margen extra entre columnas */
+.hm-board .col, .hm-board .card, .hm-board .card-body { margin: 0 !important; }
+
+/* Encabezado separado, sin scroll y sin márgenes */
+.kpi-table-summary.header-only thead { display: table-header-group; }
+.kpi-table-summary.header-only tbody { display: none; }
+.kpi-table-summary.header-only th {
+  padding: 0.20rem 0.35rem;
+  line-height: 26px;           /* coherente con ROW_H */
+  border-bottom: 0 !important;
+}
+
+/* Asegura que la fila header no agregue espacios */
+.hm-board + .hm-header-filler { height: 0; margin: 0; padding: 0; }
+
+
+/* El td no recorta; lo hace el span interno */
+.kpi-table-summary .w-cluster { text-overflow: clip; }
+
+/* Elipsis al INICIO usando flip horizontal (no cambia altura/anchos) */
+.kpi-table-summary .w-cluster .ellipsis-left{
+  display: inline-block;   /* mantiene altura de la fila */
+  max-width: 100%;
+  text-overflow: ellipsis; /* la elipsis va al "final" del contenedor volteado => izquierda */
+  transform: scaleX(-1);   /* volteamos el contenedor */
+}
+/* Desvolteamos el texto para que se lea normal */
+.kpi-table-summary .w-cluster .ellipsis-left .unflip{
+  display: inline-block;
+  transform: scaleX(-1);
+}
+/* Vendor: no cambies el alto; respeta la línea de 26px del <td> */
+.td-vendor .vendor-initial{
+  display: inline-block;
+  width: 20px;              /* igual que el icono anterior */
+  height: 20px;
+  line-height: 20px;        /* NO cambia la altura de la fila */
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.8rem;
+  vertical-align: middle;
+  color: #fff !important;   /* ← blanco */
+  /* resets defensivos */
+  background: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.kpi-table-summary td.w-vendor,
+.kpi-table-summary th.w-vendor {
+  width: 24px !important;
+  min-width: 24px !important;
+  max-width: 24px !important;
+  padding-left: 0.1rem !important;
+  padding-right: 0.1rem !important;
+  text-align: center;
+}
+

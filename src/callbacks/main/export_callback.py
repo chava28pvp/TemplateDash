@@ -7,18 +7,18 @@ import math
 
 from xlsxwriter import Workbook  # pip install xlsxwriter
 
-from src.data_access import (
+from src.dataAccess.data_access import (
     fetch_kpis_paginated,
-    fetch_kpis_paginated_global_sort,
-    fetch_kpis_paginated_alarm_sort,
+    fetch_kpis_paginated_severity_global_sort,
+    fetch_kpis_paginated_severity_sort,
     COLMAP,
 )
 from src.Utils.alarmados import load_threshold_cfg
-from components.Tables.main_table import (
+from components.main.main_table import (
     pivot_by_network,
     expand_groups_for_networks,
     _resolve_sort_col,
-    ROW_KEYS,   # típicamente: ["fecha","hora","vendor","noc_cluster","technology"]
+    ROW_KEYS
 )
 
 def _as_list(x):
@@ -116,7 +116,7 @@ def export_callback(app):
             else:           sort_by = col
 
         if sort_mode == "alarmado":
-            df_page, _ = fetch_kpis_paginated_alarm_sort(
+            df_page, _ = fetch_kpis_paginated_severity_sort(
                 fecha=fecha, hora=hora,
                 vendors=vendors or None, clusters=clusters or None,
                 networks=networks or None, technologies=techs or None,
@@ -125,7 +125,7 @@ def export_callback(app):
             safe_sort_state = None
         else:
             if sort_by and sort_by in COLMAP:
-                df_page, _ = fetch_kpis_paginated_global_sort(
+                df_page, _ = fetch_kpis_paginated_severity_global_sort(
                     fecha=fecha, hora=hora,
                     vendors=vendors or None, clusters=clusters or None,
                     networks=networks or None, technologies=techs or None,
@@ -212,7 +212,18 @@ def export_callback(app):
         df_out = df_out.where(pd.notna(df_out), None)
 
         # 4) Escribir XLSX con formatos
-        cfg = load_threshold_cfg()
+        raw_cfg = load_threshold_cfg()
+
+        profile_name = "main"  # o lo que venga de algún estado si luego quieres hacerlo dinámico
+        profiles = raw_cfg.get("profiles") or {}
+        profile_cfg = profiles.get(profile_name, {})
+
+        # Rearmamos cfg tal como lo esperan los helpers
+        cfg = {
+            "severity": profile_cfg.get("severity", {}),
+            "progress": profile_cfg.get("progress", {}),
+            "colors": raw_cfg.get("colors", {}),
+        }
         colors = cfg.get("colors") or {}
 
         bio = BytesIO()

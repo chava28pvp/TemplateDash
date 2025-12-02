@@ -1,0 +1,93 @@
+/* Contenedor con scroll horizontal cuando el grafico sea ancho */
+.histo-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Ancho minimo útil para que aparezca scroll (si el contenedor es estrecho) */
+.histo-wide {
+  min-width: 900px; /* ajusta segun lo que necesites */
+}
+
+/* --- Columnas de keys: más pequeñas y estrechas --- */
+
+.kpi-table.compact th.th-left {
+  font-size: 11px;
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+
+/* Todas las celdas de keys */
+.kpi-table.compact td.td-key {
+  width: 1%;             /* fuerza a que la columna sea lo más estrecha posible */
+  padding: 2px 4px;
+  vertical-align: middle;
+}
+
+/* Estilo base del texto de las keys */
+.kpi-table.compact td.td-key .cell-key {
+  font-size: 11px;
+  line-height: 1.1;
+}
+
+/* Keys compactas (las que SÍ pueden truncarse) */
+.kpi-table.compact td.td-key .cell-key--compact {
+  max-width: 70px;       /* ajusta según qué tan agresivo quieras */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;   /* ... cuando se corta */
+}
+
+/* Keys "anchas" (fecha, hora, nodeb) - dejan ver todo el texto */
+.kpi-table.compact td.td-key .cell-key--wide {
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* REGION / PROVINCE / RNC: centradas y muy estrechas */
+.kpi-table.compact th.th-region,
+.kpi-table.compact th.th-province,
+.kpi-table.compact th.th-rnc,
+.kpi-table.compact td.td-region,
+.kpi-table.compact td.td-province,
+.kpi-table.compact td.td-rnc {
+  text-align: center;
+  padding: 2px 2px;
+  width: 1%;                /* fuerza a ser lo más angosta posible */
+}
+
+/* Texto interno de estas columnas: compacto + centrado */
+.kpi-table.compact td.td-region .cell-key,
+.kpi-table.compact td.td-province .cell-key,
+.kpi-table.compact td.td-rnc .cell-key {
+  font-size: 11px;
+  max-width: 70px;          /* ajusta si quieres aún más angosto */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0 auto;           /* centra el texto dentro del td */
+}
+
+/* TECHNOLOGY / VENDOR: muy estrechas y centradas */
+.kpi-table.compact th.th-technology,
+.kpi-table.compact th.th-vendor,
+.kpi-table.compact td.td-technology,
+.kpi-table.compact td.td-vendor {
+  text-align: center;
+  padding: 2px 2px;
+  width: 1%;                 /* súper angostas */
+}
+
+/* Texto interno para tech/vendor */
+.kpi-table.compact td.td-technology .cell-key,
+.kpi-table.compact td.td-vendor .cell-key {
+  font-size: 11px;
+  max-width: 40px;           /* más chico que region/province/rnc */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0 auto;
+}
+

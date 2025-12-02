@@ -94,7 +94,7 @@
   background: #2b2b2b;
 }
 
-/* ======= Columnas fijas ======= */
+/* ======= Columnas fijas (ajustadas + hover + fuente más pequeña) ======= */
 .kpi-table .th-left,
 .kpi-table .td-key {
   position: sticky;
@@ -102,7 +102,42 @@
   z-index: 3;
   background: #222 !important;
   box-shadow: 2px 0 0 rgba(0,0,0,0.6);
-  min-width: 140px;
+  min-width: 96px;          /* ↓ antes 140px */
+  font-size: 0.8rem;        /* fuente más pequeña */
+}
+.kpi-table .th-left:hover,
+.kpi-table .td-key:hover {
+  background: #333 !important;
+  color: #fff;
+}
+
+/* Anchos específicos */
+.kpi-table .th-left.th-fecha,
+.kpi-table .td-key.td-fecha {
+  width: 88px; min-width: 88px; max-width: 120px;
+}
+
+.kpi-table .th-left.th-hora,
+.kpi-table .td-key.td-hora {
+  width: 64px; min-width: 64px; max-width: 80px;
+}
+
+.kpi-table .th-left.th-vendor,
+.kpi-table .td-key.td-vendor {
+  width: 56px; min-width: 56px; max-width: 72px;
+}
+
+.kpi-table .th-left.th-noc_cluster,
+.kpi-table .td-key.td-noc_cluster {
+  width: 120px; min-width: 110px; max-width: 160px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Tech compacto ya considerado */
+.kpi-table .th-left.th-technology,
+.kpi-table .td-key.td-technology {
+  width: 72px; min-width: 72px; max-width: 72px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* ======= Envoltura ======= */
@@ -136,7 +171,7 @@
 .th-sorted {
   outline: 2px solid rgba(122, 178, 255, 0.35);
   outline-offset: -2px;
-  background: #34495e !important; /* opcional para resaltar */
+  background: #34495e !important;
 }
 .th-sort-wrap {
   display: grid;
@@ -167,40 +202,201 @@
   white-space: nowrap;
 }
 
-/* Ancho fijo y compacto para Tech */
+/* ======= KPI centrados ======= */
+.kpi-table .td-cell {
+  text-align: center;
+}
+.kpi-table .td-cell .kb {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ======= Vendor con inicial (sin imagen) ======= */
+.kpi-table .td-key.td-vendor .cell-key > span,
+.kpi-table .td-key.td-vendor .vendor-initial {
+  display: inline-block;
+  width: 1.4rem;
+  height: 1.4rem;
+  line-height: 1.4rem;
+  text-align: center;
+  border-radius: 0.35rem;
+  font-weight: 700;
+  background: #2b2b2b !important;
+  color: #f3f3f3;
+  vertical-align: middle;
+}
+
+/* ======= Cluster: mostrar más contenido (2 líneas con ellipsis) ======= */
+.kpi-table .th-left.th-noc_cluster,
+.kpi-table .td-key.td-noc_cluster {
+  width: 100px;         /* ↑ antes ~120 */
+  min-width: 140px;
+  max-width: 200px;
+}
+
+/* Permitir 2 líneas y cortar con ellipsis si excede */
+.kpi-table .td-key.td-noc_cluster .cell-key {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;          /* 2 líneas visibles */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;            /* permite salto de línea */
+  line-height: 1.15;
+}
+/* ======= Tech: centrar mejor contenido ======= */
 .kpi-table .th-left.th-technology,
 .kpi-table .td-key.td-technology {
+  text-align: center;
+}
+
+.kpi-table .td-key.td-technology .cell-key {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;                 /* asegura centrado real en sticky */
+  padding-left: 0;             /* quita sesgo visual a la izquierda */
+  padding-right: 0;
+}
+
+/* Si quieres un poco más de aire visual en Tech: */
+.kpi-table .th-left.th-technology,
+.kpi-table .td-key.td-technology {
+  width: 76px;                 /* opcional: +4px para evitar cortes */
+  min-width: 76px;
+  max-width: 84px;
+}
+/* === Compactar aún más las columnas de ROW_KEYS (main + topoff) === */
+
+/* Todos los keys un poco más pequeños y con menos padding */
+.kpi-table.compact th.th-left,
+.kpi-table.compact td.td-key {
+  padding: 0.15rem 0.35rem;
+  font-size: 0.75rem;
+  min-width: 68px;
+}
+
+/* Fecha / Hora / Vendor super estrechos */
+.kpi-table.compact th.th-fecha,
+.kpi-table.compact td.td-fecha {
   width: 72px;
   min-width: 72px;
   max-width: 72px;
+}
+
+.kpi-table.compact th.th-hora,
+.kpi-table.compact td.td-hora {
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
+}
+
+.kpi-table.compact th.th-vendor,
+.kpi-table.compact td.td-vendor {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  text-align: center;
+}
+
+/* Cluster / region / province / muni / site / nodeb → más estrechos con 2 líneas */
+.kpi-table.compact th.th-noc_cluster,
+.kpi-table.compact td.td-noc_cluster,
+{
+  width: 70px;
+  min-width: 70px;
+  max-width: 70px;
+}
+
+/* Texto interno: hasta 2 líneas y ellipsis SOLO para Cluster */
+.kpi-table.compact td.td-noc_cluster .cell-key {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;        /* 2 líneas visibles */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;          /* permite salto de línea */
+  line-height: 1.15;
+}
+
+/* Tech bien centrado y estrecho */
+.kpi-table.compact th.th-technology,
+.kpi-table.compact td.td-technology {
+  width: 32px;
+  min-width: 32px;
+  max-width: 40px;
+  text-align: center;
+}
+
+/* Para topoff: compactar aún más las celdas marcadas como compactas */
+.kpi-table.compact .cell-key--compact {
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* === TOP-OFF / MAIN: estrechar más keys largas (region, municip, site, rnc, nodeb) === */
+
+/* Region */
+.kpi-table.compact th.th-region,
+.kpi-table.compact td.td-region {
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* (Opcional) también puedes recortar un poco Vendor si quieres */
-.kpi-table .th-left.th-vendor,
-.kpi-table .td-key.td-vendor {
-  width: 64px;
-  min-width: 64px;
-  max-width: 64px;
+/* Province */
+.kpi-table.compact th.th-province,
+.kpi-table.compact td.td-province {
+  width: 60px;
+  min-width: 60px;
+  max-width: 60px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* Centrar y “estilo badge” para la inicial de Vendor */
-.kpi-table .td-key.td-vendor .cell-key {
-  display: flex;
-  justify-content: center;
-  align-items: center;
+/* Municipality */
+.kpi-table.compact th.th-municipality,
+.kpi-table.compact td.td-municipality {
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.kpi-table .td-key.td-vendor .cell-key > span {
-  display: inline-block;
-  width: 1.6rem;
-  height: 1.6rem;
-  line-height: 1.6rem;
-  text-align: center;
-  border-radius: 0.4rem;
-  font-weight: 700;
-  /* Colores adaptados a modo oscuro; ajusta a tu paleta */
-  background: #2f2f2f;
-  color: #eaeaea;
+
+/* Site ATT */
+.kpi-table.compact th.th-site_att,
+.kpi-table.compact td.td-site_att {
+  width: 60px;
+  min-width: 60px;
+  max-width: 60px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* RNC */
+.kpi-table.compact th.th-rnc,
+.kpi-table.compact td.td-rnc {
+  width: 50px;
+  min-width: 50px;
+  max-width: 50px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* NodeB */
+.kpi-table.compact th.th-nodeb,
+.kpi-table.compact td.td-nodeb {
+  width: 100px;
+  min-width: 90px;
+  max-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
