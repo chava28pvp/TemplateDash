@@ -1,13 +1,12 @@
 import math
 import pandas as pd
 from dash import Input, Output, State, ALL, no_update, ctx
-from hashlib import md5
-import json
 import time
+import numpy as np
 from components.main.main_table import (
     pivot_by_network,
     render_kpi_table_multinet,
-    strip_net,
+    strip_net, prefixed_progress_cols,
 )
 import dash_bootstrap_components as dbc
 
@@ -24,24 +23,6 @@ _DFTS_TTL = 300  # segundos
 # Última clave renderizada para evitar re-render idéntico
 _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
-
-
-def _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit):
-    """Clave estable del estado visible del heatmap (sin hora)."""
-    def _norm(x):
-        x = x if isinstance(x, (list, tuple)) else ([] if x is None else [x])
-        return sorted([str(v) for v in x if v is not None])
-    obj = {
-        "fecha": fecha,
-        "networks": _norm(networks),
-        "technologies": _norm(technologies),
-        "vendors": _norm(vendors),
-        "clusters": _norm(clusters),
-        "offset": int(offset),
-        "limit": int(limit),
-    }
-    return md5(json.dumps(obj, sort_keys=True).encode()).hexdigest()
-
 def _ensure_df(x):
     return x if isinstance(x, pd.DataFrame) else pd.DataFrame()
 
@@ -84,6 +65,74 @@ def _as_list(x):
 def round_down_to_hour(dt):
     return dt.replace(minute=0, second=0, microsecond=0)
 
+def _keep_valid(selected, valid_values):
+    if not valid_values:
+        return []
+    if selected is None:
+        return []
+    if not isinstance(selected, (list, tuple)):
+        selected = [selected]
+    valid_set = set(valid_values)
+    filtered = [v for v in selected if v in valid_set]
+    return filtered
+
+def _compute_progress_max_for_filters(fecha, hora, networks, technologies, vendors, clusters):
+    """
+    Calcula el máximo de cada columna de progress usando TODAS las filas
+    filtradas (sin paginar) para que las barras no dependan de la página actual.
+    """
+    networks = _as_list(networks)
+    technologies = _as_list(technologies)
+    vendors = _as_list(vendors)
+    clusters = _as_list(clusters)
+
+    # Dataset completo filtrado por fecha/hora + filtros, sin paginación
+    df_full = fetch_kpis(
+        fecha=fecha,
+        hora=hora,
+        vendors=vendors or None,
+        clusters=clusters or None,
+        networks=networks or None,
+        technologies=technologies or None,
+        limit=None,
+    )
+    df_full = _ensure_df(df_full)
+
+    if df_full.empty:
+        return {}
+
+    # Inferir redes efectivas si no vienen fijas por filtro
+    if networks:
+        nets = networks
+    else:
+        nets = (
+            sorted(df_full["network"].dropna().unique().tolist())
+            if "network" in df_full.columns
+            else []
+        )
+
+    if not nets:
+        return {}
+
+    # Pasamos a formato wide para tener columnas tipo NET__metric
+    df_wide_full = pivot_by_network(df_full, networks=nets)
+    if df_wide_full is None or df_wide_full.empty:
+        return {}
+
+    progress_cols = prefixed_progress_cols(nets)
+    max_dict = {}
+
+    for col in progress_cols:
+        if col in df_wide_full.columns:
+            serie = df_wide_full[col]
+            # ignorar NaN / inf
+            valid = serie.replace([np.inf, -np.inf], np.nan).dropna()
+            max_dict[col] = float(valid.max()) if not valid.empty else None
+        else:
+            max_dict[col] = None
+
+    return max_dict
+
 
 def register_callbacks(app):
 
@@ -91,31 +140,90 @@ def register_callbacks(app):
     # 0) Actualiza opciones de Network y Technology
     # -------------------------------------------------
     @app.callback(
+        # Network
         Output("f-network", "options"),
         Output("f-network", "value"),
+        # Technology
         Output("f-technology", "options"),
         Output("f-technology", "value"),
+        # Vendor
+        Output("f-vendor", "options"),
+        Output("f-vendor", "value"),
+        # Cluster
+        Output("f-cluster", "options"),
+        Output("f-cluster", "value"),
+
+        # Disparadores
+        Input("refresh-timer", "n_intervals"),  # 👈 fuerza ejecución al cargar
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
+
+        # Estados actuales
+        State("f-network", "value"),
+        State("f-technology", "value"),
+        State("f-vendor", "value"),
+        State("f-cluster", "value"),
     )
-    def update_network_tech(fecha, hora):
-        # Para construir opciones, usa consulta no paginada (solo metadata)
+    def update_all_filters(_tick, fecha, hora,
+                           net_val_current, tech_val_current,
+                           ven_val_current, clu_val_current):
+        # -------- 1) Traer DF principal para esa fecha/hora --------
         df_main = fetch_kpis(fecha=fecha, hora=hora, limit=None)
-        networks_main = sorted(df_main["network"].dropna().unique().tolist()) if "network" in df_main.columns else []
-        techs_main = sorted(df_main["technology"].dropna().unique().tolist()) if "technology" in df_main.columns else []
+        df_main = _ensure_df(df_main)
 
-        # TOPOFF (solo para techs fallback/union)
-        top_opts = fetch_topoff_distinct(fecha=fecha)
-        techs_top = top_opts.get("technologies", [])
+        # Catálogos base
+        networks_all = sorted(df_main["network"].dropna().unique().tolist()) \
+            if "network" in df_main.columns else []
+        techs_all = sorted(df_main["technology"].dropna().unique().tolist()) \
+            if "technology" in df_main.columns else []
 
-        # UNION techs (si main vacío, te quedan los de topoff)
-        techs = sorted(set(techs_main) | set(techs_top))
+        # Normalizamos seleccionados para filtrar vendors/clusters
+        nets_sel = _as_list(net_val_current)
+        techs_sel = _as_list(tech_val_current)
 
-        net_opts = [{"label": n, "value": n} for n in networks_main]
-        tech_opts = [{"label": t, "value": t} for t in techs]
+        df_filtered = df_main.copy()
+        if nets_sel and "network" in df_filtered.columns:
+            df_filtered = df_filtered[df_filtered["network"].isin(nets_sel)]
+        if techs_sel and "technology" in df_filtered.columns:
+            df_filtered = df_filtered[df_filtered["technology"].isin(techs_sel)]
 
-        # valores por defecto vacíos (como tenías)
-        return net_opts, [], tech_opts, []
+        vendors_main = sorted(df_filtered["vendor"].dropna().unique().tolist()) \
+            if "vendor" in df_filtered.columns else []
+        clusters_main = sorted(df_filtered["noc_cluster"].dropna().unique().tolist()) \
+            if "noc_cluster" in df_filtered.columns else []
+
+        # -------- 2) Merge con TOPOFF (para tech y vendors) --------
+        top_opts = fetch_topoff_distinct(
+            fecha=fecha,
+            technologies=techs_sel or None,
+            vendors=None,
+        ) or {}
+
+        techs_top = top_opts.get("technologies", []) or []
+        vendors_top = top_opts.get("vendors", []) or []
+
+        techs_all = sorted(set(techs_all) | set(techs_top))
+        vendors_all = sorted(set(vendors_main) | set(vendors_top))
+
+        # -------- 3) Construir opciones (sin ifs que devuelvan no_update) --------
+        net_opts = [{"label": n, "value": n} for n in networks_all]
+        tech_opts = [{"label": t, "value": t} for t in techs_all]
+        ven_opts = [{"label": v, "value": v} for v in vendors_all]
+        clu_opts = [{"label": c, "value": c} for c in clusters_main]
+
+        # -------- 4) Mantener selección previa válida --------
+        new_net_value = _keep_valid(net_val_current, networks_all)
+        new_tech_value = _keep_valid(tech_val_current, techs_all)
+        new_ven_value = _keep_valid(ven_val_current, vendors_all)
+        new_clu_value = _keep_valid(clu_val_current, clusters_main)
+
+        return (
+            net_opts, new_net_value,
+            tech_opts, new_tech_value,
+            ven_opts, new_ven_value,
+            clu_opts, new_clu_value,
+        )
+
 
     # -------------------------------------------------
     # Botones de sort en headers
@@ -140,50 +248,6 @@ def register_callbacks(app):
             sort_state["ascending"] = True
         return sort_state
 
-    # -------------------------------------------------
-    # 1) Actualiza opciones de Vendor/Cluster
-    # -------------------------------------------------
-    @app.callback(
-        Output("f-vendor", "options"),
-        Output("f-vendor", "value"),
-        Output("f-cluster", "options"),
-        Output("f-cluster", "value"),
-        Input("f-fecha", "date"),
-        Input("f-hora", "value"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-    )
-    def update_vendor_cluster(fecha, hora, networks, technologies):
-        networks = _as_list(networks)
-        technologies = _as_list(technologies)
-
-        # ---------- MAIN ----------
-        df_main = fetch_kpis(fecha=fecha, hora=hora, limit=None)
-
-        if networks and "network" in df_main.columns:
-            df_main = df_main[df_main["network"].isin(networks)]
-        if technologies and "technology" in df_main.columns:
-            df_main = df_main[df_main["technology"].isin(technologies)]
-
-        vendors_main = sorted(df_main["vendor"].dropna().unique().tolist()) if "vendor" in df_main.columns else []
-        clusters_main = sorted(
-            df_main["noc_cluster"].dropna().unique().tolist()) if "noc_cluster" in df_main.columns else []
-
-        # ---------- TOPOFF (vendors fallback/union) ----------
-        top_opts = fetch_topoff_distinct(
-            fecha=fecha,
-            technologies=technologies,  # topoff sí tiene technology
-            vendors=None,  # no filtres vendors aquí
-        )
-        vendors_top = top_opts.get("vendors", [])
-
-        # UNION vendors (si main vacío, sobreviven los de topoff)
-        vendors = sorted(set(vendors_main) | set(vendors_top))
-
-        vendor_opts = [{"label": v, "value": v} for v in vendors]
-        cluster_opts = [{"label": c, "value": c} for c in clusters_main]  # clusters SOLO main
-
-        return vendor_opts, [], cluster_opts, []
 
     # -------------------------------------------------
     # 2) Paginación: reset page cuando cambian filtros/tamaño
@@ -271,7 +335,7 @@ def register_callbacks(app):
             else:
                 sort_by = col
 
-        # ---------- fuente de datos ----------
+        # ---------- fuente de datos paginada ----------
         if sort_mode == "alarmado":
             safe_sort_state = None
             df, total = fetch_kpis_paginated_severity_sort(
@@ -280,9 +344,8 @@ def register_callbacks(app):
                 networks=networks or None, technologies=technologies or None,
                 page=page, page_size=page_size,
             )
-
         else:
-            # Nuevo GLOBAL basado en profiles.main.severity
+            # GLOBAL basado en profiles.main.severity
             safe_sort_state = None  # 👈 importante para no reordenar en render
             if sort_by in COLMAP:
                 df, total = fetch_kpis_paginated_severity_global_sort(
@@ -294,7 +357,6 @@ def register_callbacks(app):
                     sort_net=sort_net,
                     ascending=ascending,
                 )
-
             else:
                 df, total = fetch_kpis_paginated_severity_global_sort(
                     fecha=fecha, hora=hora,
@@ -305,26 +367,48 @@ def register_callbacks(app):
                     sort_net=None,
                     ascending=True,
                 )
+
         # ---------- si no hay df -> alert ----------
         if df is None or df.empty:
             store_payload = {"columns": [], "rows": []}
             empty_alert = dbc.Alert("Sin datos para los filtros seleccionados.", color="warning")
             return empty_alert, "Página 1 de 1", "Sin resultados.", store_payload  # ← 4 valores
 
+        # ---------- máximos de progress usando TODOS los datos filtrados (sin paginar) ----------
+        progress_max_by_col = _compute_progress_max_for_filters(
+            fecha=fecha,
+            hora=hora,
+            networks=networks,
+            technologies=technologies,
+            vendors=vendors,
+            clusters=clusters,
+        )
+
         # ---------- inferir nets ----------
         if networks:
             nets = networks
         else:
-            nets = sorted(df["network"].dropna().unique().tolist()) if "network" in df.columns else []
+            nets = (
+                sorted(df["network"].dropna().unique().tolist())
+                if "network" in df.columns
+                else []
+            )
 
         # ---------- pivot + orden estable (si aplica) ----------
         key_cols = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
         if all(k in df.columns for k in key_cols) and nets:
-            tuples_in_order = list(dict.fromkeys(map(tuple, df[key_cols].itertuples(index=False, name=None))))
+            tuples_in_order = list(
+                dict.fromkeys(
+                    map(tuple, df[key_cols].itertuples(index=False, name=None))
+                )
+            )
             order_map = {t: i for i, t in enumerate(tuples_in_order)}
             wide = pivot_by_network(df, networks=nets)
             if wide is not None and not wide.empty:
-                wide["_ord"] = wide[key_cols].apply(lambda r: order_map.get(tuple(r.values.tolist()), 10 ** 9), axis=1)
+                wide["_ord"] = wide[key_cols].apply(
+                    lambda r: order_map.get(tuple(r.values.tolist()), 10 ** 9),
+                    axis=1,
+                )
                 wide = wide.sort_values("_ord").drop(columns=["_ord"])
                 use_df = wide
             else:
@@ -332,19 +416,31 @@ def register_callbacks(app):
         else:
             use_df = df
 
-        # ---------- render tabla ----------
-        table = render_kpi_table_multinet(use_df, networks=nets, sort_state=safe_sort_state)
+        # ---------- render tabla (usando máximos globales filtrados) ----------
+        table = render_kpi_table_multinet(
+            use_df,
+            networks=nets,
+            sort_state=safe_sort_state,
+            progress_max_by_col=progress_max_by_col,
+        )
 
         # ---------- banners ----------
         total_pages = max(1, math.ceil((total or 0) / max(1, page_size)))
         page_corrected = min(max(1, page), total_pages)
         indicator = f"Página {page_corrected} de {total_pages}"
-        banner = "Sin resultados." if (total or 0) == 0 else \
-            f"Mostrando {(page_corrected - 1) * page_size + 1}–{min(page_corrected * page_size, total)} de {total} registros"
+        banner = (
+            "Sin resultados."
+            if (total or 0) == 0
+            else f"Mostrando {(page_corrected - 1) * page_size + 1}–"
+                 f"{min(page_corrected * page_size, total)} de {total} registros"
+        )
 
         # ---------- store ----------
-        store_payload = {"columns": list(use_df.columns), "rows": use_df.to_dict("records")}
-        return table, indicator, banner, store_payload  # ← 4 valores
+        store_payload = {
+            "columns": list(use_df.columns),
+            "rows": use_df.to_dict("records"),
+        }
+        return table, indicator, banner, store_payload
 
     # -------------------------------------------------
     # 5) Intervalo global → sincroniza el del card (si aplica)

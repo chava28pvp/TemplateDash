@@ -54,7 +54,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-network",
                         options=[{"label": n, "value": n} for n in network_options],
-                        value=network_options,          # << todas por defecto
+                        value=[],          # << todas por defecto
                         multi=True,
                         clearable=False,
                         placeholder="Selecciona network",
@@ -67,7 +67,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-technology",
                         options=[{"label": t, "value": t} for t in technology_options],
-                        value=technology_options,       # << todas por defecto si vienen
+                        value=[],       # << todas por defecto si vienen
                         multi=True,
                         placeholder="Selecciona technology",
                         persistence=True, persistence_type="session"
@@ -82,7 +82,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-vendor",
                         options=[{"label": v, "value": v} for v in vendor_options],
-                        value=vendor_options,            # << todas por defecto si vienen
+                        value=[],            # << todas por defecto si vienen
                         multi=True,
                         placeholder="Selecciona vendor",
                         persistence=True, persistence_type="session"
@@ -94,7 +94,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-cluster",
                         options=[{"label": c, "value": c} for c in cluster_options],
-                        value=cluster_options,           # << todas por defecto si vienen
+                        value=[],           # << todas por defecto si vienen
                         multi=True,
                         placeholder="Selecciona cluster",
                         persistence=True, persistence_type="session"

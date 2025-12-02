@@ -100,3 +100,18 @@
   padding: 0 4px !important;
   line-height: 18px !important;
 }
+
+/* Wrapper pegajoso para los filtros globales */
+.filters-sticky-wrapper {
+  position: sticky;
+  top: 0;                    /* se pega al borde superior del viewport */
+  z-index: 1100;             /* por encima de cards normales */
+  background-color: #121212; /* mismo fondo que el body */
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+/* Opcional: pequeña sombra cuando está pegado para separarlo visualmente */
+.filters-sticky-wrapper {
+  box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}

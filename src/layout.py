@@ -41,11 +41,11 @@ def serve_layout():
                 # Card de filtros colapsable
                 dbc.Collapse(
                     id="filters-collapse",
-                    is_open=True,  # abiertos por defecto
+                    is_open=False,
                     children=build_filters()
                 ),
             ],
-            className="position-relative"
+            className="filters-sticky-wrapper"
         ),
 
         # Contenido principal

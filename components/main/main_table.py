@@ -350,7 +350,7 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
 # Render principal
 # =========================
 
-def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=None):
+def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=None, progress_max_by_col=None):
     if df_in is None or df_in.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
 
@@ -383,17 +383,19 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     PROGRESS_COLS = prefixed_progress_cols(networks)
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
-
-    PROGRESS_MAX_BY_COL = {}
-    for col in PROGRESS_COLS:
-        if col in df_wide.columns:
-            serie = df_wide[col]
-            # ignorar NaN / inf
-            valid = serie.replace([np.inf, -np.inf], np.nan).dropna()
-            if not valid.empty:
-                PROGRESS_MAX_BY_COL[col] = float(valid.max())
-            else:
-                PROGRESS_MAX_BY_COL[col] = None
+    if progress_max_by_col is not None:
+        PROGRESS_MAX_BY_COL = progress_max_by_col
+    else:
+        PROGRESS_MAX_BY_COL = {}
+        for col in PROGRESS_COLS:
+            if col in df_wide.columns:
+                serie = df_wide[col]
+                # ignorar NaN / inf
+                valid = serie.replace([np.inf, -np.inf], np.nan).dropna()
+                if not valid.empty:
+                    PROGRESS_MAX_BY_COL[col] = float(valid.max())
+                else:
+                    PROGRESS_MAX_BY_COL[col] = None
 
     if sort_state:
         sort_col_req = (sort_state or {}).get("column")
