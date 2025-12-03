@@ -991,4 +991,85 @@ def fetch_alarm_meta_for_heatmap(
     df_out = df_meta_heat[["technology","vendor","noc_cluster"]].drop_duplicates().reset_index(drop=True)
     return df_out, alarm_keys_set
 
+def fetch_integrity_baseline_week(
+    *,
+    fecha: str,
+    vendors=None,
+    clusters=None,
+    networks=None,
+    technologies=None,
+) -> pd.DataFrame:
+    """
+    Calcula la media semanal de INTEGRITY para la SEMANA ANTERIOR fija
+    a la semana de `fecha`, usando semanas lunes–domingo.
+
+    Ejemplo:
+      - Si fecha = miércoles 8 de enero,
+        semana actual = lun 6 .. dom 12,
+        semana anterior = lun 30 dic .. dom 5 ene.
+
+    Agrupa por: network, vendor, noc_cluster, technology.
+    """
+    if not fecha:
+        return pd.DataFrame()
+
+    try:
+        selected_dt = datetime.strptime(fecha, "%Y-%m-%d")
+    except Exception:
+        return pd.DataFrame()
+
+    # Lunes de la semana actual (semana fija lunes–domingo)
+    current_monday = selected_dt - timedelta(days=selected_dt.weekday())
+    # Semana anterior completa
+    prev_monday = current_monday - timedelta(days=7)
+    prev_sunday = current_monday - timedelta(days=1)
+
+    start_date = prev_monday.strftime("%Y-%m-%d")
+    end_date = prev_sunday.strftime("%Y-%m-%d")
+
+    # WHERE para vendors/clusters/networks/technologies (sin fecha ni hora)
+    where_sql, params, uv, uc, un, ut = _filters_where_and_params(
+        fecha=None,
+        hora=None,
+        vendors=vendors,
+        clusters=clusters,
+        networks=networks,
+        technologies=technologies,
+    )
+
+    # Añadimos rango de fechas de la semana anterior fija
+    where_sql = (
+        f"({where_sql}) "
+        f"AND {_quote(COLMAP['fecha'])} >= :start_date "
+        f"AND {_quote(COLMAP['fecha'])} <= :end_date"
+    )
+    params["start_date"] = start_date
+    params["end_date"] = end_date
+
+    tbl = _quote_table(_TABLE_NAME)
+    c_net = _quote(COLMAP["network"])
+    c_vend = _quote(COLMAP["vendor"])
+    c_clus = _quote(COLMAP["noc_cluster"])
+    c_tech = _quote(COLMAP["technology"])
+    c_integ = _quote(COLMAP["integrity"])
+
+    sql = f"""
+        SELECT
+            {c_net}  AS network,
+            {c_vend} AS vendor,
+            {c_clus} AS noc_cluster,
+            {c_tech} AS technology,
+            AVG(CAST({c_integ} AS DECIMAL(20,6))) AS integrity_week_avg
+        FROM {tbl}
+        WHERE {where_sql}
+        GROUP BY {c_net}, {c_vend}, {c_clus}, {c_tech}
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(sql, uv, uc, un, ut)
+        df = pd.read_sql(stmt, conn, params=params)
+
+    return df
+
 

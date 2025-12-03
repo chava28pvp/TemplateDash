@@ -24,6 +24,7 @@ BASE_GROUPS = [
     ("CS_RRC",   ["cs_rrc_ia_percent", "cs_rrc_fail"]),
     ("CS_RAB",   ["cs_rab_ia_percent", "cs_rab_fail"]),
     ("CS_DROP",  ["cs_drop_dc_percent", "cs_drop_abnrel"]),
+    ("ALARMAS", ["alarmas"])
 ]
 
 # Columnas base que llevan progress bar y severidad (sin prefijo de red)
@@ -67,6 +68,7 @@ DISPLAY_NAME_BASE = {
     "cs_rab_fail": "FAIL",
     "cs_drop_dc_percent": "%DC",
     "cs_drop_abnrel": "ABNREL",
+    "alarmas": "Alarmas",
 }
 
 # Derivados
@@ -282,14 +284,29 @@ def prefixed_severity_cols(networks: list[str]):
 def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
     if networks is None:
         networks = sorted(df_long["network"].dropna().unique().tolist())
+
     df = df_long[df_long["network"].isin(networks)].copy()
     if df.empty:
-       return df
+        return df
 
-    wide = df.pivot_table(index=INDEX_KEYS, columns="network", values=VALUE_COLS, aggfunc="first")
+    # Solo usar las VALUE_COLS que realmente existan en el DF
+    value_cols = [c for c in VALUE_COLS if c in df.columns]
+    if not value_cols:
+        # si no hay ninguna métrica disponible, regresamos solo las keys
+        return df[INDEX_KEYS].drop_duplicates().reset_index(drop=True)
+
+    wide = df.pivot_table(
+        index=INDEX_KEYS,
+        columns="network",
+        values=value_cols,
+        aggfunc="first",
+    )
+
+    # columnas como "<NET>__<metric>"
     wide.columns = [f"{net}__{val}" for (val, net) in wide.columns]
     wide = wide.reset_index()
     return wide
+
 
 # =========================
 # Header 3 niveles (keys + grupos por network)
@@ -350,7 +367,13 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
 # Render principal
 # =========================
 
-def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=None, progress_max_by_col=None):
+def render_kpi_table_multinet(
+    df_in: pd.DataFrame,
+    networks=None,
+    sort_state=None,
+    progress_max_by_col=None,
+    integrity_baseline_map=None,
+):
     if df_in is None or df_in.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
 
@@ -383,6 +406,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     PROGRESS_COLS = prefixed_progress_cols(networks)
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
+    # --- PROGRESS_MAX_BY_COL: usar dict externo o calcular localmente ---
     if progress_max_by_col is not None:
         PROGRESS_MAX_BY_COL = progress_max_by_col
     else:
@@ -396,6 +420,8 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
                     PROGRESS_MAX_BY_COL[col] = float(valid.max())
                 else:
                     PROGRESS_MAX_BY_COL[col] = None
+            else:
+                PROGRESS_MAX_BY_COL[col] = None
 
     if sort_state:
         sort_col_req = (sort_state or {}).get("column")
@@ -406,7 +432,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
 
     # 5) Header (pasa sort_state para flecha)
     header = build_header_3lvl(groups_3lvl, END_OF_GROUP, sort_state=sort_state)
-    VISIBLE_ORDER = ROW_KEYS + METRIC_ORDER
+    VISIBLE_ORDER = ROW_KEYS + METRIC_ORDER  # por si lo usas luego
     idx_map = {c: i for i, c in enumerate(df_wide.columns)}
 
     def _safe_get(row_tuple, col):
@@ -435,7 +461,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
                 tds.append(
                     html.Td(
                         html.Div(content, className="cell-key", title=str(content) if content else ""),
-                        className=f"td-key td-{key}"
+                        className=f"td-key td-{key}",
                     )
                 )
 
@@ -484,11 +510,39 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
                 )
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
-                if (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
+
+                # --- LÓGICA ESPECIAL PARA INTEGRITY ---
+                if base_name == "integrity" and isinstance(num_val, (int, float)):
+                    vendor_val = _safe_get(row, "vendor")
+                    cluster_val = _safe_get(row, "noc_cluster")
+                    tech_val = _safe_get(row, "technology")
+                    key = (net, vendor_val, cluster_val, tech_val)
+
+                    baseline = None
+                    if integrity_baseline_map is not None:
+                        baseline = integrity_baseline_map.get(key)
+
+                    if baseline is not None and baseline > 0:
+                        ratio = float(num_val) / float(baseline)
+                        # Degrade ≥ 80% → valor actual <= 20% del baseline
+                        if ratio <= 0.2:
+                            cls = "cell-integrity-degraded"
+                        else:
+                            cls = "cell-neutral"
+                    else:
+                        cls = "cell-neutral"
+
+                    cell = html.Div(_fmt_number(val, base_name), className=cls)
+
+                # --- SEVERITY normal ---
+                elif (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
                     cls = f"cell-{cell_severity(base_name, float(num_val), network=net, profile='main')}"
+                    cell = html.Div(_fmt_number(val, base_name), className=cls)
+
+                # --- neutro ---
                 else:
                     cls = "cell-neutral"
-                cell = html.Div(_fmt_number(val, base_name), className=cls)
+                    cell = html.Div(_fmt_number(val, base_name), className=cls)
 
             td_cls = "td-cell" + (" td-end-of-group" if col in END_OF_GROUP else "")
             tds.append(html.Td(cell, className=td_cls))
@@ -496,6 +550,14 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
         body_rows.append(html.Tr(tds))
 
     body = html.Tbody(body_rows)
-    table = dbc.Table([header, body], bordered=False, hover=True, responsive=True, striped=True, size="sm",
-                      className="kpi-table compact")
+    table = dbc.Table(
+        [header, body],
+        bordered=False,
+        hover=True,
+        responsive=True,
+        striped=True,
+        size="sm",
+        className="kpi-table compact",
+    )
     return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
+

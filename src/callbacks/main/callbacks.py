@@ -10,7 +10,9 @@ from components.main.main_table import (
 )
 import dash_bootstrap_components as dbc
 
-from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, fetch_kpis_paginated_severity_sort
+from src.Utils.alarmados import add_alarm_streak
+from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, \
+    fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week
 from src.config import REFRESH_INTERVAL_MS
 
 from src.Utils.utils_time import now_local
@@ -374,6 +376,28 @@ def register_callbacks(app):
             empty_alert = dbc.Alert("Sin datos para los filtros seleccionados.", color="warning")
             return empty_alert, "Página 1 de 1", "Sin resultados.", store_payload  # ← 4 valores
 
+        # ---------- baseline semanal de integridad (sin paginar) ----------
+        df_baseline = fetch_integrity_baseline_week(
+            fecha=fecha,
+            vendors=vendors or None,
+            clusters=clusters or None,
+            networks=networks or None,
+            technologies=technologies or None,
+        )
+        if df_baseline is None:
+            df_baseline = pd.DataFrame()
+
+        integrity_baseline_map = {}
+        if not df_baseline.empty:
+            for _, r in df_baseline.iterrows():
+                key = (
+                    r.get("network"),
+                    r.get("vendor"),
+                    r.get("noc_cluster"),
+                    r.get("technology"),
+                )
+                integrity_baseline_map[key] = r.get("integrity_week_avg")
+
         # ---------- máximos de progress usando TODOS los datos filtrados (sin paginar) ----------
         progress_max_by_col = _compute_progress_max_for_filters(
             fecha=fecha,
@@ -383,6 +407,48 @@ def register_callbacks(app):
             vendors=vendors,
             clusters=clusters,
         )
+
+        # ---------- calcular racha de alarmas (día completo) ----------
+        df_day = fetch_kpis(
+            fecha=fecha,
+            hora=None,  # todas las horas del día seleccionado
+            vendors=vendors or None,
+            clusters=clusters or None,
+            networks=networks or None,
+            technologies=technologies or None,
+            limit=None,
+        )
+        df_day = _ensure_df(df_day)
+
+        alarm_map = {}
+        if not df_day.empty:
+            df_day = add_alarm_streak(df_day)
+
+            key_cols = ["fecha", "hora", "network", "vendor", "noc_cluster", "technology"]
+            for _, r in df_day.iterrows():
+                key = (
+                    r.get("fecha"),
+                    r.get("hora"),
+                    r.get("network"),
+                    r.get("vendor"),
+                    r.get("noc_cluster"),
+                    r.get("technology"),
+                )
+                alarm_map[key] = r.get("alarmas", 0)
+
+        def _lookup_alarmas(row):
+            key = (
+                row.get("fecha"),
+                row.get("hora"),
+                row.get("network"),
+                row.get("vendor"),
+                row.get("noc_cluster"),
+                row.get("technology"),
+            )
+            return alarm_map.get(key, 0)
+
+        # añade la columna 'alarmas' al DF paginado
+        df["alarmas"] = df.apply(_lookup_alarmas, axis=1)
 
         # ---------- inferir nets ----------
         if networks:
@@ -422,6 +488,7 @@ def register_callbacks(app):
             networks=nets,
             sort_state=safe_sort_state,
             progress_max_by_col=progress_max_by_col,
+            integrity_baseline_map=integrity_baseline_map,
         )
 
         # ---------- banners ----------
