@@ -47,7 +47,7 @@ DISPLAY_NAME_BASE = {
     "noc_cluster": "Cluster",
 
     # Métricas
-    "integrity": "Integrity",
+    "integrity": "Integ",
 
     "ps_traff_delta": "DELTA",
     "ps_traff_gb": "GB",
@@ -366,7 +366,6 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
 # =========================
 # Render principal
 # =========================
-
 def render_kpi_table_multinet(
     df_in: pd.DataFrame,
     networks=None,
@@ -471,6 +470,9 @@ def render_kpi_table_multinet(
             base_name = strip_net(col)
             net = col.split("__", 1)[0] if "__" in col else None
 
+            # ======================================================
+            # PROGRESS BARS
+            # ======================================================
             if col in PROGRESS_COLS:
                 cfg = progress_cfg(base_name, network=net, profile="main")
 
@@ -504,10 +506,15 @@ def render_kpi_table_multinet(
                     vmax=vmax,
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
-                    width_px=140,
+                    width_px=80,  # más compacto
                     show_value_right=False,
                     scale="log" if use_log else "linear",
                 )
+                td_type_cls = "td-progress"
+
+            # ======================================================
+            # CELDAS NORMALES (sin barra)
+            # ======================================================
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
 
@@ -544,7 +551,10 @@ def render_kpi_table_multinet(
                     cls = "cell-neutral"
                     cell = html.Div(_fmt_number(val, base_name), className=cls)
 
-            td_cls = "td-cell" + (" td-end-of-group" if col in END_OF_GROUP else "")
+                td_type_cls = "td-plain"
+
+            # clases comunes de la celda KPI
+            td_cls = "td-cell " + td_type_cls + (" td-end-of-group" if col in END_OF_GROUP else "")
             tds.append(html.Td(cell, className=td_cls))
 
         body_rows.append(html.Tr(tds))
@@ -560,4 +570,5 @@ def render_kpi_table_multinet(
         className="kpi-table compact",
     )
     return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
+
 

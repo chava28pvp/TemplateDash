@@ -210,7 +210,39 @@
   margin-left: auto;
   margin-right: auto;
 }
+/* === Compactar columnas de KPI (metricas) === */
 
+/* Menos padding y font más pequeña en KPIs */
+.kpi-table.compact th.th-sub,
+.kpi-table.compact td.td-cell {
+  padding: 0.15rem 0.25rem;   /* antes 0.25rem 0.5rem */
+  font-size: 0.75rem;
+}
+.kpi-table.compact td.td-cell.td-plain {
+  padding: 0.10rem 0.20rem;
+  font-size: 0.72rem;
+  width: 16px;
+  min-width: 18px;
+  max-width: 24px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Darles un ancho máximo estrecho a las columnas de KPIs */
+.kpi-table.compact th.th-sub,
+.kpi-table.compact td.td-cell {
+  width: 30px;
+  min-width: 30px;
+  max-width: 90px;
+  white-space: nowrap;
+}
+
+/* Centrar el contenido interior y evitar que la barra se “despegue” */
+.kpi-table.compact td.td-cell > div {
+  margin-left: auto;
+  margin-right: auto;
+}
 /* ======= Vendor con inicial (sin imagen) ======= */
 .kpi-table .td-key.td-vendor .cell-key > span,
 .kpi-table .td-key.td-vendor .vendor-initial {
@@ -266,15 +298,6 @@
   max-width: 84px;
 }
 /* === Compactar aún más las columnas de ROW_KEYS (main + topoff) === */
-
-/* Todos los keys un poco más pequeños y con menos padding */
-.kpi-table.compact th.th-left,
-.kpi-table.compact td.td-key {
-  padding: 0.15rem 0.35rem;
-  font-size: 0.75rem;
-  min-width: 68px;
-}
-
 /* Fecha / Hora / Vendor super estrechos */
 .kpi-table.compact th.th-fecha,
 .kpi-table.compact td.td-fecha {
@@ -325,7 +348,6 @@
   max-width: 40px;
   text-align: center;
 }
-
 /* Para topoff: compactar aún más las celdas marcadas como compactas */
 .kpi-table.compact .cell-key--compact {
   max-width: 120px;

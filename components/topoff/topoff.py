@@ -371,7 +371,7 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
                     vmax=vmax,
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
-                    width_px=140,
+                    width_px=80,
                     show_value_right=False,
                     scale="log" if use_log else "linear",
                 )
