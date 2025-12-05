@@ -128,10 +128,11 @@ def register_topoff_callbacks(app):
         Input("topoff-sort-state", "data"),
         Input("f-hora", "value"),
         Input("f-cluster", "value"),
+        Input("topoff-link-state", "data"),
         State("topoff-page-state", "data"),
         prevent_initial_call=True,
     )
-    def reset_page_on_any_change(ps, _mode, _s, _r, _n, _sort, _hora,  _cluster, page_state):
+    def reset_page_on_any_change(ps, _mode, _s, _r, _n, _sort, _hora, _cluster, _link_state, page_state):
         ps = max(1, int(ps or DEFAULT_PAGE_SIZE))
         current_page = int((page_state or {}).get("page", 1))
         current_ps = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
@@ -159,6 +160,7 @@ def register_topoff_callbacks(app):
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-order-mode", "value"),
+        Input("topoff-link-state", "data"),
         prevent_initial_call=False,
     )
     def refresh_table(
@@ -166,7 +168,8 @@ def register_topoff_callbacks(app):
         fecha, hora, technologies, vendors,
         clusters,
         sites, rncs, nodebs,
-        sort_mode
+        sort_mode,
+        link_state,
     ):
         page = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
@@ -186,12 +189,23 @@ def register_topoff_callbacks(app):
         else:
             order_mode = "recent"
 
+        # === aplicar filtro extra desde main (cluster) ===
+        if link_state and link_state.get("selected"):
+            sel = link_state["selected"]
+            clus = sel.get("cluster")
+            if clus:
+                clusters_effective = [clus]
+            else:
+                clusters_effective = clusters
+        else:
+            clusters_effective = clusters
+
         common_kwargs = dict(
             fecha=fecha,
             hora=hora,
             technologies=technologies,
             vendors=vendors,
-            clusters=clusters,
+            clusters=clusters_effective,
             sites=sites,
             rncs=rncs,
             nodebs=nodebs,
@@ -242,19 +256,18 @@ def register_topoff_callbacks(app):
         return table, indicator, banner
 
     @app.callback(
-            Output("topoff-sort-state", "data", allow_duplicate=True),
-            Input("topoff-order-mode", "value"),   # recent / alarmado / sitio
-            Input("f-fecha", "date"),
-            Input("f-hora", "value"),
-            Input("f-technology", "value"),
-            Input("f-vendor", "value"),
-            Input("f-cluster", "value"),
-            Input("topoff-site-filter", "value"),
-            Input("topoff-rnc-filter", "value"),
-            Input("topoff-nodeb-filter", "value"),
-            prevent_initial_call=True,
-        )
+        Output("topoff-sort-state", "data", allow_duplicate=True),
+        Input("topoff-order-mode", "value"),  # recent / alarmado / sitio
+        Input("f-fecha", "date"),
+        Input("f-hora", "value"),
+        Input("f-technology", "value"),
+        Input("f-vendor", "value"),
+        Input("f-cluster", "value"),
+        Input("topoff-site-filter", "value"),
+        Input("topoff-rnc-filter", "value"),
+        Input("topoff-nodeb-filter", "value"),
+        Input("topoff-link-state", "data"),
+        prevent_initial_call=True,
+    )
     def reset_sort_on_filters(_mode, *_):
-    # siempre que cambie cualquiera de estos inputs,
-    # regresamos el sort al estado "sin columna"
         return {"column": None, "ascending": True}

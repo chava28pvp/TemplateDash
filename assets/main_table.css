@@ -267,14 +267,43 @@
 }
 
 /* Permitir 2 líneas y cortar con ellipsis si excede */
-.kpi-table .td-key.td-noc_cluster .cell-key {
+.kpi-table .td-key.td-noc_cluster .cluster-link-btn {
+   background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: default; /* o pointer */
   display: -webkit-box;
-  -webkit-line-clamp: 2;          /* 2 líneas visibles */
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  white-space: normal;            /* permite salto de línea */
+  white-space: normal;
   line-height: 1.15;
 }
+/* Botón de cluster que parece texto normal */
+.cluster-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+/* Si quieres que ni siquiera se note el cursor de mano: */
+.cluster-link-btn {
+  cursor: default;   /* o 'pointer' si quieres seguir indicando que es clickeable */
+}
+
+/* Opcional: quitar el borde azul feo de foco (y luego ya lo estilizas si quieres) */
+.cluster-link-btn:focus {
+  outline: none;
+}
+
 /* ======= Tech: centrar mejor contenido ======= */
 .kpi-table .th-left.th-technology,
 .kpi-table .td-key.td-technology {

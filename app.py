@@ -1,7 +1,6 @@
-from dash import Dash
+from dash import Dash, Input, Output, ALL
 import dash_bootstrap_components as dbc
 from flask_caching import Cache
-
 from src.callbacks.main.export_callback import export_callback
 from src.callbacks.topoff.export_callback import export_topoff_callback
 from src.callbacks.topoff.heatmap_callbacks import topoff_heatmap_callbacks
@@ -31,6 +30,48 @@ heatmap_callbacks(app)
 register_topoff_callbacks(app)
 topoff_heatmap_callbacks(app)
 export_topoff_callback(app)
+
+app.clientside_callback(
+    """
+    function(ts_list) {
+        // ts_list = lista de n_clicks_timestamp de todos los botones de cluster
+        if (!ts_list || ts_list.length === 0) {
+            return window.dash_clientside.no_update;
+        }
+
+        // encontramos el timestamp más grande (último click real)
+        var maxTs = 0;
+        for (var i = 0; i < ts_list.length; i++) {
+            var t = ts_list[i] || 0;
+            if (t > maxTs) {
+                maxTs = t;
+            }
+        }
+
+        // Si nunca se ha clicado ningún cluster (todo 0/undefined) → no hacemos nada
+        if (maxTs === 0) {
+            return window.dash_clientside.no_update;
+        }
+
+        var el = document.getElementById('topoff-anchor');
+        if (el && typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+            });
+        }
+
+        // valor dummy para el Output
+        return '';
+    }
+    """,
+    Output("topoff-scroll-dummy", "children"),
+    Input(
+        {"type": "main-cluster-link", "cluster": ALL, "vendor": ALL, "technology": ALL},
+        "n_clicks_timestamp"
+    ),
+    prevent_initial_call=True,
+)
 
 if __name__ == "__main__":
     app.run(debug=True)

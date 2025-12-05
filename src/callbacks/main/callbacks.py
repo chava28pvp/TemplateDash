@@ -17,6 +17,7 @@ from src.config import REFRESH_INTERVAL_MS
 
 from src.Utils.utils_time import now_local
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct
+from dash.exceptions import PreventUpdate
 
 #Cach simple en memoria para df_ts
 _DFTS_CACHE = {}
@@ -328,7 +329,9 @@ def register_callbacks(app):
         sort_by = None
         sort_net = None
         ascending = True
-        if sort_state and sort_state.get("column"):
+
+        # 👇 IMPORTANTE: en modo "global" NO usamos sort_state para la query
+        if sort_mode != "global" and sort_state and sort_state.get("column"):
             col = sort_state["column"]
             ascending = bool(sort_state.get("ascending", True))
             if "__" in col:
@@ -339,6 +342,7 @@ def register_callbacks(app):
 
         # ---------- fuente de datos paginada ----------
         if sort_mode == "alarmado":
+            # en modo alarmado, el orden lo define fetch_kpis_paginated_severity_sort
             safe_sort_state = None
             df, total = fetch_kpis_paginated_severity_sort(
                 fecha=fecha, hora=hora,
@@ -347,28 +351,17 @@ def register_callbacks(app):
                 page=page, page_size=page_size,
             )
         else:
-            # GLOBAL basado en profiles.main.severity
-            safe_sort_state = None  # 👈 importante para no reordenar en render
-            if sort_by in COLMAP:
-                df, total = fetch_kpis_paginated_severity_global_sort(
-                    fecha=fecha, hora=hora,
-                    vendors=vendors or None, clusters=clusters or None,
-                    networks=networks or None, technologies=technologies or None,
-                    page=page, page_size=page_size,
-                    sort_by_friendly=sort_by,
-                    sort_net=sort_net,
-                    ascending=ascending,
-                )
-            else:
-                df, total = fetch_kpis_paginated_severity_global_sort(
-                    fecha=fecha, hora=hora,
-                    vendors=vendors or None, clusters=clusters or None,
-                    networks=networks or None, technologies=technologies or None,
-                    page=page, page_size=page_size,
-                    sort_by_friendly=None,
-                    sort_net=None,
-                    ascending=True,
-                )
+            # MODO GLOBAL → siempre global puro por severidad desde SQL
+            safe_sort_state = None  # 👈 no reordenar en el render
+            df, total = fetch_kpis_paginated_severity_global_sort(
+                fecha=fecha, hora=hora,
+                vendors=vendors or None, clusters=clusters or None,
+                networks=networks or None, technologies=technologies or None,
+                page=page, page_size=page_size,
+                sort_by_friendly=None,
+                sort_net=None,
+                ascending=True,
+            )
 
         # ---------- si no hay df -> alert ----------
         if df is None or df.empty:
@@ -446,6 +439,68 @@ def register_callbacks(app):
                 row.get("technology"),
             )
             return alarm_map.get(key, 0)
+
+        # añade la columna 'alarmas' al DF paginado
+        df["alarmas"] = df.apply(_lookup_alarmas, axis=1)
+
+        # ---------- inferir nets ----------
+        if networks:
+            nets = networks
+        else:
+            nets = (
+                sorted(df["network"].dropna().unique().tolist())
+                if "network" in df.columns
+                else []
+            )
+
+        # ---------- pivot + orden estable (si aplica) ----------
+        key_cols = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
+        if all(k in df.columns for k in key_cols) and nets:
+            tuples_in_order = list(
+                dict.fromkeys(
+                    map(tuple, df[key_cols].itertuples(index=False, name=None))
+                )
+            )
+            order_map = {t: i for i, t in enumerate(tuples_in_order)}
+            wide = pivot_by_network(df, networks=nets)
+            if wide is not None and not wide.empty:
+                wide["_ord"] = wide[key_cols].apply(
+                    lambda r: order_map.get(tuple(r.values.tolist()), 10 ** 9),
+                    axis=1,
+                )
+                wide = wide.sort_values("_ord").drop(columns=["_ord"])
+                use_df = wide
+            else:
+                use_df = df
+        else:
+            use_df = df
+
+        # ---------- render tabla (usando máximos globales filtrados) ----------
+        table = render_kpi_table_multinet(
+            use_df,
+            networks=nets,
+            sort_state=safe_sort_state,
+            progress_max_by_col=progress_max_by_col,
+            integrity_baseline_map=integrity_baseline_map,
+        )
+
+        # ---------- banners ----------
+        total_pages = max(1, math.ceil((total or 0) / max(1, page_size)))
+        page_corrected = min(max(1, page), total_pages)
+        indicator = f"Página {page_corrected} de {total_pages}"
+        banner = (
+            "Sin resultados."
+            if (total or 0) == 0
+            else f"Mostrando {(page_corrected - 1) * page_size + 1}–"
+                 f"{min(page_corrected * page_size, total)} de {total} registros"
+        )
+
+        # ---------- store ----------
+        store_payload = {
+            "columns": list(use_df.columns),
+            "rows": use_df.to_dict("records"),
+        }
+        return table, indicator, banner, store_payload
 
         # añade la columna 'alarmas' al DF paginado
         df["alarmas"] = df.apply(_lookup_alarmas, axis=1)
@@ -588,3 +643,34 @@ def register_callbacks(app):
     def reset_sort_state_on_filters(_fecha, _hora, _net, _tech, _ven, _clu, _mode):
         # Vuelve al estado “sin columna seleccionada”
         return {"column": None, "ascending": True}
+
+    @app.callback(
+        Output("topoff-link-state", "data"),
+        Input({"type": "main-cluster-link", "cluster": ALL, "vendor": ALL, "technology": ALL}, "n_clicks"),
+        State({"type": "main-cluster-link", "cluster": ALL, "vendor": ALL, "technology": ALL}, "id"),
+        State("topoff-link-state", "data"),
+        prevent_initial_call=True,
+    )
+    def sync_topoff_from_main(n_clicks_list, ids_list, current_state):
+        # no hay clicks válidos
+        if not n_clicks_list or not ids_list:
+            raise PreventUpdate
+
+        current_state = current_state or {"selected": None}
+        current_sel = current_state.get("selected")
+
+        trig = ctx.triggered_id
+        if not trig:
+            raise PreventUpdate
+
+        new_sel = {
+            "cluster": trig.get("cluster"),
+            "vendor": trig.get("vendor"),
+            "technology": trig.get("technology"),
+        }
+
+        # toggle: si ya estaba seleccionado el mismo, limpias
+        if current_sel == new_sel:
+            return {"selected": None}
+
+        return {"selected": new_sel}

@@ -301,6 +301,7 @@ def serve_layout():
                 ),
             ]),
 
+            html.Div(id="topoff-anchor"),
             dbc.Row([
                 dbc.Col([
 
@@ -663,6 +664,10 @@ def serve_layout():
 
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Download(id="download-excel"),
+        dcc.Store(id="topoff-link-state", data={"selected": None}),
+        html.Div(id="topoff-scroll-dummy", style={"display": "none"}),
+
+
     ],
         fluid=True,
         style={"backgroundColor": "#121212", "color": "white"}

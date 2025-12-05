@@ -455,6 +455,32 @@ def render_kpi_table_multinet(
             if key == "vendor":
                 cell_content = vendor_badge(val)
                 tds.append(html.Td(cell_content, className=f"td-key td-{key}"))
+
+            elif key == "noc_cluster":
+                content = _fmt_number(val, key)
+                # sacamos también vendor y tech de la fila para el link
+                vendor_val = _safe_get(row, "vendor")
+                tech_val = _safe_get(row, "technology")
+
+                btn = html.Button(
+                    content or "",
+                    id={
+                        "type": "main-cluster-link",
+                        "cluster": val,
+                        "vendor": vendor_val,
+                        "technology": tech_val,
+                    },
+                    n_clicks=0,
+                    className="cluster-link-btn cell-key",  # puedes estilizarla en CSS
+                    title=str(content) if content else "",
+                )
+                tds.append(
+                    html.Td(
+                        btn,
+                        className=f"td-key td-{key}",
+                    )
+                )
+
             else:
                 content = _fmt_number(val, key)
                 tds.append(
