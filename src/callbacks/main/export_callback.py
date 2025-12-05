@@ -8,7 +8,6 @@ import math
 from xlsxwriter import Workbook  # pip install xlsxwriter
 
 from src.dataAccess.data_access import (
-    fetch_kpis_paginated,
     fetch_kpis_paginated_severity_global_sort,
     fetch_kpis_paginated_severity_sort,
     COLMAP,
@@ -109,11 +108,17 @@ def export_callback(app):
         page      = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", 50))
 
-        sort_by = None; sort_net = None; ascending = True
-        if sort_mode != "alarmado" and sort_state and sort_state.get("column"):
-            col = sort_state["column"]; ascending = bool(sort_state.get("ascending", True))
-            if "__" in col: sort_net, sort_by = col.split("__", 1)
-            else:           sort_by = col
+        sort_by = None
+        sort_net = None
+        ascending = True
+
+        if sort_mode != "global" and sort_state and sort_state.get("column"):
+            col = sort_state["column"]
+            ascending = bool(sort_state.get("ascending", True))
+            if "__" in col:
+                sort_net, sort_by = col.split("__", 1)
+            else:
+                sort_by = col
 
         if sort_mode == "alarmado":
             df_page, _ = fetch_kpis_paginated_severity_sort(
@@ -123,23 +128,19 @@ def export_callback(app):
                 page=page, page_size=page_size,
             )
             safe_sort_state = None
+
         else:
-            if sort_by and sort_by in COLMAP:
-                df_page, _ = fetch_kpis_paginated_severity_global_sort(
-                    fecha=fecha, hora=hora,
-                    vendors=vendors or None, clusters=clusters or None,
-                    networks=networks or None, technologies=techs or None,
-                    page=page, page_size=page_size,
-                    sort_by_friendly=sort_by, sort_net=sort_net, ascending=ascending,
-                )
-            else:
-                df_page, _ = fetch_kpis_paginated(
-                    fecha=fecha, hora=hora,
-                    vendors=vendors or None, clusters=clusters or None,
-                    networks=networks or None, technologies=techs or None,
-                    page=page, page_size=page_size,
-                )
-            safe_sort_state = sort_state
+            # GLOBAL puro siempre basado en severidad (con o sin columna)
+            df_page, _ = fetch_kpis_paginated_severity_global_sort(
+                fecha=fecha, hora=hora,
+                vendors=vendors or None, clusters=clusters or None,
+                networks=networks or None, technologies=techs or None,
+                page=page, page_size=page_size,
+                sort_by_friendly=sort_by if (sort_by in COLMAP) else None,
+                sort_net=sort_net,
+                ascending=ascending,
+            )
+            safe_sort_state = None
 
         if df_page is None or df_page.empty:
             return dcc.send_string("Sin datos para exportar.", filename="vacio.txt")

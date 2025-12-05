@@ -634,8 +634,7 @@ def serve_layout():
         dcc.Store(id="page-state", data={"page": 1, "page_size": 5}),
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
         dcc.Store(id="table-page-data"),
-
-
+        dcc.Store(id="main-context-store"),
 
         # Señales/estado Heatmap
         dcc.Store(id="heatmap-trigger", data=None),

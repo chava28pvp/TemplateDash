@@ -23,39 +23,17 @@ from dash.exceptions import PreventUpdate
 _DFTS_CACHE = {}
 _DFTS_TTL = 300  # segundos
 
+_MAIN_CTX_CACHE = {}
+_MAIN_CTX_TTL = 120  # segundos
+
+MOCK_INTEGRITY_BASELINE = False
+MOCK_BASELINE_MULT = 6.0
+MOCK_ONLY_NETWORKS = {"NET"}  # si solo quieres NET
 # Última clave renderizada para evitar re-render idéntico
 _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
 def _ensure_df(x):
     return x if isinstance(x, pd.DataFrame) else pd.DataFrame()
-
-def _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters):
-    """Obtiene df_ts = df(today)+df(yday) cacheado por filtros (sin hora)."""
-    key = ("df_ts", today_str, yday_str,
-           tuple(sorted(networks or [])),
-           tuple(sorted(technologies or [])),
-           tuple(sorted(vendors or [])),
-           tuple(sorted(clusters or [])))
-    now = time.time()
-    hit = _DFTS_CACHE.get(key)
-    if hit and (now - hit["ts"] < _DFTS_TTL):
-        return hit["df"]
-
-    df_today = fetch_kpis(fecha=today_str, hora=None,
-                          vendors=vendors or None, clusters=clusters or None,
-                          networks=networks or None, technologies=technologies or None,
-                          limit=None)
-    df_today = _ensure_df(df_today)
-
-    df_yday = fetch_kpis(fecha=yday_str, hora=None,
-                         vendors=vendors or None, clusters=clusters or None,
-                         networks=networks or None, technologies=technologies or None,
-                         limit=None)
-    df_yday = _ensure_df(df_yday)
-
-    df_ts = pd.concat([df_today, df_yday], ignore_index=True, sort=False)
-    _DFTS_CACHE[key] = {"df": df_ts, "ts": now}
-    return df_ts
 
 def _as_list(x):
     if x is None:
@@ -136,6 +114,30 @@ def _compute_progress_max_for_filters(fecha, hora, networks, technologies, vendo
 
     return max_dict
 
+def _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters):
+    def _norm(x):
+        x = _as_list(x) or []
+        return tuple(sorted(x))
+    return (
+        "main_ctx",
+        fecha, hora,
+        _norm(networks),
+        _norm(technologies),
+        _norm(vendors),
+        _norm(clusters),
+    )
+
+def _get_main_context_cached(fecha, hora, networks, technologies, vendors, clusters):
+    key = _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters)
+    now = time.time()
+    hit = _MAIN_CTX_CACHE.get(key)
+    if hit and (now - hit["ts"] < _MAIN_CTX_TTL):
+        return hit["data"]
+    return None
+
+def _set_main_context_cached(fecha, hora, networks, technologies, vendors, clusters, data):
+    key = _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters)
+    _MAIN_CTX_CACHE[key] = {"ts": time.time(), "data": data}
 
 def register_callbacks(app):
 
@@ -143,25 +145,17 @@ def register_callbacks(app):
     # 0) Actualiza opciones de Network y Technology
     # -------------------------------------------------
     @app.callback(
-        # Network
         Output("f-network", "options"),
         Output("f-network", "value"),
-        # Technology
         Output("f-technology", "options"),
         Output("f-technology", "value"),
-        # Vendor
         Output("f-vendor", "options"),
         Output("f-vendor", "value"),
-        # Cluster
         Output("f-cluster", "options"),
         Output("f-cluster", "value"),
-
-        # Disparadores
-        Input("refresh-timer", "n_intervals"),  # 👈 fuerza ejecución al cargar
+        Input("refresh-timer", "n_intervals"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
-
-        # Estados actuales
         State("f-network", "value"),
         State("f-technology", "value"),
         State("f-vendor", "value"),
@@ -226,8 +220,6 @@ def register_callbacks(app):
             ven_opts, new_ven_value,
             clu_opts, new_clu_value,
         )
-
-
     # -------------------------------------------------
     # Botones de sort en headers
     # -------------------------------------------------
@@ -239,18 +231,29 @@ def register_callbacks(app):
     )
     def on_click_sort(n_clicks_list, sort_state):
         sort_state = sort_state or {"column": None, "ascending": True}
-        trig = ctx.triggered_id
-        if not trig or "col" not in trig:
-            return sort_state
 
-        clicked_col = trig["col"]
+        # ✅ Bloquea disparos “fantasma” por re-render
+        if not ctx.triggered:
+            raise PreventUpdate
+
+        trig = ctx.triggered[0]
+        # Cuando se recrea el header, puede disparar con 0 o None
+        if trig.get("value") in (None, 0):
+            raise PreventUpdate
+
+        trig_id = ctx.triggered_id
+        if not trig_id or "col" not in trig_id:
+            raise PreventUpdate
+
+        clicked_col = trig_id["col"]
+
         if sort_state.get("column") in (clicked_col, strip_net(clicked_col)):
             sort_state["ascending"] = not sort_state.get("ascending", True)
         else:
             sort_state["column"] = clicked_col
             sort_state["ascending"] = True
-        return sort_state
 
+        return sort_state
 
     # -------------------------------------------------
     # 2) Paginación: reset page cuando cambian filtros/tamaño
@@ -312,11 +315,14 @@ def register_callbacks(app):
         Input("refresh-timer", "n_intervals"),
         Input("sort-state", "data"),
         Input("page-state", "data"),
+        State("main-context-store", "data"),
         prevent_initial_call=False,
     )
-    def refresh_table(fecha, hora, networks, technologies, vendors, clusters,
-                      sort_mode, _n, sort_state, page_state):
-        # ---------- normaliza filtros ----------
+    def refresh_table(
+            fecha, hora, networks, technologies, vendors, clusters,
+            sort_mode, _n, sort_state, page_state,
+            main_ctx
+    ):
         networks = _as_list(networks)
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
@@ -325,25 +331,52 @@ def register_callbacks(app):
         page = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", 50))
 
-        # ---------- orden explícito ----------
+        # Defaults de contexto por si aún no llega el store
+        main_ctx = main_ctx or {}
+
+        integrity_baseline_list = main_ctx.get("integrity_baseline_map") or []
+        alarm_list = main_ctx.get("alarm_map") or []
+        progress_max_by_col = main_ctx.get("progress_max_by_col") or {}
+
+        # reconstruimos dict con llaves tupla SOLO para uso interno
+        integrity_baseline_map = {
+            (d.get("network"), d.get("vendor"), d.get("noc_cluster"), d.get("technology")): d.get("integrity_week_avg")
+            for d in integrity_baseline_list
+            if d is not None
+        }
+
+        alarm_map = {
+            (
+                d.get("fecha"),
+                d.get("hora"),
+                d.get("network"),
+                d.get("vendor"),
+                d.get("noc_cluster"),
+                d.get("technology"),
+            ): int(d.get("alarmas", 0) or 0)
+            for d in alarm_list
+            if d is not None
+        }
+
+        # ---------- orden explícito para alarmado ----------
         sort_by = None
         sort_net = None
         ascending = True
 
-        # 👇 IMPORTANTE: en modo "global" NO usamos sort_state para la query
-        if sort_mode != "global" and sort_state and sort_state.get("column"):
+        # En alarmado sí permites sort por columna (si tu diseño lo quiere)
+        if sort_state and sort_state.get("column"):
             col = sort_state["column"]
             ascending = bool(sort_state.get("ascending", True))
+
             if "__" in col:
                 sort_net, base = col.split("__", 1)
                 sort_by = base
             else:
                 sort_by = col
 
-        # ---------- fuente de datos paginada ----------
+        # ---------- fuente paginada ----------
         if sort_mode == "alarmado":
-            # en modo alarmado, el orden lo define fetch_kpis_paginated_severity_sort
-            safe_sort_state = None
+            safe_sort_state = sort_state  # si quieres permitir reorder visual
             df, total = fetch_kpis_paginated_severity_sort(
                 fecha=fecha, hora=hora,
                 vendors=vendors or None, clusters=clusters or None,
@@ -351,117 +384,49 @@ def register_callbacks(app):
                 page=page, page_size=page_size,
             )
         else:
-            # MODO GLOBAL → siempre global puro por severidad desde SQL
-            safe_sort_state = None  # 👈 no reordenar en el render
+            # GLOBAL con sort opcional por columna
+            safe_sort_state = sort_state if (sort_state and sort_state.get("column")) else None
+
             df, total = fetch_kpis_paginated_severity_global_sort(
                 fecha=fecha, hora=hora,
                 vendors=vendors or None, clusters=clusters or None,
                 networks=networks or None, technologies=technologies or None,
                 page=page, page_size=page_size,
-                sort_by_friendly=None,
-                sort_net=None,
-                ascending=True,
+                sort_by_friendly=sort_by,
+                sort_net=sort_net,
+                ascending=ascending,
             )
 
-        # ---------- si no hay df -> alert ----------
         if df is None or df.empty:
             store_payload = {"columns": [], "rows": []}
             empty_alert = dbc.Alert("Sin datos para los filtros seleccionados.", color="warning")
-            return empty_alert, "Página 1 de 1", "Sin resultados.", store_payload  # ← 4 valores
+            return empty_alert, "Página 1 de 1", "Sin resultados.", store_payload
 
-        # ---------- baseline semanal de integridad (sin paginar) ----------
-        df_baseline = fetch_integrity_baseline_week(
-            fecha=fecha,
-            vendors=vendors or None,
-            clusters=clusters or None,
-            networks=networks or None,
-            technologies=technologies or None,
-        )
-        if df_baseline is None:
-            df_baseline = pd.DataFrame()
-
-        integrity_baseline_map = {}
-        if not df_baseline.empty:
-            for _, r in df_baseline.iterrows():
-                key = (
-                    r.get("network"),
-                    r.get("vendor"),
-                    r.get("noc_cluster"),
-                    r.get("technology"),
-                )
-                integrity_baseline_map[key] = r.get("integrity_week_avg")
-
-        # ---------- máximos de progress usando TODOS los datos filtrados (sin paginar) ----------
-        progress_max_by_col = _compute_progress_max_for_filters(
-            fecha=fecha,
-            hora=hora,
-            networks=networks,
-            technologies=technologies,
-            vendors=vendors,
-            clusters=clusters,
-        )
-
-        # ---------- calcular racha de alarmas (día completo) ----------
-        df_day = fetch_kpis(
-            fecha=fecha,
-            hora=None,  # todas las horas del día seleccionado
-            vendors=vendors or None,
-            clusters=clusters or None,
-            networks=networks or None,
-            technologies=technologies or None,
-            limit=None,
-        )
-        df_day = _ensure_df(df_day)
-
-        alarm_map = {}
-        if not df_day.empty:
-            df_day = add_alarm_streak(df_day)
-
+        # ---------- alarmas (sin apply) ----------
+        if "network" in df.columns:
             key_cols = ["fecha", "hora", "network", "vendor", "noc_cluster", "technology"]
-            for _, r in df_day.iterrows():
-                key = (
-                    r.get("fecha"),
-                    r.get("hora"),
-                    r.get("network"),
-                    r.get("vendor"),
-                    r.get("noc_cluster"),
-                    r.get("technology"),
-                )
-                alarm_map[key] = r.get("alarmas", 0)
-
-        def _lookup_alarmas(row):
-            key = (
-                row.get("fecha"),
-                row.get("hora"),
-                row.get("network"),
-                row.get("vendor"),
-                row.get("noc_cluster"),
-                row.get("technology"),
-            )
-            return alarm_map.get(key, 0)
-
-        # añade la columna 'alarmas' al DF paginado
-        df["alarmas"] = df.apply(_lookup_alarmas, axis=1)
+            if all(k in df.columns for k in key_cols) and alarm_map:
+                keys = list(map(tuple, df[key_cols].to_numpy()))
+                df["alarmas"] = [alarm_map.get(k, 0) for k in keys]
+            else:
+                df["alarmas"] = 0
+        else:
+            df["alarmas"] = 0
 
         # ---------- inferir nets ----------
         if networks:
             nets = networks
         else:
-            nets = (
-                sorted(df["network"].dropna().unique().tolist())
-                if "network" in df.columns
-                else []
-            )
+            nets = sorted(df["network"].dropna().unique().tolist()) if "network" in df.columns else []
 
-        # ---------- pivot + orden estable (si aplica) ----------
+        # ---------- pivot + orden estable visual ----------
         key_cols = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
+        use_df = df
+
         if all(k in df.columns for k in key_cols) and nets:
-            tuples_in_order = list(
-                dict.fromkeys(
-                    map(tuple, df[key_cols].itertuples(index=False, name=None))
-                )
-            )
+            tuples_in_order = list(dict.fromkeys(map(tuple, df[key_cols].itertuples(index=False, name=None))))
             order_map = {t: i for i, t in enumerate(tuples_in_order)}
+
             wide = pivot_by_network(df, networks=nets)
             if wide is not None and not wide.empty:
                 wide["_ord"] = wide[key_cols].apply(
@@ -470,12 +435,8 @@ def register_callbacks(app):
                 )
                 wide = wide.sort_values("_ord").drop(columns=["_ord"])
                 use_df = wide
-            else:
-                use_df = df
-        else:
-            use_df = df
 
-        # ---------- render tabla (usando máximos globales filtrados) ----------
+        # ---------- render ----------
         table = render_kpi_table_multinet(
             use_df,
             networks=nets,
@@ -484,9 +445,9 @@ def register_callbacks(app):
             integrity_baseline_map=integrity_baseline_map,
         )
 
-        # ---------- banners ----------
         total_pages = max(1, math.ceil((total or 0) / max(1, page_size)))
         page_corrected = min(max(1, page), total_pages)
+
         indicator = f"Página {page_corrected} de {total_pages}"
         banner = (
             "Sin resultados."
@@ -495,73 +456,11 @@ def register_callbacks(app):
                  f"{min(page_corrected * page_size, total)} de {total} registros"
         )
 
-        # ---------- store ----------
         store_payload = {
             "columns": list(use_df.columns),
             "rows": use_df.to_dict("records"),
         }
-        return table, indicator, banner, store_payload
 
-        # añade la columna 'alarmas' al DF paginado
-        df["alarmas"] = df.apply(_lookup_alarmas, axis=1)
-
-        # ---------- inferir nets ----------
-        if networks:
-            nets = networks
-        else:
-            nets = (
-                sorted(df["network"].dropna().unique().tolist())
-                if "network" in df.columns
-                else []
-            )
-
-        # ---------- pivot + orden estable (si aplica) ----------
-        key_cols = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
-        if all(k in df.columns for k in key_cols) and nets:
-            tuples_in_order = list(
-                dict.fromkeys(
-                    map(tuple, df[key_cols].itertuples(index=False, name=None))
-                )
-            )
-            order_map = {t: i for i, t in enumerate(tuples_in_order)}
-            wide = pivot_by_network(df, networks=nets)
-            if wide is not None and not wide.empty:
-                wide["_ord"] = wide[key_cols].apply(
-                    lambda r: order_map.get(tuple(r.values.tolist()), 10 ** 9),
-                    axis=1,
-                )
-                wide = wide.sort_values("_ord").drop(columns=["_ord"])
-                use_df = wide
-            else:
-                use_df = df
-        else:
-            use_df = df
-
-        # ---------- render tabla (usando máximos globales filtrados) ----------
-        table = render_kpi_table_multinet(
-            use_df,
-            networks=nets,
-            sort_state=safe_sort_state,
-            progress_max_by_col=progress_max_by_col,
-            integrity_baseline_map=integrity_baseline_map,
-        )
-
-        # ---------- banners ----------
-        total_pages = max(1, math.ceil((total or 0) / max(1, page_size)))
-        page_corrected = min(max(1, page), total_pages)
-        indicator = f"Página {page_corrected} de {total_pages}"
-        banner = (
-            "Sin resultados."
-            if (total or 0) == 0
-            else f"Mostrando {(page_corrected - 1) * page_size + 1}–"
-                 f"{min(page_corrected * page_size, total)} de {total} registros"
-        )
-
-        # ---------- store ----------
-        store_payload = {
-            "columns": list(use_df.columns),
-            "rows": use_df.to_dict("records"),
-        }
         return table, indicator, banner, store_payload
 
     # -------------------------------------------------
@@ -674,3 +573,149 @@ def register_callbacks(app):
             return {"selected": None}
 
         return {"selected": new_sel}
+
+        # -------------------------------------------------
+        # 1.5) Contexto pesado (baseline + progress max + alarm map)
+        # -------------------------------------------------
+
+    @app.callback(
+        Output("main-context-store", "data"),
+        Input("f-fecha", "date"),
+        Input("f-hora", "value"),
+        Input("f-network", "value"),
+        Input("f-technology", "value"),
+        Input("f-vendor", "value"),
+        Input("f-cluster", "value"),
+        # Si quieres que el contexto también se refresque periódico:
+        # Input("refresh-timer", "n_intervals"),
+        prevent_initial_call=False,
+    )
+    def build_main_context(fecha, hora, networks, technologies, vendors, clusters):
+        networks = _as_list(networks)
+        technologies = _as_list(technologies)
+        vendors = _as_list(vendors)
+        clusters = _as_list(clusters)
+
+        # ---- cache rápido ----
+        cached = _get_main_context_cached(fecha, hora, networks, technologies, vendors, clusters)
+        if cached is not None:
+            return cached
+
+        # ---------- baseline semanal de integridad ----------
+        df_baseline = fetch_integrity_baseline_week(
+            fecha=fecha,
+            vendors=vendors or None,
+            clusters=clusters or None,
+            networks=networks or None,
+            technologies=technologies or None,
+        )
+        if df_baseline is None:
+            df_baseline = pd.DataFrame()
+
+        integrity_baseline_list = []
+
+        # ✅ 1) Si hay baseline real, úsalo normal
+        if not df_baseline.empty:
+            integrity_baseline_list = [
+                {
+                    "network": r.get("network"),
+                    "vendor": r.get("vendor"),
+                    "noc_cluster": r.get("noc_cluster"),
+                    "technology": r.get("technology"),
+                    "integrity_week_avg": (
+                        None if pd.isna(r.get("integrity_week_avg")) else float(r.get("integrity_week_avg"))
+                    ),
+                }
+                for _, r in df_baseline.iterrows()
+            ]
+
+        # ✅ 2) MOCK temporal si NO hay baseline real
+        elif MOCK_INTEGRITY_BASELINE:
+            df_now = fetch_kpis(
+                fecha=fecha,
+                hora=hora,  # o None si quieres tomar todo el día
+                vendors=vendors or None,
+                clusters=clusters or None,
+                networks=networks or None,
+                technologies=technologies or None,
+                limit=None,
+            )
+            df_now = _ensure_df(df_now)
+
+            if not df_now.empty and "integrity" in df_now.columns:
+                # filtra solo NET si quieres
+                if "network" in df_now.columns and MOCK_ONLY_NETWORKS:
+                    df_now = df_now[df_now["network"].isin(MOCK_ONLY_NETWORKS)]
+
+                # agrupa igual que el baseline real
+                gcols = ["network", "vendor", "noc_cluster", "technology"]
+                if all(c in df_now.columns for c in gcols):
+                    df_g = (
+                        df_now
+                        .dropna(subset=["integrity"])
+                        .groupby(gcols, dropna=False)["integrity"]
+                        .mean()
+                        .reset_index()
+                    )
+
+                    integrity_baseline_list = []
+                    for _, r in df_g.iterrows():
+                        cur = r.get("integrity")
+                        if cur is None or (isinstance(cur, float) and pd.isna(cur)):
+                            continue
+
+                        integrity_baseline_list.append({
+                            "network": r.get("network"),
+                            "vendor": r.get("vendor"),
+                            "noc_cluster": r.get("noc_cluster"),
+                            "technology": r.get("technology"),
+                            # 🔥 inflamos baseline para forzar ratio <= 0.2
+                            "integrity_week_avg": float(cur) * MOCK_BASELINE_MULT,
+                        })
+
+        # ---------- máximos progress usando TODOS los datos filtrados ----------
+        progress_max_by_col = _compute_progress_max_for_filters(
+            fecha=fecha,
+            hora=hora,
+            networks=networks,
+            technologies=technologies,
+            vendors=vendors,
+            clusters=clusters,
+        )
+
+        # ---------- alarm streak día completo (cacheable) ----------
+        df_day = fetch_kpis(
+            fecha=fecha,
+            hora=None,
+            vendors=vendors or None,
+            clusters=clusters or None,
+            networks=networks or None,
+            technologies=technologies or None,
+            limit=None,
+        )
+        df_day = _ensure_df(df_day)
+
+        alarm_list = []
+        if not df_day.empty:
+            df_day = add_alarm_streak(df_day)
+
+            alarm_list = [
+                {
+                    "fecha": r.get("fecha"),
+                    "hora": r.get("hora"),
+                    "network": r.get("network"),
+                    "vendor": r.get("vendor"),
+                    "noc_cluster": r.get("noc_cluster"),
+                    "technology": r.get("technology"),
+                    "alarmas": int(r.get("alarmas", 0) or 0),
+                }
+                for _, r in df_day.iterrows()
+            ]
+
+        payload = {
+            "integrity_baseline_map": integrity_baseline_list,
+            "progress_max_by_col": progress_max_by_col,
+            "alarm_map": alarm_list,
+        }
+        _set_main_context_cached(fecha, hora, networks, technologies, vendors, clusters, payload)
+        return payload

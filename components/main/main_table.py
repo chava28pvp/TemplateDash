@@ -281,7 +281,7 @@ def prefixed_progress_cols(networks: list[str]):
 def prefixed_severity_cols(networks: list[str]):
     return {f"{net}__{c}" for net in networks for c in BASE_SEVERITY_COLS}
 
-def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
+def pivot_by_network(df_long: pd.DataFrame, networks=None, order_map=None) -> pd.DataFrame:
     if networks is None:
         networks = sorted(df_long["network"].dropna().unique().tolist())
 
@@ -289,10 +289,8 @@ def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Solo usar las VALUE_COLS que realmente existan en el DF
     value_cols = [c for c in VALUE_COLS if c in df.columns]
     if not value_cols:
-        # si no hay ninguna métrica disponible, regresamos solo las keys
         return df[INDEX_KEYS].drop_duplicates().reset_index(drop=True)
 
     wide = df.pivot_table(
@@ -300,12 +298,22 @@ def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
         columns="network",
         values=value_cols,
         aggfunc="first",
+        sort=False,  # 👈 importante
     )
 
-    # columnas como "<NET>__<metric>"
     wide.columns = [f"{net}__{val}" for (val, net) in wide.columns]
     wide = wide.reset_index()
+
+    # 👇 aplica orden estable si te lo pasan
+    if order_map:
+        wide["_ord"] = wide[INDEX_KEYS].apply(
+            lambda r: order_map.get(tuple(r.values.tolist()), 10**9),
+            axis=1
+        )
+        wide = wide.sort_values("_ord").drop(columns=["_ord"])
+
     return wide
+
 
 
 # =========================
@@ -348,7 +356,6 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
                 html.Button(
                     arrow,
                     id={"type": "sort-btn", "col": c},
-                    n_clicks=0,
                     className="sort-btn",
                     **{"aria-label": f"Ordenar {c}"}
                 )
@@ -539,7 +546,7 @@ def render_kpi_table_multinet(
                 td_type_cls = "td-progress"
 
             # ======================================================
-            # CELDAS NORMALES (sin barra)
+            # CELDAS NORMALES
             # ======================================================
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
