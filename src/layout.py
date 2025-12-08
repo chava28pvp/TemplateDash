@@ -98,7 +98,7 @@ def serve_layout():
                         ),
                         dbc.CardBody([
 
-                            # -- Controles de paginación de heatmap (se quedan aquí) --
+                            # -- Controles de paginación de heatmap --
                             dbc.Row([
                                 dbc.Col(
                                     dbc.ButtonGroup([
@@ -109,6 +109,7 @@ def serve_layout():
                                     ], size="sm"),
                                     width="auto", className="d-flex justify-content-center"
                                 ),
+
                                 dbc.Col(
                                     dbc.InputGroup([
                                         dbc.InputGroupText("Tamaño", className="py-0"),
@@ -119,9 +120,26 @@ def serve_layout():
                                     ], size="sm"),
                                     width="auto", className="d-flex justify-content-center"
                                 ),
+
                                 dbc.Col(
                                     html.Small(id="hm-total-rows-banner", className="text-muted"),
                                     width="auto", className="d-flex align-items-center"
+                                ),
+                                dbc.Col(
+                                    dbc.InputGroup([
+                                        dbc.InputGroupText("Orden", className="py-0"),
+                                        dbc.Select(
+                                            id="hm-order-by",
+                                            options=[
+                                                {"label": "Alarm %", "value": "alarm_hours"},
+                                                {"label": "Alarm UNIT", "value": "alarm_hours_unit"},
+                                            ],
+                                            value="alarm_hours",
+                                            size="sm",
+                                            style={"width": "160px"}
+                                        ),
+                                    ], size="sm"),
+                                    width="auto", className="d-flex justify-content-center"
                                 ),
                             ], className="g-3 justify-content-center text-center mb-2"),
 

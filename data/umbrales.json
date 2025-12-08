@@ -106,7 +106,7 @@
         "ps_rrc_fail": {
           "default": {
             "min": 0,
-            "max": 30,
+            "max": 9000,
             "decimals": 0,
             "label": "{value:,.0f}"
           },
@@ -134,7 +134,7 @@
         "ps_s1_fail": {
           "default": {
             "min": 0,
-            "max": 30,
+            "max": 16000,
             "decimals": 0,
             "label": "{value:,.0f}"
           },
@@ -148,7 +148,7 @@
         "ps_drop_abnrel": {
           "default": {
             "min": 0,
-            "max": 30,
+            "max": 16000,
             "decimals": 0,
             "label": "{value:,.0f}"
           },
@@ -162,14 +162,14 @@
         "cs_rrc_fail": {
           "default": {
             "min": 0.0,
-            "max": 11.0,
+            "max": 700.0,
             "decimals": 0,
             "label": "{value:,.0f}"
           },
           "per_network": {
             "ATT": {
               "min": 0.0,
-              "max": 30.0
+              "max": 700.0
             },
             "NET": {
               "min": 0.0,
@@ -180,7 +180,7 @@
         "cs_rab_fail": {
           "default": {
             "min": 0,
-            "max": 30,
+            "max": 700,
             "decimals": 0,
             "label": "{value:,.0f}"
           },
@@ -194,7 +194,7 @@
         "cs_drop_abnrel": {
           "default": {
             "min": 0.0,
-            "max": 10.0,
+            "max": 16000.0,
             "decimals": 0,
             "label": "{value:,.0f}"
           },

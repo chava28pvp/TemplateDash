@@ -336,80 +336,153 @@ def build_heatmap_payloads_fast(
         # ===========================
         # ✅ NUEVO: alarm_hours SOLO %
         # ===========================
-        if order_by in ("alarm", "alarm_hours", "hours"):
+        order_by = (order_by or "unit").lower()
 
-            out_col = "alarm_hours"
+        if df_ts is not None and not df_ts.empty:
 
-            if not pct_metrics:
-                rows_all[out_col] = np.nan
-            else:
-                # mapa métrica % -> valores
-                COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP.items() if pm}
+            pct_metrics = [pm for pm, _ in VALORES_MAP.values() if pm and pm in df_ts.columns]
+            unit_metrics = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
 
-                # long SOLO % (incluye fecha/hora)
-                df_long = df2.melt(
-                    id_vars=base_cols,
-                    value_vars=pct_metrics,
-                    var_name="metric",
-                    value_name="value",
-                )
-                df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
+            base_cols = ["technology", "vendor", "noc_cluster", "network", "fecha", "hora"]
+            used_cols = base_cols + [c for c in (pct_metrics + unit_metrics) if c in df_ts.columns]
+            df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
 
-                # cache thresholds por (metric, net)
-                thr_cache = {}
-                for pm in pct_metrics:
-                    for net in networks:
+            # --- alarm_hours % (actual) ---
+            if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct"):
+
+                out_col = "alarm_hours"
+
+                if not pct_metrics:
+                    rows_all[out_col] = np.nan
+                else:
+                    COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP.items() if pm}
+
+                    df_long = df2.melt(
+                        id_vars=base_cols,
+                        value_vars=pct_metrics,
+                        var_name="metric",
+                        value_name="value",
+                    )
+                    df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
+
+                    thr_cache = {}
+                    for pm in pct_metrics:
+                        for net in networks:
+                            try:
+                                orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
+                            except Exception:
+                                orient, thr = ("lower_is_better",
+                                               {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0})
+                            thr_cache[(pm, net)] = (orient, thr)
+
+                    def _is_alarm_pct(metric, net, v):
+                        if v is None or (isinstance(v, float) and np.isnan(v)):
+                            return False
+                        orient, thr = thr_cache.get((metric, net), ("lower_is_better", None))
+                        if not thr:
+                            return False
+                        crit = float(thr.get("critico", 0.0))
+                        fv = float(v)
+                        return (fv <= crit) if orient == "higher_is_better" else (fv >= crit)
+
+                    df_long["alarm"] = [
+                        _is_alarm_pct(m, n, v)
+                        for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
+                    ]
+
+                    df_hour = (
+                        df_long.dropna(subset=["valores"])
+                        .groupby(
+                            ["technology", "vendor", "noc_cluster", "network", "valores", "fecha", "hora"],
+                            as_index=False
+                        )["alarm"]
+                        .max()
+                    )
+
+                    df_alarm = (
+                        df_hour.groupby(
+                            ["technology", "vendor", "noc_cluster", "network", "valores"],
+                            as_index=False
+                        )["alarm"]
+                        .sum()
+                        .rename(columns={"alarm": out_col})
+                    )
+
+                    rows_all = rows_all.merge(
+                        df_alarm,
+                        on=["technology", "vendor", "noc_cluster", "network", "valores"],
+                        how="left"
+                    )
+
+            # --- alarm_hours UNIT (nuevo) ---
+            elif order_by in ("alarm_hours_unit", "alarm_hours_fail"):
+
+                out_col = "alarm_hours_unit"
+
+                if not unit_metrics:
+                    rows_all[out_col] = np.nan
+                else:
+                    COL_TO_VAL_UNIT = {um: name for name, (_, um) in VALORES_MAP.items() if um}
+
+                    df_long = df2.melt(
+                        id_vars=base_cols,
+                        value_vars=unit_metrics,
+                        var_name="metric",
+                        value_name="value",
+                    )
+                    df_long["valores"] = df_long["metric"].map(COL_TO_VAL_UNIT)
+
+                    # cache min/max por (metric, net) usando tu config progress
+                    prog_cache = {}
+                    for um in unit_metrics:
+                        for net in networks:
+                            try:
+                                mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
+                            except Exception:
+                                mn, mx = (0.0, 1.0)
+                            prog_cache[(um, net)] = (mn, mx)
+
+                    # criterio de alarma UNIT:
+                    # "alarmado" si value >= max configurado (por red si aplica)
+                    def _is_alarm_unit(metric, net, v):
+                        if v is None or (isinstance(v, float) and np.isnan(v)):
+                            return False
+                        mn, mx = prog_cache.get((metric, net), (0.0, None))
+                        if mx is None:
+                            return False
                         try:
-                            orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
+                            return float(v) >= float(mx)
                         except Exception:
-                            orient, thr = ("lower_is_better",
-                                           {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0})
-                        thr_cache[(pm, net)] = (orient, thr)
+                            return False
 
-                def _is_alarm_pct(metric, net, v):
-                    if v is None or (isinstance(v, float) and np.isnan(v)):
-                        return False
-                    orient, thr = thr_cache.get((metric, net), ("lower_is_better", None))
-                    if not thr:
-                        return False
-                    crit = float(thr.get("critico", 0.0))
-                    fv = float(v)
-                    # lower_is_better: peor cuando sube
-                    if orient == "higher_is_better":
-                        return fv <= crit
-                    return fv >= crit
+                    df_long["alarm"] = [
+                        _is_alarm_unit(m, n, v)
+                        for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
+                    ]
 
-                # alarma SOLO por %
-                df_long["alarm"] = [
-                    _is_alarm_pct(m, n, v)
-                    for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
-                ]
+                    df_hour = (
+                        df_long.dropna(subset=["valores"])
+                        .groupby(
+                            ["technology", "vendor", "noc_cluster", "network", "valores", "fecha", "hora"],
+                            as_index=False
+                        )["alarm"]
+                        .max()
+                    )
 
-                # consolida por HORA (evita duplicados por si hubiera más de un % por valores)
-                df_hour = (
-                    df_long.dropna(subset=["valores"])
-                    .groupby(
-                        ["technology", "vendor", "noc_cluster", "network", "valores", "fecha", "hora"],
-                        as_index=False
-                    )["alarm"]
-                    .max()
-                )
+                    df_alarm = (
+                        df_hour.groupby(
+                            ["technology", "vendor", "noc_cluster", "network", "valores"],
+                            as_index=False
+                        )["alarm"]
+                        .sum()
+                        .rename(columns={"alarm": out_col})
+                    )
 
-                # cuenta horas alarmadas
-                df_alarm = (
-                    df_hour.groupby(
-                        ["technology", "vendor", "noc_cluster", "network", "valores"],
-                        as_index=False
-                    )["alarm"]
-                    .sum()
-                    .rename(columns={"alarm": out_col})
-                )
-
-                rows_all = rows_all.merge(
-                    df_alarm,
-                    on=["technology", "vendor", "noc_cluster", "network", "valores"],
-                    how="left"
-                )
+                    rows_all = rows_all.merge(
+                        df_alarm,
+                        on=["technology", "vendor", "noc_cluster", "network", "valores"],
+                        how="left"
+                    )
 
         # ===========================
         # Fallback original: max_pct / max_unit

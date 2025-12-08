@@ -99,9 +99,10 @@ def heatmap_callbacks(app):
         State("f-vendor", "value"),
         State("f-cluster", "value"),
         State("heatmap-page-state", "data"),
+        State("hm-order-by", "value"),
         prevent_initial_call=True,
     )
-    def refresh_heatmaps(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state):
+    def refresh_heatmaps(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state, hm_order_by):
         """Render heatmaps + tabla alineados fila-a-fila."""
         global _LAST_HEATMAP_KEY
 
@@ -117,7 +118,7 @@ def heatmap_callbacks(app):
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
+        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)+ f"|ord={hm_order_by}"
         if _LAST_HEATMAP_KEY == state_key:
             return (
                 no_update,  # hm-table-container.children
@@ -164,10 +165,10 @@ def heatmap_callbacks(app):
                 valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
-                alarm_only=True,
+                alarm_only=False,
                 offset=offset,
                 limit=limit,
-                order_by="alarm_hours"
+                order_by=hm_order_by or "alarm_hours"
             )
         else:
             pct_payload = unit_payload = None
@@ -215,9 +216,10 @@ def heatmap_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("heatmap-page-state", "data"),  # dispara por paginado del heatmap
+        Input("hm-order-by", "value"),
         prevent_initial_call=False,  # permite “bootstrap” al cargar
     )
-    def heatmap_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state):
+    def heatmap_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state, _ord):
         return {"ts": time.time()}
 
     @app.callback(
@@ -228,9 +230,10 @@ def heatmap_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("hm-page-size", "value"),
+        Input("hm-order-by", "value"),
         prevent_initial_call=False,  # bootstrap
     )
-    def hm_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
+    def hm_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size, _ord):
         ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 
