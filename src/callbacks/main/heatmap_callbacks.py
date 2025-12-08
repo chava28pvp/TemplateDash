@@ -161,12 +161,13 @@ def heatmap_callbacks(app):
                 df_ts=df_ts,
                 UMBRAL_CFG=UM_MANAGER.config(),
                 networks=nets_heat,
-                valores_order=("PS_RRC", "CS_RRC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
-                alarm_only=False,
+                alarm_only=True,
                 offset=offset,
                 limit=limit,
+                order_by="alarm_hours"
             )
         else:
             pct_payload = unit_payload = None
@@ -333,7 +334,7 @@ def heatmap_callbacks(app):
                 df_ts=df_ts,
                 UMBRAL_CFG=UM_MANAGER.config(),
                 networks=nets_heat,
-                valores_order=("PS_RRC", "CS_RRC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
                 alarm_only=False,

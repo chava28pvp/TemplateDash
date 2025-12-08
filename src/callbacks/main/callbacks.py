@@ -315,7 +315,7 @@ def register_callbacks(app):
         Input("refresh-timer", "n_intervals"),
         Input("sort-state", "data"),
         Input("page-state", "data"),
-        State("main-context-store", "data"),
+        Input("main-context-store", "data"),
         prevent_initial_call=False,
     )
     def refresh_table(
@@ -406,6 +406,8 @@ def register_callbacks(app):
         if "network" in df.columns:
             key_cols = ["fecha", "hora", "network", "vendor", "noc_cluster", "technology"]
             if all(k in df.columns for k in key_cols) and alarm_map:
+                df["fecha"] = df["fecha"].astype(str).str.strip()
+                df["hora"] = df["hora"].astype(str).str.strip()
                 keys = list(map(tuple, df[key_cols].to_numpy()))
                 df["alarmas"] = [alarm_map.get(k, 0) for k in keys]
             else:
@@ -695,14 +697,19 @@ def register_callbacks(app):
         )
         df_day = _ensure_df(df_day)
 
+        def _norm_f(x):
+            return None if x is None else str(x).strip()
+
+        def _norm_h(x):
+            return None if x is None else str(x).strip()
         alarm_list = []
         if not df_day.empty:
             df_day = add_alarm_streak(df_day)
 
             alarm_list = [
                 {
-                    "fecha": r.get("fecha"),
-                    "hora": r.get("hora"),
+                    "fecha": _norm_f(r.get("fecha")),
+                    "hora": _norm_h(r.get("hora")),
                     "network": r.get("network"),
                     "vendor": r.get("vendor"),
                     "noc_cluster": r.get("noc_cluster"),
