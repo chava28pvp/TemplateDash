@@ -418,13 +418,13 @@ def heatmap_callbacks(app):
             pct_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="severity",
             height=420, smooth_win=3, opacity=0.28, line_width=1.2, decimals=2,
             show_yaxis_ticks=True, selected_wave=selected_wave, show_traffic_bars=True,
-            traffic_agg="mean"
+            traffic_agg="mean", traffic_decimals=1
         ) if pct_payload else go.Figure()
 
         fig_unit = build_overlay_waves_figure(
             unit_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="progress",
             height=420, smooth_win=3, opacity=0.25, line_width=1.2, decimals=0,
-            show_yaxis_ticks=True, selected_wave=selected_wave
+            show_yaxis_ticks=True, selected_wave=selected_wave, show_traffic_bars=False,
         ) if unit_payload else go.Figure()
 
         _LAST_HI_KEY = state_key

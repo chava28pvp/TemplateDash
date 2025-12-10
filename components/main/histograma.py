@@ -10,20 +10,16 @@ from components.main.heatmap import _infer_networks, _max_date_str, VALORES_MAP,
 # =========================
 # Config
 # =========================
+VALOR_COLORS = {
+    "RRC":  "#3b82f6",  # azul
+    "RAB":  "#ef4444",  # rojo
+    "S1":   "#facc15",  # amarillo
+    "DROP": "#a855f7",  # morado
+}
 
 # =========================
 # Helpers
 # =========================
-
-def _safe_hour_to_idx(hhmmss) -> int | None:
-    try:
-        hh = int(str(hhmmss).split(":")[0])
-        if 0 <= hh <= 23:
-            return hh
-    except Exception:
-        pass
-    return None
-
 def _sev_bucket(value: float | None, orient: str, thr: dict) -> int | None:
     """Mapea valor → 0..3. None si valor no numérico."""
     if value is None:
@@ -86,6 +82,15 @@ def _hex_to_rgba(hex_color, alpha):
     g = int(hex_color[3:5], 16)
     b = int(hex_color[5:7], 16)
     return f"rgba({r},{g},{b},{alpha})"
+
+def _fill_missing_with_zero(v):
+    arr = np.array([
+        0.0 if (vv is None or not isinstance(vv, (int, float, np.floating)) or not np.isfinite(float(vv)))
+        else float(vv)
+        for vv in (v or [])
+    ], dtype=float)
+    return arr
+
 # =========================
 # Payloads de histograma (48 columnas: Ayer 0–23 | Hoy 24–47) con paginado
 # =========================
@@ -348,25 +353,33 @@ def build_overlay_waves_figure(
     payload,
     *,
     UMBRAL_CFG: dict,
-    mode: str = "severity",       # "severity" (% crudos, coloreado por bucket) | "progress" (units crudos, azul)
+    mode: str = "severity",       # "severity" | "progress"
     height: int = 460,
-    smooth_win: int = 3,          # ventana de suavizado
-    opacity: float = 0.28,        # opacidad base del relleno
-    line_width: float = 1.25,     # ancho base de línea
+    smooth_win: int = 3,
+    opacity: float = 0.28,        # ahora se usa solo como referencia de intensidad visual
+    line_width: float = 1.25,
     decimals: int = 2,
     title_text: str | None = None,
     show_yaxis_ticks: bool = True,
-    selected_wave: str | None = None,   # clave única de la serie (usa payload["row_detail"][i])
+    selected_wave: str | None = None,
+    selected_x: str | None = None,
+
+    # tráfico
     show_traffic_bars: bool = False,
-    traffic_agg: str = "mean",
-    selected_x: str | None = None,      # opcional: timestamp ISO "YYYY-MM-DDTHH:MM:SS"
-    show_peak: bool = True,
+    traffic_agg: str = "mean",    # "mean" | "sum"
+    traffic_decimals: int = 1,
+
+    # compat opcional (si en otro lado lo pasas)
+    show_peak: bool = False,      # IGNORADO intencionalmente
 ):
     """
     Dibuja waves con valores CRUDOS en Y a partir de `payload` (z_raw, x_dt, y, row_detail).
-    - Resalta una serie si `selected_wave` coincide con su clave (detail[i]) con halo + línea gruesa + relleno intenso.
-    - Si hay selección, las demás se “apagan” (gris + menor opacidad). Si NO hay selección, todas se ven normales.
-    - Si `selected_x` viene, marca vline y punto en ese instante.
+
+    CAMBIOS clave:
+      - Líneas ONLY (sin fill).
+      - Sin marcadores de pico.
+      - Color fijo por familia de 'valores' (RRC/RAB/S1/DROP).
+      - Barras de tráfico opcionales en y2 (eje derecho).
     """
     if not payload:
         return go.Figure()
@@ -375,11 +388,42 @@ def build_overlay_waves_figure(
     y_labels = payload.get("y") or []
     detail   = payload.get("row_detail") or y_labels
     z_raw    = payload.get("z_raw") or payload.get("z") or []
-    n = len(y_labels)
-    if n == 0:
-        return go.Figure()
 
-    # Normaliza selected_x a ISO "YYYY-MM-DDTHH:MM:SS"
+    n = len(y_labels)
+    if n == 0 or not x:
+        return go.Figure()
+    # --- Normaliza X a datetime real para evitar offsets visuales ---
+    try:
+        # si viene como string ISO
+        x = pd.to_datetime(x).to_pydatetime().tolist()
+    except Exception:
+        pass
+
+    HOUR_MS = 3600 * 1000
+    BAR_WIDTH = HOUR_MS * 0.92  # ancho ~92% de la hora
+    # --------------------------
+    # Colores fijos por familia
+    # --------------------------
+    VALOR_COLORS = {
+        "RRC":  "#3b82f6",  # azul
+        "RAB":  "#ef4444",  # rojo
+        "S1":   "#facc15",  # amarillo
+        "DROP": "#a855f7",  # morado
+    }
+
+    def _color_for_valores(valores: str) -> str:
+        v = (valores or "").upper()
+        if "RRC" in v:
+            return VALOR_COLORS["RRC"]
+        if "RAB" in v:
+            return VALOR_COLORS["RAB"]
+        if "S1" in v:
+            return VALOR_COLORS["S1"]
+        if "DROP" in v:
+            return VALOR_COLORS["DROP"]
+        return "#9aa0a6"
+
+    # Normaliza selected_x a ISO
     if isinstance(selected_x, str):
         selected_x = selected_x.replace(" ", "T")[:19]
 
@@ -395,22 +439,31 @@ def build_overlay_waves_figure(
 
     for i in indices:
         row_vals = z_raw[i] if i < len(z_raw) else []
-        raw = _interp_nan(row_vals)
+        raw = _fill_missing_with_zero(row_vals)
+
         parts   = (detail[i] if i < len(detail) else "").split("/", 4)
         net     = parts[3] if len(parts) > 3 else ""
         valores = parts[4] if len(parts) > 4 else ""
+
         if raw.size:
-            vmin = np.nanmin(raw); vmax = np.nanmax(raw)
+            vmin = np.nanmin(raw)
+            vmax = np.nanmax(raw)
+
             if mode == "severity":
-                if np.isfinite(vmin): sev_min = min(sev_min, float(vmin))
-                if np.isfinite(vmax): sev_max = max(sev_max, float(vmax))
+                if np.isfinite(vmin):
+                    sev_min = min(sev_min, float(vmin))
+                if np.isfinite(vmax):
+                    sev_max = max(sev_max, float(vmax))
             else:
-                if np.isfinite(vmin): unit_data_min = min(unit_data_min, float(vmin))
-                if np.isfinite(vmax): unit_data_max = max(unit_data_max, float(vmax))
+                if np.isfinite(vmin):
+                    unit_data_min = min(unit_data_min, float(vmin))
+                if np.isfinite(vmax):
+                    unit_data_max = max(unit_data_max, float(vmax))
                 _pm, um = VALORES_MAP.get(valores, (None, None))
-                mn, mx = _prog_cfg(um or "", net, UMBRAL_CFG)
-                unit_cfg_min = min(unit_cfg_min, float(mn))
-                unit_cfg_max = max(unit_cfg_max, float(mx))
+                if um:
+                    mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
+                    unit_cfg_min = min(unit_cfg_min, float(mn))
+                    unit_cfg_max = max(unit_cfg_max, float(mx))
 
     def _pad(lo, hi, frac=0.05):
         if not np.isfinite(lo) or not np.isfinite(hi):
@@ -418,35 +471,47 @@ def build_overlay_waves_figure(
         if hi <= lo:
             return lo, lo + 1.0
         span = hi - lo
-        return lo - span*frac, hi + span*frac
+        return lo - span * frac, hi + span * frac
 
     if mode == "severity":
-        ylo, yhi = _pad(sev_min if np.isfinite(sev_min) else 0.0,
-                        sev_max if np.isfinite(sev_max) else 1.0)
+        ylo, yhi = _pad(
+            sev_min if np.isfinite(sev_min) else 0.0,
+            sev_max if np.isfinite(sev_max) else 1.0
+        )
     else:
-        lo_cand = min(c for c in [unit_data_min, unit_cfg_min] if np.isfinite(c)) if (np.isfinite(unit_data_min) or np.isfinite(unit_cfg_min)) else 0.0
-        hi_cand = max(c for c in [unit_data_max, unit_cfg_max] if np.isfinite(c)) if (np.isfinite(unit_data_max) or np.isfinite(unit_cfg_max)) else 1.0
+        lo_cand = (
+            min(c for c in [unit_data_min, unit_cfg_min] if np.isfinite(c))
+            if (np.isfinite(unit_data_min) or np.isfinite(unit_cfg_min))
+            else 0.0
+        )
+        hi_cand = (
+            max(c for c in [unit_data_max, unit_cfg_max] if np.isfinite(c))
+            if (np.isfinite(unit_data_max) or np.isfinite(unit_cfg_max))
+            else 1.0
+        )
         ylo, yhi = _pad(lo_cand, hi_cand)
 
-    # ---------- 2) Trazado ----------
+    # ---------- 2) Figura base ----------
     fig = go.Figure()
     val_fmt = f",.{decimals}f" if decimals > 0 else ",.0f"
-    seen_legend = set()                    # evita duplicar entradas de leyenda por cluster
-    is_any_selected = bool(selected_wave)  # True si hay algo seleccionado
+    seen_legend = set()
+    is_any_selected = bool(selected_wave)
 
-    if show_traffic_bars and payload:
-        x = payload.get("x_dt") or payload.get("x") or []
-        traffic_metric = payload.get("traffic_metric")
+    # ---------- 2.1) Barras de tráfico (opcional en y2) ----------
+    # ---------- 2.1) Barras de tráfico (opcional en y2) ----------
+    traffic_max = None
+
+    if show_traffic_bars:
         traffic_by_key = payload.get("traffic_by_key") or {}
         traffic_rows = payload.get("traffic_raw") or []
 
         traffic_series = None
 
-        # Si hay selección, usa esa serie
+        # 1) si hay selección, usa SOLO esa serie
         if selected_wave and selected_wave in traffic_by_key:
             traffic_series = traffic_by_key[selected_wave]
 
-        # Si no hay selección, agrega visible
+        # 2) si no hay selección, agrega todas las visibles
         elif traffic_rows:
             traffic_series = []
             for j in range(len(x)):
@@ -456,7 +521,6 @@ def build_overlay_waves_figure(
                         v = row[j]
                         if isinstance(v, (int, float, np.floating)) and np.isfinite(v):
                             vals.append(float(v))
-
                 if not vals:
                     traffic_series.append(None)
                 else:
@@ -464,18 +528,53 @@ def build_overlay_waves_figure(
                         sum(vals) if traffic_agg == "sum" else (sum(vals) / len(vals))
                     )
 
+        # Asegura longitud igual a x
+        if traffic_series and len(traffic_series) != len(x):
+            traffic_series = (
+                    traffic_series[:len(x)]
+                    + [None] * max(0, len(x) - len(traffic_series))
+            )
+
         if traffic_series:
+            arr_t = np.array(
+                [np.nan if v is None else float(v) for v in traffic_series],
+                dtype=float
+            )
+            if np.isfinite(arr_t).any():
+                traffic_max = float(np.nanmax(arr_t))
+
+            # Barras
             fig.add_trace(go.Bar(
                 x=x,
                 y=traffic_series,
-                marker=dict(color="rgba(180,180,180,0.14)"),  # gris tenue
+                yaxis="y2",
+                width=[BAR_WIDTH] * len(x),
+                marker=dict(color="rgba(180,180,180,0.14)"),
                 showlegend=False,
                 hoverinfo="skip",
-                name="Tráfico",
+                offsetgroup="traffic",
+                alignmentgroup="traffic",
             ))
+
+            # Puntos en cada barra (hover aquí)
+            fig.add_trace(go.Scatter(
+                x=x,
+                y=traffic_series,
+                yaxis="y2",
+                mode="markers",
+                marker=dict(size=5, color="rgba(220,220,220,0.35)"),
+                showlegend=False,
+                hovertemplate=(
+                    "<b>Tráfico</b><br>"
+                    "%{x|%Y-%m-%d %H:%M}<br>"
+                    f"%{{y:,.{traffic_decimals}f}}<extra></extra>"
+                ),
+            ))
+
+    # ---------- 2.2) Waves ----------
     for i in indices:
         row_vals = z_raw[i] if i < len(z_raw) else []
-        raw = _interp_nan(row_vals)
+        raw = _fill_missing_with_zero(row_vals)
 
         parts   = (detail[i] if i < len(detail) else "").split("/", 4)
         tech    = parts[0] if len(parts) > 0 else ""
@@ -484,92 +583,72 @@ def build_overlay_waves_figure(
         net     = parts[3] if len(parts) > 3 else ""
         valores = parts[4] if len(parts) > 4 else ""
 
-        series_key = detail[i]  # clave única por wave
+        series_key = detail[i]
 
-        # Suavizado visual (opcional)
-        raw_plot = _smooth_1d(raw, win=smooth_win) if (smooth_win and smooth_win > 1 and raw.size) else raw
+        # suavizado visual
+        raw_plot = (
+            _smooth_1d(raw, win=smooth_win)
+            if (smooth_win and smooth_win > 1 and raw.size)
+            else raw
+        )
 
-        # Pico de la serie (para marcador)
+        # bucket solo para hover (no para color)
         if raw.size and np.isfinite(raw).any():
             pk = int(np.nanargmax(raw))
             val_pk = raw[pk]
         else:
-            pk = 0
             val_pk = 0.0
 
-        # Bucket/colores base
         if mode == "severity":
             pm, _um = VALORES_MAP.get(valores, (None, None))
             orient, thr = _sev_cfg(pm or "", net, UMBRAL_CFG)
         else:
-            _pm, um = VALORES_MAP.get(valores, (None, None))
-            orient, thr = _sev_cfg(um or "", net, UMBRAL_CFG)
-        bucket = _bucket_for_value(val_pk if np.isfinite(val_pk) else 0.0, orient, thr)
-        base_color_hex = (SEV_COLORS.get(bucket, "#999") if mode == "severity" else "#0d6efd")
+            # para hover, intentamos usar thresholds del % si existe
+            pm, um = VALORES_MAP.get(valores, (None, None))
+            orient, thr = _sev_cfg(pm or (um or ""), net, UMBRAL_CFG)
 
-        # === Estilos de selección ===
+        bucket = _bucket_for_value(val_pk if np.isfinite(val_pk) else 0.0, orient, thr)
+        base_color_hex = _color_for_valores(valores)
+
+        # selección
         is_sel = bool(selected_wave and series_key == selected_wave)
 
         if is_any_selected:
-            # hay selección: resalta selec. y apaga el resto
-            line_w        = (line_width * 2.6) if is_sel else (line_width * 0.9)
-            fill_opacity  = (opacity * 1.25) if is_sel else (opacity * 0.12)
-            overall_alpha = 1.0 if is_sel else 0.25
+            line_w        = (line_width * 2.2) if is_sel else (line_width * 0.9)
+            overall_alpha = 1.0 if is_sel else 0.22
             line_color    = base_color_hex if is_sel else "rgba(160,160,160,0.55)"
-            fill_color    = (_hex_to_rgba(base_color_hex, fill_opacity) if mode == "severity"
-                             else ("rgba(13,110,253,0.35)" if is_sel else "rgba(160,160,160,0.08)"))
         else:
-            # sin selección: todo normal (sin desaturar)
             line_w        = line_width * 1.25
-            fill_opacity  = opacity
             overall_alpha = 1.0
             line_color    = base_color_hex
-            fill_color    = (_hex_to_rgba(base_color_hex, fill_opacity) if mode == "severity"
-                             else "rgba(13,110,253,0.25)")
 
-        # Marcadores para selected_x
-        sel_sizes = [0]*len(x)
-        sel_colors = [("#0d6efd" if mode == "progress" else base_color_hex)]*len(x)
-        selected_mode = "lines+markers" if (selected_x or mode == "progress") else "lines"
-        if selected_x and selected_x in x:
-            j = x.index(selected_x)
-            if 0 <= j < len(sel_sizes):
-                sel_sizes[j]  = 9
-                sel_colors[j] = "#ffffff"
+        # leyenda por cluster
+        legend_key = f"{cluster}__{valores}"
+        showlegend = legend_key not in seen_legend
+        seen_legend.add(legend_key)
 
-        # Leyenda (una sola entrada por cluster)
-        showlegend = cluster not in seen_legend
-        seen_legend.add(cluster)
-
-        # 1) Halo por debajo (glow) para la seleccionada
+        # halo para seleccionada
         if is_sel:
             fig.add_trace(go.Scatter(
                 x=x, y=raw_plot,
                 mode="lines",
-                line=dict(width=line_w * 1.8, color="rgba(255,255,255,0.35)"),
+                line=dict(width=line_w * 1.7, color="rgba(255,255,255,0.30)"),
                 hoverinfo="skip",
                 showlegend=False,
                 opacity=1.0
             ))
 
-        # 2) Serie principal
+        # serie principal (LINES ONLY)
         fig.add_trace(go.Scatter(
             x=x, y=raw_plot,
-            mode=selected_mode if mode == "severity" else "lines+markers",
+            mode="lines",
             line=dict(width=line_w, color=line_color),
-            marker=dict(
-                size=[(s*1.2 if (is_sel and s > 0) else s) for s in sel_sizes],
-                color=sel_colors,
-                symbol="diamond"
-            ),
-            fill="tozeroy",
-            fillcolor=fill_color,
-            name=str(cluster),
-            legendgroup=str(cluster),
+            name=f"{cluster} • {valores}",
+            legendgroup=legend_key,
             showlegend=showlegend,
             opacity=overall_alpha,
             customdata=np.column_stack([
-                np.full(len(x), series_key, dtype=object),  # [0] = KEY única
+                np.full(len(x), series_key, dtype=object),
                 raw if raw.size else np.zeros(len(x)),
                 np.full(len(x), tech, dtype=object),
                 np.full(len(x), vendor, dtype=object),
@@ -579,56 +658,31 @@ def build_overlay_waves_figure(
                 np.full(len(x), bucket, dtype=object),
             ]),
             hovertemplate=(
-                "<b>%{customdata[0]}</b><br>"
-                "%{x|%Y-%m-%d %H:%M}<br>" +
-                ("Valor: " if mode=="severity" else "Unidad: ") + f"%{{customdata[1]:{val_fmt}}}" +
-                "<br><span style='opacity:0.85'>Bucket:</span> %{customdata[7]}"
-                "<br><span style='opacity:0.85'>Tech:</span> %{customdata[2]} | "
-                "<span style='opacity:0.85'>Vendor:</span> %{customdata[3]} | "
-                "<span style='opacity:0.85'>Cluster:</span> %{customdata[4]} | "
-                "<span style='opacity:0.85'>Net:</span> %{customdata[5]} | "
-                "<span style='opacity:0.85'>Valor:</span> %{customdata[6]}<extra></extra>"
+                    "%{x|%Y-%m-%d %H:%M}<br>"
+                    + ("Valor: " if mode == "severity" else "Unidad: ")
+                    + f"%{{customdata[1]:{val_fmt}}}"
+                      "<br>──────────<br>"
+                      "<span style='opacity:0.85'>Tech:</span> %{customdata[2]}<br>"
+                      "<span style='opacity:0.85'>Vendor:</span> %{customdata[3]}<br>"
+                      "<span style='opacity:0.85'>Cluster:</span> %{customdata[4]}<br>"
+                      "<span style='opacity:0.85'>Net:</span> %{customdata[5]}<br>"
+                      "<span style='opacity:0.85'>Valor:</span> %{customdata[6]}"
+                      "<extra></extra>"
             ),
         ))
-
-        # 3) Marcador de pico
-        if show_peak and raw.size and np.isfinite(val_pk) and pk < len(x):
-            peak_color = ("#0d6efd" if mode == "progress" else base_color_hex)
-            fig.add_trace(go.Scatter(
-                x=[x[pk]],
-                y=[raw_plot[pk] if pk < len(raw_plot) else None],
-                mode="markers",
-                marker=dict(size=10, color=peak_color, symbol="x"),
-                name=None,
-                showlegend=False,
-                hoverinfo="skip",
-                opacity=1.0 if is_sel or not is_any_selected else 0.35,
-            ))
-
-        # 4) Marcador exacto en selected_x
-        if selected_x and selected_x in x:
-            j = x.index(selected_x)
-            if 0 <= j < len(x):
-                fig.add_trace(go.Scatter(
-                    x=[x[j]],
-                    y=[raw_plot[j] if j < len(raw_plot) else None],
-                    mode="markers",
-                    marker=dict(size=11, color="#ffffff", symbol="circle-open"),
-                    name=None,
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
 
     # ---------- 3) Ejes y partición AYER|HOY ----------
     fig.update_xaxes(
         type="date",
-        dtick=3*3600*1000,
+        dtick=3 * 3600 * 1000,
         tickformat="%b %d %H:%M",
         tickangle=-45,
         ticks="outside",
         ticklen=5,
         fixedrange=True,
     )
+
+    # y principal
     fig.update_yaxes(
         visible=True if show_yaxis_ticks else False,
         showgrid=True,
@@ -640,20 +694,31 @@ def build_overlay_waves_figure(
         range=[ylo, yhi],
     )
 
+    # línea separadora entre días
     if isinstance(x, (list, tuple)) and len(x) >= 25:
         try:
-            fig.add_vline(x=x[24], line_dash="dot", line_color="rgba(255,255,255,0.45)", line_width=1)
+            fig.add_vline(
+                x=x[24],
+                line_dash="dot",
+                line_color="rgba(255,255,255,0.45)",
+                line_width=1
+            )
         except Exception:
             pass
 
+    # selected_x solo vline (sin marcador)
     if selected_x:
         try:
-            fig.add_vline(x=selected_x, line_width=2, line_color="rgba(255,255,255,0.85)")
+            fig.add_vline(
+                x=selected_x,
+                line_width=2,
+                line_color="rgba(255,255,255,0.85)"
+            )
         except Exception:
             pass
 
-    # ---------- 4) Layout ----------
-    fig.update_layout(
+    # ---------- 4) Layout + eje derecho ----------
+    layout_kwargs = dict(
         title=title_text or None,
         height=height,
         margin=dict(l=14, r=14, t=30 if title_text else 8, b=12),
@@ -661,10 +726,35 @@ def build_overlay_waves_figure(
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#eaeaea"),
         hoverlabel=dict(bgcolor="#222", bordercolor="#444", font=dict(color="#fff")),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=10)),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.01,
+            xanchor="left",
+            x=0,
+            font=dict(size=10)
+        ),
         uirevision="keep",
+        bargap=0.0,
     )
+
+    if show_traffic_bars:
+        # y2 overlay
+        max_y2 = (traffic_max * 1.08) if (traffic_max and traffic_max > 0) else 1
+        layout_kwargs["yaxis2"] = dict(
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            zeroline=False,
+            tickfont=dict(size=10),
+            rangemode="tozero",
+            range=[0, max_y2],
+        )
+
+    fig.update_layout(**layout_kwargs)
+
     return fig
+
 
 
 
