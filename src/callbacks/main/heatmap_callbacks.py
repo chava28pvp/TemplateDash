@@ -396,6 +396,7 @@ def heatmap_callbacks(app):
         )
 
         if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
+            traffic_metric = "ps_traff_gb" if str(domain).upper() != "CS" else "cs_traff_erl"
             pct_payload, unit_payload, page_info = build_histo_payloads_fast(
                 df_meta=df_meta_heat,
                 df_ts=df_ts,
@@ -406,6 +407,7 @@ def heatmap_callbacks(app):
                 alarm_keys=alarm_keys_set,
                 alarm_only=False,
                 offset=offset, limit=limit,
+                traffic_metric=traffic_metric,
             )
         else:
             pct_payload = unit_payload = None
@@ -415,7 +417,8 @@ def heatmap_callbacks(app):
         fig_pct = build_overlay_waves_figure(
             pct_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="severity",
             height=420, smooth_win=3, opacity=0.28, line_width=1.2, decimals=2,
-            show_yaxis_ticks=True, selected_wave=selected_wave
+            show_yaxis_ticks=True, selected_wave=selected_wave, show_traffic_bars=True,
+            traffic_agg="mean"
         ) if pct_payload else go.Figure()
 
         fig_unit = build_overlay_waves_figure(

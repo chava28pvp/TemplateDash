@@ -102,6 +102,7 @@ def build_histo_payloads_fast(
     alarm_only=False,
     offset=0,
     limit=5,
+    traffic_metric: str | None = None,
 ):
     """
     Construye payloads de heatmap (% y UNIT) paginados, agrupando por cluster y
@@ -132,6 +133,7 @@ def build_histo_payloads_fast(
         pm, um = VALORES_MAP.get(v, (None, None))
         if pm: metrics_needed.add(pm)
         if um: metrics_needed.add(um)
+        if traffic_metric:metrics_needed.add(traffic_metric)
     if not metrics_needed:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
@@ -254,6 +256,8 @@ def build_histo_payloads_fast(
     z_pct, z_unit = [], []
     z_pct_raw, z_unit_raw = [], []
     y_labels, row_detail = [], []
+    traffic_rows_raw = []
+    traffic_by_key = {}
 
     for _, r in rows_page.iterrows():
         tech = r["technology"]; vend = r["vendor"]; clus = r["noc_cluster"]; net = r["network"]; valores = r["valores"]
@@ -266,16 +270,26 @@ def build_histo_payloads_fast(
 
         def _row48_raw(metric):
             if metric is None or df_small.empty or rid < 0 or metric not in df_small.columns:
-                return [None]*48
-            sub_y = df_small.loc[(df_small["rid"]==rid) & (df_small["fecha"].astype(str)==yday), ["h", metric]]
-            sub_t = df_small.loc[(df_small["rid"]==rid) & (df_small["fecha"].astype(str)==today), ["h", metric]]
-            arr_y = [None]*24; arr_t = [None]*24
+                return [None] * 48
+
+            sub_y = df_small.loc[
+                (df_small["rid"] == rid) & (df_small["fecha"].astype(str) == yday),
+                ["h", metric]
+            ]
+            sub_t = df_small.loc[
+                (df_small["rid"] == rid) & (df_small["fecha"].astype(str) == today),
+                ["h", metric]
+            ]
+            arr_y = [None] * 24
+            arr_t = [None] * 24
             if not sub_y.empty:
                 for _, rr in sub_y.iterrows():
-                    v = rr[metric]; arr_y[int(rr["h"])] = (float(v) if pd.notna(v) else None)
+                    v = rr[metric]
+                    arr_y[int(rr["h"])] = float(v) if pd.notna(v) else None
             if not sub_t.empty:
                 for _, rr in sub_t.iterrows():
-                    v = rr[metric]; arr_t[int(rr["h"])] = (float(v) if pd.notna(v) else None)
+                    v = rr[metric]
+                    arr_t[int(rr["h"])] = float(v) if pd.notna(v) else None
             return arr_y + arr_t
 
         # %: clasifica 0..3; guarda crudos para hover/máx/mín
@@ -295,14 +309,23 @@ def build_histo_payloads_fast(
             z_unit.append(row_norm); z_unit_raw.append(row_raw_u)
         else:
             z_unit.append([None]*48); z_unit_raw.append([None]*48)
-
+        if traffic_metric:
+            traffic_rows_raw.append(_row48_raw(traffic_metric))
+        else:
+            traffic_rows_raw.append([None] * 48)
     # --- payloads
+    if traffic_metric:
+        for k, tr in zip(row_detail, traffic_rows_raw):
+            traffic_by_key[k] = tr
     pct_payload = {
         "z": z_pct, "z_raw": z_pct_raw, "x_dt": x_dt, "y": y_labels,
         "color_mode": "severity",
         "zmin": -0.5, "zmax": 3.5,
         "title": "% IA / % DC (color por umbral)",
         "row_detail": row_detail,
+        "traffic_metric": traffic_metric,
+        "traffic_raw": traffic_rows_raw,
+        "traffic_by_key": traffic_by_key,
     }
     unit_payload = {
         "z": z_unit, "z_raw": z_unit_raw, "x_dt": x_dt, "y": y_labels,
@@ -327,14 +350,16 @@ def build_overlay_waves_figure(
     UMBRAL_CFG: dict,
     mode: str = "severity",       # "severity" (% crudos, coloreado por bucket) | "progress" (units crudos, azul)
     height: int = 460,
-    smooth_win: int = 3,          # ventana de suavizado (media móvil); 1 = sin suavizado
+    smooth_win: int = 3,          # ventana de suavizado
     opacity: float = 0.28,        # opacidad base del relleno
     line_width: float = 1.25,     # ancho base de línea
     decimals: int = 2,
     title_text: str | None = None,
     show_yaxis_ticks: bool = True,
     selected_wave: str | None = None,   # clave única de la serie (usa payload["row_detail"][i])
-    selected_x: str | None = None,      # opcional: timestamp ISO "YYYY-MM-DDTHH:MM:SS" (si no lo usas, deja None)
+    show_traffic_bars: bool = False,
+    traffic_agg: str = "mean",
+    selected_x: str | None = None,      # opcional: timestamp ISO "YYYY-MM-DDTHH:MM:SS"
     show_peak: bool = True,
 ):
     """
@@ -409,6 +434,45 @@ def build_overlay_waves_figure(
     seen_legend = set()                    # evita duplicar entradas de leyenda por cluster
     is_any_selected = bool(selected_wave)  # True si hay algo seleccionado
 
+    if show_traffic_bars and payload:
+        x = payload.get("x_dt") or payload.get("x") or []
+        traffic_metric = payload.get("traffic_metric")
+        traffic_by_key = payload.get("traffic_by_key") or {}
+        traffic_rows = payload.get("traffic_raw") or []
+
+        traffic_series = None
+
+        # Si hay selección, usa esa serie
+        if selected_wave and selected_wave in traffic_by_key:
+            traffic_series = traffic_by_key[selected_wave]
+
+        # Si no hay selección, agrega visible
+        elif traffic_rows:
+            traffic_series = []
+            for j in range(len(x)):
+                vals = []
+                for row in traffic_rows:
+                    if row and j < len(row):
+                        v = row[j]
+                        if isinstance(v, (int, float, np.floating)) and np.isfinite(v):
+                            vals.append(float(v))
+
+                if not vals:
+                    traffic_series.append(None)
+                else:
+                    traffic_series.append(
+                        sum(vals) if traffic_agg == "sum" else (sum(vals) / len(vals))
+                    )
+
+        if traffic_series:
+            fig.add_trace(go.Bar(
+                x=x,
+                y=traffic_series,
+                marker=dict(color="rgba(180,180,180,0.14)"),  # gris tenue
+                showlegend=False,
+                hoverinfo="skip",
+                name="Tráfico",
+            ))
     for i in indices:
         row_vals = z_raw[i] if i < len(z_raw) else []
         raw = _interp_nan(row_vals)
