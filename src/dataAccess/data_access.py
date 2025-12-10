@@ -579,10 +579,7 @@ def fetch_kpis_paginated_severity_global_sort(
         ORDER BY
             severity_score DESC,
             Date DESC,
-            Time DESC,
-            Vendor ASC,
-            Noc_Cluster ASC,
-            Technology ASC
+            Time DESC
 
       MODO CON COLUMNA (sort_by_friendly válido):
         ORDER BY
@@ -590,10 +587,7 @@ def fetch_kpis_paginated_severity_global_sort(
             metric_expr {ASC|DESC},      -- criterio principal
             severity_score DESC,         -- desempate
             Date DESC,
-            Time DESC,
-            Vendor ASC,
-            Noc_Cluster ASC,
-            Technology ASC
+            Time DESC
     """
     page = max(1, int(page))
     page_size = max(1, int(page_size))
@@ -645,21 +639,15 @@ def fetch_kpis_paginated_severity_global_sort(
                 {metric_expr} {order_dir},      -- métrica clickeada
                 severity_score DESC,            -- desempate global
                 {_quote(COLMAP['fecha'])} DESC,
-                {_quote(COLMAP['hora'])} DESC,
-                {_quote(COLMAP['vendor'])} ASC,
-                {_quote(COLMAP['noc_cluster'])} ASC,
-                {_quote(COLMAP['technology'])} ASC
+                {_quote(COLMAP['hora'])} DESC
         """
     else:
-        # MODO POR DEFECTO: global puro + desempates estables
+        # MODO POR DEFECTO: EXACTO y estable, sin depender de ascending
         order_clause = f"""
             ORDER BY
                 severity_score DESC,
                 {_quote(COLMAP['fecha'])} DESC,
-                {_quote(COLMAP['hora'])} DESC,
-                {_quote(COLMAP['vendor'])} ASC,
-                {_quote(COLMAP['noc_cluster'])} ASC,
-                {_quote(COLMAP['technology'])} ASC
+                {_quote(COLMAP['hora'])} DESC
         """
 
     sel_sql = f"""
@@ -698,7 +686,6 @@ def fetch_kpis_paginated_severity_global_sort(
         df = df.where(pd.notna(df), "")
 
     return df, int(total)
-
 
 
 

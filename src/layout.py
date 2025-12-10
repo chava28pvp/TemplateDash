@@ -136,6 +136,7 @@ def serve_layout():
                                             ],
                                             value="alarm_hours",
                                             size="sm",
+                                            className="bg-white text-dark",
                                             style={"width": "160px"}
                                         ),
                                     ], size="sm"),
@@ -193,6 +194,7 @@ def serve_layout():
 
                             # -- ÚNICO SCROLL: Tabla + Heatmap % + Heatmap UNIT --
                             html.Div(
+
                                 dbc.Row([
                                     # === Tabla resumen (filas alineadas con heatmaps) ===
                                     dbc.Col(
@@ -254,13 +256,42 @@ def serve_layout():
                 dbc.Col(
                     dbc.Card([
                         dbc.CardHeader(
-                            dbc.Row([
-                                dbc.Col(html.H4("Histogramas", className="m-0"), width="auto"),
-                            ], className="g-2 align-items-center justify-content-center"),
-                            className="bg-transparent border-0"
+                            dbc.Row(
+                                [
+                                    # ===== Fila 1: Título centrado =====
+                                    dbc.Col(
+                                        html.H4("Histogramas", className="m-0 text-center"),
+                                        width=12
+                                    ),
+
+                                    # ===== Fila 2: Dropdown centrado debajo =====
+                                    dbc.Col(
+                                        html.Div(
+                                            dcc.Dropdown(
+                                                id="kpi-domain",
+                                                options=[
+                                                    {"label": "PS", "value": "PS"},
+                                                    {"label": "CS", "value": "CS"},
+                                                ],
+                                                value="PS",
+                                                clearable=False,
+                                                searchable=False,
+                                                className="dd-black-options",
+                                                style={"minWidth": "120px"}
+                                            ),
+                                            className="d-flex justify-content-center mt-2"
+                                        ),
+                                        width=12
+                                    ),
+                                ],
+                                className="g-0"
+                            ),
+                            className="bg-transparent border-0 py-2"
                         ),
+
                         dbc.CardBody([
                             # Store para sincronizar selección entre % y UNIT
+                            # dcc.Store(id="histo-selected-wave"),
 
                             dbc.Row([
                                 # -------- Columna: HM % --------
@@ -274,13 +305,11 @@ def serve_layout():
                                                         id="hi-pct",
                                                         config={"displayModeBar": False},
                                                         className="histo-wide",
-                                                        # 👈 ancho “grande” para permitir scroll
                                                         style={"height": "420px", "width": "1400px", "margin": "0"}
-                                                        # 👈 ajusta width
                                                     ),
                                                     type="default"
                                                 ),
-                                                className="histo-scroll"  # 👈 contenedor con overflow-x
+                                                className="histo-scroll"
                                             ),
                                         ],
                                         className="hm-wrap",
@@ -318,6 +347,7 @@ def serve_layout():
                     md=12
                 ),
             ]),
+
 
             html.Div(id="topoff-anchor"),
             dbc.Row([
@@ -440,6 +470,24 @@ def serve_layout():
                                 dbc.Col(
                                     html.Small(id="topoff-hm-total-rows-banner", className="text-muted"),
                                     width="auto", className="d-flex align-items-center"
+                                ),
+                                dbc.Col(
+                                    dbc.InputGroup([
+                                        dbc.InputGroupText("Orden", className="py-0"),
+                                        dcc.Dropdown(
+                                            id="topoff-hm-order-by",
+                                            clearable=False,
+                                            searchable=False,
+                                            value="alarm_bins_pct",
+                                            options=[
+                                                {"label": "Alarmas %", "value": "alarm_bins_pct"},
+                                                {"label": "Alarmas UNIT", "value": "alarm_bins_unit"},
+                                            ],
+                                            className="bg-white text-dark",
+                                            style={"minWidth": "160px"},
+                                        ),
+                                    ], size="sm"),
+                                    width="auto", className="d-flex justify-content-center"
                                 ),
                             ], className="g-3 justify-content-center text-center mb-2"),
 
@@ -592,7 +640,24 @@ def serve_layout():
                             # dcc.Store(id="topoff-histo-selected-wave"),
 
                             dbc.Row([
-
+                                dbc.Col(
+                                    html.Div(
+                                        dcc.Dropdown(
+                                            id="topoff-kpi-domain",
+                                            options=[
+                                                {"label": "PS", "value": "PS"},
+                                                {"label": "CS", "value": "CS"},
+                                            ],
+                                            value="PS",
+                                            clearable=False,
+                                            searchable=False,
+                                            className="dd-black-options",
+                                            style={"width": "140px"}
+                                        ),
+                                        className="d-flex justify-content-center mb-2"
+                                    ),
+                                    md=12
+                                ),
                                 # -------- Histograma % --------
                                 dbc.Col(
                                     html.Div([
@@ -649,6 +714,7 @@ def serve_layout():
 
         # Stores
         dcc.Store(id="defaults-store", data={"fecha": default_date_str(), "hora": default_hour_str()}),
+        dcc.Store(id="dt-manual-store", data={"last_manual_ts": 0}),
         dcc.Store(id="page-state", data={"page": 1, "page_size": 5}),
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
         dcc.Store(id="table-page-data"),

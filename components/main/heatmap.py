@@ -334,7 +334,7 @@ def build_heatmap_payloads_fast(
         df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
 
         # ===========================
-        # ✅ NUEVO: alarm_hours SOLO %
+        # alarm_hours SOLO %
         # ===========================
         order_by = (order_by or "unit").lower()
 
@@ -550,7 +550,7 @@ def build_heatmap_payloads_fast(
             keys_df,
             on=["technology","vendor","noc_cluster","network"]
         )
-        hh = df_small["hora"].astype(str).str.split(":", n=1, expand=True)[0]
+        hh = df_small["hora"].astype(str).str.split(":", n=1).str[0]
         df_small["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s >= 0) & (s <= 23))
         df_small["offset48"] = df_small["h"] + np.where(df_small["fecha"].astype(str) == today, 24, 0)
         df_small = df_small.dropna(subset=["offset48"])
@@ -679,8 +679,8 @@ def build_heatmap_payloads_fast(
 
     # --- rangos dinámicos para color (% y UNIT) ---
     if all_scores_pct:
-        zmin_pct = min(all_scores_pct)
-        zmax_pct = max(all_scores_pct)
+        zmin_pct = 0.0
+        zmax_pct = 1.0
     else:
         zmin_pct, zmax_pct = 0.0, 1.0
 

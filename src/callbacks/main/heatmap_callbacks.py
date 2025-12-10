@@ -23,7 +23,16 @@ _DFTS_TTL = 300  # segundos
 # Última clave renderizada para evitar re-render idéntico
 _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
+# Cache simple en memoria para meta de alarmados
+_ALARM_META_CACHE = {}
+_ALARM_META_TTL = 300  # seg
 
+# Cache de payloads del heatmap por state_key
+_HM_PAYLOAD_CACHE = {}
+_HM_PAYLOAD_TTL = 120  # seg
+
+PS_VALORES = ("PS_RRC", "PS_S1", "PS_DROP", "PS_RAB")
+CS_VALORES = ("CS_RRC", "CS_DROP", "CS_RAB")
 
 def _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit):
     """Clave estable del estado visible del heatmap (sin hora)."""
@@ -78,7 +87,45 @@ def _as_list(x):
     if isinstance(x, (list, tuple)):
         return list(x)
     return [x]
+def _cache_get(cache: dict, key, ttl: int):
+    now = time.time()
+    hit = cache.get(key)
+    if hit and (now - hit["ts"] < ttl):
+        return hit["data"]
+    return None
 
+
+def _cache_set(cache: dict, key, data):
+    cache[key] = {"data": data, "ts": time.time()}
+
+
+def _fetch_alarm_meta_cached(today_str, vendors, clusters, networks, technologies):
+    key = (
+        "alarm_meta",
+        today_str,
+        tuple(sorted(vendors or [])),
+        tuple(sorted(clusters or [])),
+        tuple(sorted(networks or [])),
+        tuple(sorted(technologies or [])),
+    )
+    hit = _cache_get(_ALARM_META_CACHE, key, _ALARM_META_TTL)
+    if hit is not None:
+        return hit
+
+    df_meta, keys = fetch_alarm_meta_for_heatmap(
+        fecha=today_str,
+        vendors=vendors or None,
+        clusters=clusters or None,
+        networks=networks or None,
+        technologies=technologies or None,
+    )
+
+    data = (df_meta, keys)
+    _cache_set(_ALARM_META_CACHE, key, data)
+    return data
+
+def _valores_by_domain(domain: str):
+    return CS_VALORES if str(domain).upper() == "CS" else PS_VALORES
 
 def heatmap_callbacks(app):
 
@@ -106,7 +153,6 @@ def heatmap_callbacks(app):
         """Render heatmaps + tabla alineados fila-a-fila."""
         global _LAST_HEATMAP_KEY
 
-
         networks = _as_list(networks)
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
@@ -118,21 +164,24 @@ def heatmap_callbacks(app):
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)+ f"|ord={hm_order_by}"
+        # --- Key de estado (incluye orden) ---
+        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|ord={hm_order_by}"
         if _LAST_HEATMAP_KEY == state_key:
             return (
-                no_update,  # hm-table-container.children
-                no_update,  # hm-pct.figure
-                no_update,  # hm-unit.figure
-                no_update,  # hm-page-indicator.children
-                no_update,  # hm-total-rows-banner.children
-                no_update  # heatmap-page-info.data
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update
             )
+
         # --- Fechas HOY/AYER (sin hora) ---
         try:
             today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
         except Exception:
             today_dt = datetime.utcnow()
+
         yday_dt = today_dt - timedelta(days=1)
         today_str = today_dt.strftime("%Y-%m-%d")
         yday_str = yday_dt.strftime("%Y-%m-%d")
@@ -147,46 +196,59 @@ def heatmap_callbacks(app):
             nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) \
                 if not df_ts.empty and "network" in df_ts.columns else []
 
-        # --- Meta de alarmados (filas base) ---
-        df_meta_heat, alarm_keys_set = fetch_alarm_meta_for_heatmap(
-            fecha=today_str,
-            vendors=vendors or None, clusters=clusters or None,
-            networks=nets_heat or None, technologies=technologies or None,
+        # --- Meta de alarmados (cache) ---
+        # REQUIERE que tengas definido _fetch_alarm_meta_cached(...)
+        df_meta_heat, alarm_keys_set = _fetch_alarm_meta_cached(
+            today_str,
+            vendors,
+            clusters,
+            nets_heat,
+            technologies
         )
-        # DEBUG: ver si el cluster TBD / 3G / NOKIA aparece en df_meta_heat
 
-        # --- Payloads ---
-        if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
-            pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
-                df_meta=df_meta_heat,
-                df_ts=df_ts,
-                UMBRAL_CFG=UM_MANAGER.config(),
-                networks=nets_heat,
-                valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
-                today=today_str, yday=yday_str,
-                alarm_keys=alarm_keys_set,
-                alarm_only=False,
-                offset=offset,
-                limit=limit,
-                order_by=hm_order_by or "alarm_hours"
-            )
+        # --- Payloads con cache por state_key ---
+        # REQUIERE que tengas definidos _HM_PAYLOAD_CACHE, _HM_PAYLOAD_TTL, _cache_get, _cache_set
+        cached = _cache_get(_HM_PAYLOAD_CACHE, state_key, _HM_PAYLOAD_TTL)
+        if cached is not None:
+            pct_payload, unit_payload, page_info = cached
         else:
-            pct_payload = unit_payload = None
-            page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+            if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
+                pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
+                    df_meta=df_meta_heat,
+                    df_ts=df_ts,
+                    UMBRAL_CFG=UM_MANAGER.config(),
+                    networks=nets_heat,
+                    valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                    today=today_str, yday=yday_str,
+                    alarm_keys=alarm_keys_set,
+                    alarm_only=False,
+                    offset=offset,
+                    limit=limit,
+                    order_by=hm_order_by or "alarm_hours"
+                )
+            else:
+                pct_payload = unit_payload = None
+                page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
+            _cache_set(_HM_PAYLOAD_CACHE, state_key, (pct_payload, unit_payload, page_info))
+
+        # --- Altura alineada a filas ---
         nrows = len((pct_payload or unit_payload or {}).get("y") or [])
         hm_height = _hm_height(nrows)
 
+        # --- Figuras ---
         fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
         fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
 
-        # Tabla
+        # --- Tabla ---
         if pct_payload or unit_payload:
-            table_component = render_heatmap_summary_table(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
+            table_component = render_heatmap_summary_table(
+                pct_payload, unit_payload, pct_decimals=2, unit_decimals=0
+            )
         else:
             table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
 
-        # Indicadores
+        # --- Indicadores ---
         total = int(page_info.get("total_rows", 0))
         showing = int(page_info.get("showing", 0))
         start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
@@ -195,18 +257,16 @@ def heatmap_callbacks(app):
         hm_indicator = f"Página {int((hm_page_state or {}).get('page', 1))} de {total_pg}"
         hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
 
-        # === NUEVO: construir encabezados de tiempo (2 filas) ===
-        if pct_payload or unit_payload:
-            x_dt = (pct_payload or unit_payload).get("x_dt") or []
-            dates_children, hours_children = _build_time_header_children(x_dt)
-        else:
-            dates_children, hours_children = [], []
-
         _LAST_HEATMAP_KEY = state_key
 
-        return (table_component, fig_pct, fig_unit,
-                hm_indicator, hm_banner, page_info
-                )
+        return (
+            table_component,
+            fig_pct,
+            fig_unit,
+            hm_indicator,
+            hm_banner,
+            page_info
+        )
 
     @app.callback(
         Output("heatmap-trigger", "data"),
@@ -284,9 +344,10 @@ def heatmap_callbacks(app):
         State("f-vendor", "value"),
         State("f-cluster", "value"),
         State("histo-page-state", "data"),
+        State("kpi-domain", "value"),
         prevent_initial_call=True,
     )
-    def refresh_histograma(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state):
+    def refresh_histograma(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, domain):
         global _LAST_HI_KEY
 
         selected_wave = (sel_wave or {}).get("series_key")
@@ -304,7 +365,10 @@ def heatmap_callbacks(app):
         limit = max(1, page_sz)
 
         # Clave de estado (sin selected_x)
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|selw={selected_wave}"
+        state_key = (
+                _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
+                + f"|selw={selected_wave}|dom={domain}"
+        )
         if _LAST_HI_KEY == state_key and ctx.triggered_id != "histo-selected-wave":
             return no_update, no_update, no_update
 
@@ -337,7 +401,7 @@ def heatmap_callbacks(app):
                 df_ts=df_ts,
                 UMBRAL_CFG=UM_MANAGER.config(),
                 networks=nets_heat,
-                valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                valores_order=_valores_by_domain(domain),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
                 alarm_only=False,
@@ -372,9 +436,10 @@ def heatmap_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("histo-page-state", "data"),  # dispara por paginado del heatmap
+        Input("kpi-domain", "value"),
         prevent_initial_call=False,  # permite “bootstrap” al cargar
     )
-    def histo_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state):
+    def histo_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state, _dom):
         return {"ts": time.time()}
 
 
@@ -386,9 +451,10 @@ def heatmap_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("hm-page-size", "value"),
+        Input("kpi-domain", "value"),
         prevent_initial_call=False,  # bootstrap
     )
-    def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
+    def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size, _dom):
         ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 

@@ -40,6 +40,8 @@ _DFTS_TOPOFF_TTL = 300  # seg
 _LAST_TOPOFF_HEATMAP_KEY = None
 _LAST_TOPOFF_HI_KEY = None   # para histo
 
+TOPOFF_PS_VALORES = ("PS_RRC", "PS_DROP", "PS_RAB")
+TOPOFF_CS_VALORES = ("CS_RRC", "CS_DROP", "CS_RAB")
 
 def _as_list(x):
     if x is None:
@@ -128,7 +130,8 @@ def _fetch_df_ts_topoff_cached(today_str, yday_str, technologies, vendors, clust
     _DFTS_TOPOFF_CACHE[key] = {"df": df_ts, "ts": now}
     return df_ts
 
-
+def _valores_by_domain_topoff(domain: str):
+    return TOPOFF_CS_VALORES if str(domain).upper() == "CS" else TOPOFF_PS_VALORES
 # ======================================================
 # Callbacks Heatmap + Histograma TopOff
 # ======================================================
@@ -148,51 +151,63 @@ def topoff_heatmap_callbacks(app):
         State("f-fecha", "date"),
         State("f-technology", "value"),
         State("f-vendor", "value"),
-        State("f-cluster", "value"),          # 👈 filtro de cluster global
+        State("f-cluster", "value"),  # 👈 filtro de cluster global
         State("topoff-site-filter", "value"),
         State("topoff-rnc-filter", "value"),
         State("topoff-nodeb-filter", "value"),
         State("topoff-heatmap-page-state", "data"),
+        State("topoff-hm-order-by", "value"),  # 👈 NUEVO
         prevent_initial_call=True,
     )
     def refresh_topoff_heatmaps(
-        _trigger,
-        fecha,
-        technologies,
-        vendors,
-        clusters,
-        sites,
-        rncs,
-        nodebs,
-        hm_page_state
+            _trigger,
+            fecha,
+            technologies,
+            vendors,
+            clusters,
+            sites,
+            rncs,
+            nodebs,
+            hm_page_state,
+            hm_order_by,  # 👈 NUEVO
     ):
         global _LAST_TOPOFF_HEATMAP_KEY
 
         technologies = _as_list(technologies)
-        vendors      = _as_list(vendors)
-        clusters     = _as_list(clusters)
-        sites        = _as_list(sites)
-        rncs         = _as_list(rncs)
-        nodebs       = _as_list(nodebs)
+        vendors = _as_list(vendors)
+        clusters = _as_list(clusters)
+        sites = _as_list(sites)
+        rncs = _as_list(rncs)
+        nodebs = _as_list(nodebs)
 
-        page    = int((hm_page_state or {}).get("page", 1))
+        page = int((hm_page_state or {}).get("page", 1))
         page_sz = int((hm_page_state or {}).get("page_size", 50))
-        offset  = max(0, (page - 1) * page_sz)
-        limit   = max(1, page_sz)
+        offset = max(0, (page - 1) * page_sz)
+        limit = max(1, page_sz)
 
+        # 👇 incluye order en la llave de cache
         state_key = _hm_key_topoff(
             fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit
-        )
+        ) + f"|ord={hm_order_by or 'alarm_bins_pct'}"
+
         if _LAST_TOPOFF_HEATMAP_KEY == state_key:
-            return (no_update, no_update, no_update, no_update, no_update, no_update)
+            return (
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update
+            )
 
         try:
             today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
         except Exception:
             today_dt = datetime.utcnow()
-        yday_dt   = today_dt - timedelta(days=1)
+
+        yday_dt = today_dt - timedelta(days=1)
         today_str = today_dt.strftime("%Y-%m-%d")
-        yday_str  = yday_dt.strftime("%Y-%m-%d")
+        yday_str = yday_dt.strftime("%Y-%m-%d")
 
         df_ts = _fetch_df_ts_topoff_cached(
             today_str, yday_str,
@@ -204,7 +219,7 @@ def topoff_heatmap_callbacks(app):
             fecha=today_str,
             technologies=technologies or None,
             vendors=vendors or None,
-            clusters=clusters or None,    # 👈 pasa clusters al meta
+            clusters=clusters or None,
             site_atts=sites or None,
             rncs=rncs or None,
             nodebs=nodebs or None,
@@ -220,7 +235,8 @@ def topoff_heatmap_callbacks(app):
                 alarm_keys=alarm_keys_set,
                 alarm_only=False,
                 offset=offset,
-                limit=limit
+                limit=limit,
+                order_by=hm_order_by or "alarm_bins_pct",
             )
         else:
             pct_payload = unit_payload = None
@@ -234,8 +250,9 @@ def topoff_heatmap_callbacks(app):
 
         hm_height = int(page_info.get("height") or 300)
 
-        fig_pct  = build_heatmap_figure_topoff(pct_payload,  height=hm_height, decimals=2) if pct_payload else go.Figure()
-        fig_unit = build_heatmap_figure_topoff(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
+        fig_pct = build_heatmap_figure_topoff(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
+        fig_unit = build_heatmap_figure_topoff(unit_payload, height=hm_height,
+                                               decimals=0) if unit_payload else go.Figure()
 
         if pct_payload or unit_payload:
             table_component = render_heatmap_summary_table_topoff(
@@ -244,14 +261,14 @@ def topoff_heatmap_callbacks(app):
         else:
             table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
 
-        total   = int(page_info.get("total_rows", 0))
+        total = int(page_info.get("total_rows", 0))
         showing = int(page_info.get("showing", 0))
         start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
-        end_i   = start_i + showing - 1 if showing else 0
+        end_i = start_i + showing - 1 if showing else 0
         total_pg = max(1, math.ceil(total / max(1, page_sz)))
 
         hm_indicator = f"Página {page} de {total_pg}"
-        hm_banner    = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
+        hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
 
         _LAST_TOPOFF_HEATMAP_KEY = state_key
 
@@ -277,9 +294,10 @@ def topoff_heatmap_callbacks(app):
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-heatmap-page-state", "data"),
+        Input("topoff-hm-order-by", "value"),
         prevent_initial_call=False,
     )
-    def topoff_heatmap_trigger_controller(_fecha, _tech, _vend, _cluster, _site, _rnc, _nodeb, _page_state):
+    def topoff_heatmap_trigger_controller(*_):
         return {"ts": time.time()}
 
     # -------------------------------------------------
@@ -290,14 +308,16 @@ def topoff_heatmap_callbacks(app):
         Input("f-fecha", "date"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
-        Input("f-cluster", "value"),              # 👈 también resetea página
+        Input("f-cluster", "value"),
         Input("topoff-site-filter", "value"),
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-hm-page-size", "value"),
+        Input("topoff-hm-order-by", "value"),
         prevent_initial_call=False,
     )
-    def topoff_hm_reset_page_on_filters(_fecha, _tech, _vend, _cluster, _site, _rnc, _nodeb, hm_page_size):
+    def topoff_hm_reset_page_on_filters(*args):
+        hm_page_size = args[-2]
         ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 
@@ -351,11 +371,12 @@ def topoff_heatmap_callbacks(app):
         State("f-fecha", "date"),
         State("f-technology", "value"),
         State("f-vendor", "value"),
-        State("f-cluster", "value"),              # 👈 también filtra histo
+        State("f-cluster", "value"),
         State("topoff-site-filter", "value"),
         State("topoff-rnc-filter", "value"),
         State("topoff-nodeb-filter", "value"),
         State("topoff-heatmap-page-state", "data"),
+        State("topoff-kpi-domain", "value"),
         prevent_initial_call=True,
     )
     def refresh_topoff_histograma(
@@ -368,7 +389,7 @@ def topoff_heatmap_callbacks(app):
         sites,
         rncs,
         nodebs,
-        hi_page_state
+        hi_page_state, domain
     ):
         global _LAST_TOPOFF_HI_KEY
 
@@ -386,9 +407,11 @@ def topoff_heatmap_callbacks(app):
         offset  = max(0, (page - 1) * page_sz)
         limit   = max(1, page_sz)
 
+        dom = (domain or "PS").upper()
+
         state_key = _hm_key_topoff(
             fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit
-        ) + f"|selw={selected_wave}"
+        ) + f"|selw={selected_wave}|dom={dom}"
 
         # evita re-render idéntico, excepto si click a wave
         if _LAST_TOPOFF_HI_KEY == state_key and ctx.triggered_id != "topoff-histo-selected-wave":
@@ -423,7 +446,7 @@ def topoff_heatmap_callbacks(app):
                 df_meta=df_meta_topoff,
                 df_ts=df_ts,
                 UMBRAL_CFG=UM_MANAGER.config(),
-                valores_order=("PS_RRC", "CS_RRC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                valores_order=_valores_by_domain_topoff(domain),
                 today=today_str, yday=yday_str,
                 alarm_keys=alarm_keys_set,
                 alarm_only=False,
@@ -576,7 +599,8 @@ def topoff_heatmap_callbacks(app):
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-heatmap-page-state", "data"),  # paginado compartido
+        Input("topoff-kpi-domain", "value"),
         prevent_initial_call=False,  # bootstrap
     )
-    def topoff_histo_trigger_controller(_fecha, _tech, _vend, _cluster, _site, _rnc, _nodeb, _page_state):
+    def topoff_histo_trigger_controller(*_):
         return {"ts": time.time()}

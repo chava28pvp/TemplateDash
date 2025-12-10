@@ -2,6 +2,7 @@ import math
 import pandas as pd
 from dash import Input, Output, State, ALL, no_update, ctx
 import time
+from datetime import timedelta
 import numpy as np
 from components.main.main_table import (
     pivot_by_network,
@@ -26,12 +27,16 @@ _DFTS_TTL = 300  # segundos
 _MAIN_CTX_CACHE = {}
 _MAIN_CTX_TTL = 120  # segundos
 
-MOCK_INTEGRITY_BASELINE = False
+MOCK_INTEGRITY_BASELINE = True
 MOCK_BASELINE_MULT = 6.0
 MOCK_ONLY_NETWORKS = {"NET"}  # si solo quieres NET
 # Última clave renderizada para evitar re-render idéntico
 _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
+
+HOLD_SECONDS = 600  # 10 minutos (ajústalo)
+
+
 def _ensure_df(x):
     return x if isinstance(x, pd.DataFrame) else pd.DataFrame()
 
@@ -41,7 +46,6 @@ def _as_list(x):
     if isinstance(x, (list, tuple)):
         return list(x)
     return [x]
-
 
 def round_down_to_hour(dt):
     return dt.replace(minute=0, second=0, microsecond=0)
@@ -165,7 +169,7 @@ def register_callbacks(app):
                            net_val_current, tech_val_current,
                            ven_val_current, clu_val_current):
         # -------- 1) Traer DF principal para esa fecha/hora --------
-        df_main = fetch_kpis(fecha=fecha, hora=hora, limit=None)
+        df_main = fetch_kpis(fecha=fecha, hora=None, limit=None)
         df_main = _ensure_df(df_main)
 
         # Catálogos base
@@ -481,28 +485,61 @@ def register_callbacks(app):
     # 7) Tick: actualizar fecha/hora al inicio de cada hora
     # -------------------------------------------------
     @app.callback(
+        Output("dt-manual-store", "data"),
+        Input("f-fecha", "date"),
+        Input("f-hora", "value"),
+        prevent_initial_call=True,
+    )
+    def mark_datetime_manual(_fecha, _hora):
+        # Si no hay trigger real, no hagas nada
+        if not ctx.triggered_id:
+            raise PreventUpdate
+
+        return {"last_manual_ts": time.time()}
+
+    @app.callback(
         Output("f-hora", "value"),
         Output("f-fecha", "date"),
         Input("refresh-timer", "n_intervals"),
         State("f-hora", "value"),
         State("f-fecha", "date"),
         State("f-hora", "options"),
+        State("dt-manual-store", "data"),
         prevent_initial_call=False,
     )
-    def tick(_, current_hour, current_date, hour_options):
+    def tick(n, current_hour, current_date, hour_options, manual_store):
         now = now_local()
         floored = round_down_to_hour(now)
         hh = floored.strftime("%H:00:00")
         today = floored.strftime("%Y-%m-%d")
 
-        # No sobre/escribas si el usuario fijó manualmente
-        if (current_date not in (None, today)) or (current_hour not in (None, hh)):
-            return no_update, no_update
-
+        # Validar que la hora actual exista en options
         opt_values = {(o["value"] if isinstance(o, dict) else o) for o in (hour_options or [])}
         if opt_values and hh not in opt_values:
             return no_update, no_update
 
+        # ✅ 1) Primer arranque: fuerza "ahora"
+        if n in (None, 0):
+            return hh, today
+
+        # ✅ 2) Hold inteligente
+        last_manual_ts = float((manual_store or {}).get("last_manual_ts") or 0)
+
+        # Calcula el timestamp del siguiente cambio de hora local
+        next_hour_dt = floored + timedelta(hours=1)
+        # Convertimos a epoch "naive"
+        next_hour_ts = next_hour_dt.timestamp()
+        now_ts = now.timestamp()
+
+        # Hold hasta:
+        # - X segundos desde edición manual
+        # - o el siguiente cambio de hora (lo que ocurra primero)
+        hold_until = min(last_manual_ts + HOLD_SECONDS, next_hour_ts)
+
+        if last_manual_ts > 0 and now_ts < hold_until:
+            return no_update, no_update
+
+        # ✅ 3) Si ya pasó el hold, actualiza a "ahora"
         return hh, today
 
     @app.callback(
@@ -553,9 +590,15 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def sync_topoff_from_main(n_clicks_list, ids_list, current_state):
-        # no hay clicks válidos
-        if not n_clicks_list or not ids_list:
+
+        if not ids_list:
             raise PreventUpdate
+
+        safe_clicks = [(c or 0) for c in (n_clicks_list or [])]
+        if max(safe_clicks, default=0) == 0:
+            # ✅ evita falsos disparos por re-render
+            raise PreventUpdate
+        if max([(c or 0) for c in n_clicks_list]) == 0: PreventUpdate
 
         current_state = current_state or {"selected": None}
         current_sel = current_state.get("selected")
@@ -570,7 +613,6 @@ def register_callbacks(app):
             "technology": trig.get("technology"),
         }
 
-        # toggle: si ya estaba seleccionado el mismo, limpias
         if current_sel == new_sel:
             return {"selected": None}
 

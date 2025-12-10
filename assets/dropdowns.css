@@ -1,0 +1,32 @@
+/* ===== dcc.Dropdown (react-select) ===== */
+
+/* Texto del control (lo que ves cuando está cerrado) */
+.dd-black-options .Select-control,
+.dd-black-options .Select-placeholder,
+.dd-black-options .Select-value-label {
+  color: #000 !important;
+}
+
+/* Menú desplegable */
+.dd-black-options .Select-menu-outer {
+  color: #000 !important;
+  background: #fff !important;
+}
+
+/* Cada opción */
+.dd-black-options .Select-option {
+  color: #000 !important;
+  background: #fff !important;
+}
+
+/* Hover */
+.dd-black-options .Select-option.is-focused {
+  background: #e9ecef !important;
+  color: #000 !important;
+}
+
+/* Opción seleccionada */
+.dd-black-options .Select-option.is-selected {
+  background: #dee2e6 !important;
+  color: #000 !important;
+}

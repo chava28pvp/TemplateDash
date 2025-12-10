@@ -190,21 +190,31 @@ def register_topoff_callbacks(app):
             order_mode = "recent"
 
         # === aplicar filtro extra desde main (cluster) ===
+        clusters_effective = clusters
+        vendors_effective = vendors
+        technologies_effective = technologies
+
         if link_state and link_state.get("selected"):
             sel = link_state["selected"]
+
             clus = sel.get("cluster")
+            ven = sel.get("vendor")
+            tech = sel.get("technology")
+
             if clus:
                 clusters_effective = [clus]
-            else:
-                clusters_effective = clusters
+            if ven:
+                vendors_effective = [ven]
+            if tech:
+                technologies_effective = [tech]
         else:
             clusters_effective = clusters
 
         common_kwargs = dict(
             fecha=fecha,
             hora=hora,
-            technologies=technologies,
-            vendors=vendors,
+            technologies=technologies_effective,
+            vendors=vendors_effective,
             clusters=clusters_effective,
             sites=sites,
             rncs=rncs,
