@@ -337,7 +337,7 @@ def heatmap_callbacks(app):
         Output("hi-unit", "figure"),
         Output("histo-page-info", "data"),
         Input("histo-trigger", "data"),
-        Input("histo-selected-wave", "data"),  # 👈 sólo wave
+        Input("histo-selected-wave", "data"),
         State("f-fecha", "date"),
         State("f-network", "value"),
         State("f-technology", "value"),
@@ -345,9 +345,10 @@ def heatmap_callbacks(app):
         State("f-cluster", "value"),
         State("histo-page-state", "data"),
         State("kpi-domain", "value"),
+        State("topoff-link-state", "data"),
         prevent_initial_call=True,
     )
-    def refresh_histograma(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, domain):
+    def refresh_histograma(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, domain, link_state):
         global _LAST_HI_KEY
 
         selected_wave = (sel_wave or {}).get("series_key")
@@ -357,6 +358,23 @@ def heatmap_callbacks(app):
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
         clusters = _as_list(clusters)
+        #APLICAR filtro extra desde main (igual que en TopOff)
+        clusters_effective = clusters
+        vendors_effective = vendors
+        technologies_effective = technologies
+
+        if link_state and link_state.get("selected"):
+            sel = link_state["selected"]
+            clus = sel.get("cluster")
+            ven = sel.get("vendor")
+            tech = sel.get("technology")
+
+            if clus:
+                clusters_effective = [clus]
+            if ven:
+                vendors_effective = [ven]
+            if tech:
+                technologies_effective = [tech]
 
         # Paginado
         page = int((hm_page_state or {}).get("page", 1))
@@ -366,7 +384,15 @@ def heatmap_callbacks(app):
 
         # Clave de estado (sin selected_x)
         state_key = (
-                _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
+                _hm_key(
+                    fecha,
+                    networks,
+                    technologies_effective,
+                    vendors_effective,
+                    clusters_effective,
+                    offset,
+                    limit,
+                )
                 + f"|selw={selected_wave}|dom={domain}"
         )
         if _LAST_HI_KEY == state_key and ctx.triggered_id != "histo-selected-wave":
@@ -382,17 +408,27 @@ def heatmap_callbacks(app):
         yday_str = yday_dt.strftime("%Y-%m-%d")
 
         # Datos
-        df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
+        df_ts = _fetch_df_ts_cached(
+            today_str, yday_str,
+            networks,
+            technologies_effective,
+            vendors_effective,
+            clusters_effective,
+        )
+
         if networks:
             nets_heat = networks
         else:
             nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) if (
-                        df_ts is not None and not df_ts.empty and "network" in df_ts.columns) else []
+                    df_ts is not None and not df_ts.empty and "network" in df_ts.columns
+            ) else []
 
         df_meta_heat, alarm_keys_set = fetch_alarm_meta_for_heatmap(
             fecha=today_str,
-            vendors=vendors or None, clusters=clusters or None,
-            networks=nets_heat or None, technologies=technologies or None,
+            vendors=vendors_effective or None,
+            clusters=clusters_effective or None,
+            networks=nets_heat or None,
+            technologies=technologies_effective or None,
         )
 
         if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
@@ -440,9 +476,10 @@ def heatmap_callbacks(app):
         Input("f-cluster", "value"),
         Input("histo-page-state", "data"),  # dispara por paginado del heatmap
         Input("kpi-domain", "value"),
+        Input("topoff-link-state", "data"),
         prevent_initial_call=False,  # permite “bootstrap” al cargar
     )
-    def histo_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state, _dom):
+    def histo_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state, _dom, _link_state):
         return {"ts": time.time()}
 
 
@@ -455,9 +492,10 @@ def heatmap_callbacks(app):
         Input("f-cluster", "value"),
         Input("hm-page-size", "value"),
         Input("kpi-domain", "value"),
+        Input("topoff-link-state", "data"),
         prevent_initial_call=False,  # bootstrap
     )
-    def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size, _dom):
+    def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size, _dom, _link_state):
         ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 

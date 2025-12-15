@@ -161,6 +161,7 @@ def register_topoff_callbacks(app):
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-order-mode", "value"),
         Input("topoff-link-state", "data"),
+        Input("topoff-cluster-mode", "data"),
         prevent_initial_call=False,
     )
     def refresh_table(
@@ -170,6 +171,7 @@ def register_topoff_callbacks(app):
         sites, rncs, nodebs,
         sort_mode,
         link_state,
+        cluster_mode,
     ):
         page = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
@@ -194,6 +196,8 @@ def register_topoff_callbacks(app):
         vendors_effective = vendors
         technologies_effective = technologies
 
+        mode = (cluster_mode or {}).get("mode", "full")
+
         if link_state and link_state.get("selected"):
             sel = link_state["selected"]
 
@@ -203,12 +207,22 @@ def register_topoff_callbacks(app):
 
             if clus:
                 clusters_effective = [clus]
-            if ven:
-                vendors_effective = [ven]
-            if tech:
-                technologies_effective = [tech]
+
+            if mode == "cluster_only":
+                # 🔹 Modo "solo cluster": ignoramos vendor/tech para ver
+                # todas las variantes de ese cluster
+                vendors_effective = None
+                technologies_effective = None
+            else:
+                # 🔹 Modo "full": respeta vendor y tech del click en main
+                if ven:
+                    vendors_effective = [ven]
+                if tech:
+                    technologies_effective = [tech]
         else:
             clusters_effective = clusters
+            vendors_effective = vendors
+            technologies_effective = technologies
 
         common_kwargs = dict(
             fecha=fecha,
@@ -281,3 +295,26 @@ def register_topoff_callbacks(app):
     )
     def reset_sort_on_filters(_mode, *_):
         return {"column": None, "ascending": True}
+
+    @app.callback(
+        Output("topoff-cluster-mode", "data"),
+        Input("topoff-cluster-header-btn", "n_clicks"),
+        State("topoff-cluster-mode", "data"),
+        State("topoff-link-state", "data"),
+        prevent_initial_call=True,
+    )
+    def toggle_cluster_mode(n, mode_state, link_state):
+        # Si nunca se ha seleccionado un cluster desde main, no tiene sentido cambiar modo
+        if not link_state or not link_state.get("selected"):
+            raise PreventUpdate
+
+        mode_state = mode_state or {"mode": "full"}
+        current_mode = mode_state.get("mode", "full")
+
+        # Alterna entre:
+        # - "full"        → usar cluster + vendor + tech de main
+        # - "cluster_only"→ usar solo cluster (sin vendor/tech)
+        if current_mode == "full":
+            return {"mode": "cluster_only"}
+        else:
+            return {"mode": "full"}

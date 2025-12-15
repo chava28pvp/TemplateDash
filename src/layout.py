@@ -252,6 +252,7 @@ def serve_layout():
             ]),
 
             # === Histogramas en su propio Card (lado a lado, con títulos y scroll) ===
+            html.Div(id="histo-anchor"),
             dbc.Row([
                 dbc.Col(
                     dbc.Card([
@@ -348,8 +349,6 @@ def serve_layout():
                 ),
             ]),
 
-
-            html.Div(id="topoff-anchor"),
             dbc.Row([
                 dbc.Col([
 
@@ -748,6 +747,7 @@ def serve_layout():
         dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         dcc.Download(id="download-excel"),
         dcc.Store(id="topoff-link-state", data={"selected": None}),
+        dcc.Store(id="topoff-cluster-mode", data={"mode": "full"}),
         html.Div(id="topoff-scroll-dummy", style={"display": "none"}),
 
 

@@ -583,7 +583,7 @@ def register_callbacks(app):
         return {"column": None, "ascending": True}
 
     @app.callback(
-        Output("topoff-link-state", "data"),
+        Output("topoff-link-state", "data", allow_duplicate=True),
         Input({"type": "main-cluster-link", "cluster": ALL, "vendor": ALL, "technology": ALL}, "n_clicks"),
         State({"type": "main-cluster-link", "cluster": ALL, "vendor": ALL, "technology": ALL}, "id"),
         State("topoff-link-state", "data"),
@@ -617,6 +617,18 @@ def register_callbacks(app):
             return {"selected": None}
 
         return {"selected": new_sel}
+
+
+    @app.callback(
+        Output("topoff-link-state", "data", allow_duplicate=True),
+        Input("main-cluster-header-reset", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def reset_topoff_link_from_header(n):
+        if not n:
+            raise PreventUpdate
+        # Limpia el link para TODOS los clusters
+        return {"selected": None}
 
         # -------------------------------------------------
         # 1.5) Contexto pesado (baseline + progress max + alarm map)

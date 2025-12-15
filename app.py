@@ -53,7 +53,7 @@ app.clientside_callback(
             return window.dash_clientside.no_update;
         }
 
-        var el = document.getElementById('topoff-anchor');
+        var el = document.getElementById('histo-anchor');
         if (el && typeof el.scrollIntoView === 'function') {
             el.scrollIntoView({
                 behavior: 'smooth',

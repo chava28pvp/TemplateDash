@@ -250,10 +250,27 @@ def build_header(sort_state=None):
     sort_col = (sort_state or {}).get("column")
     ascending = (sort_state or {}).get("ascending", True)
 
-    row1 = [
-        html.Th(DISPLAY.get(k, k).title(), rowSpan=2, className=f"th-left th-{k}")
-        for k in ROW_KEYS
-    ]
+    row1 = []
+    for k in ROW_KEYS:
+        # 🔹 Header especial para Cluster: un "button" invisible
+        if k == "cluster":
+            content = html.Button(
+                DISPLAY.get(k, k).title(),
+                id="topoff-cluster-header-btn",
+                n_clicks=0,
+                className="cluster-header-btn",  # lo estilizamos para que no parezca botón
+            )
+        else:
+            content = DISPLAY.get(k, k).title()
+
+        row1.append(
+            html.Th(
+                content,
+                rowSpan=2,
+                className=f"th-left th-{k}",
+            )
+        )
+
     for grp, cols in BASE_GROUPS:
         row1.append(html.Th(grp, colSpan=len(cols), className="th-group"))
 
@@ -277,6 +294,7 @@ def build_header(sort_state=None):
             )
             cls = "th-sub" + (" th-sorted" if is_sorted else "")
             row2.append(html.Th(inner, className=cls))
+
     return html.Thead([html.Tr(row1), html.Tr(row2)])
 
 

@@ -14,7 +14,7 @@ ROW_KEYS = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
 
 # Grupos SOLO de métricas (sin fecha/hora/vendor/cluster/tech)
 BASE_GROUPS = [
-    ("INTEG", ["integrity", "integrity_deg_pct"]),
+    ("INTEG", ["alarmas", "integrity", "integrity_deg_pct"]),
     ("PS_TRAFF", ["ps_traff_delta", "ps_traff_gb"]),
     ("PS_RRC",   ["ps_rrc_ia_percent", "ps_rrc_fail"]),
     ("PS_RAB",   ["ps_rab_ia_percent", "ps_rab_fail"]),
@@ -24,7 +24,6 @@ BASE_GROUPS = [
     ("CS_RRC",   ["cs_rrc_ia_percent", "cs_rrc_fail"]),
     ("CS_RAB",   ["cs_rab_ia_percent", "cs_rab_fail"]),
     ("CS_DROP",  ["cs_drop_dc_percent", "cs_drop_abnrel"]),
-    ("OCURRENCE", ["alarmas"])
 ]
 
 # Columnas base que llevan progress bar y severidad (sin prefijo de red)
@@ -69,7 +68,7 @@ DISPLAY_NAME_BASE = {
     "cs_rab_fail": "FAIL",
     "cs_drop_dc_percent": "%DC",
     "cs_drop_abnrel": "ABNREL",
-    "alarmas": "Alarmas",
+    "alarmas": "Ocurr",
 }
 
 # Derivados
@@ -326,12 +325,29 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
     ascending = (sort_state or {}).get("ascending", True)
 
     # Nivel 1: keys fijos (igual que antes)
-    left = [
-        html.Th(DISPLAY_NAME_BASE.get(k, k).title(),
-                rowSpan=3,
-                className=f"th-left th-{k}")  # clase específica por columna
-        for k in ROW_KEYS
-    ]
+    left = []
+    for k in ROW_KEYS:
+        label = DISPLAY_NAME_BASE.get(k, k).title()
+
+        if k == "noc_cluster":
+            # 👇 El <th> es clickeable, pero visualmente sigue siendo un th normal
+            left.append(
+                html.Th(
+                    label,
+                    id="main-cluster-header-reset",  # ID para el callback
+                    n_clicks=0,  # habilita clicks
+                    rowSpan=3,
+                    className=f"th-left th-{k} th-clickable",
+                )
+            )
+        else:
+            left.append(
+                html.Th(
+                    label,
+                    rowSpan=3,
+                    className=f"th-left th-{k}",
+                )
+            )
 
     # Nivel 1: Networks
     net_to_span = {}
@@ -558,11 +574,8 @@ def render_kpi_table_multinet(
                     cluster_val = _safe_get(row, "noc_cluster")
                     tech_val = _safe_get(row, "technology")
 
-                    # clave para el baseline (igual que en integrity)
                     key = (net, vendor_val, cluster_val, tech_val)
-                    baseline = None
-                    if integrity_baseline_map is not None:
-                        baseline = integrity_baseline_map.get(key)
+                    baseline = integrity_baseline_map.get(key) if integrity_baseline_map else None
 
                     integ_col = col.replace("integrity_deg_pct", "integrity")
                     integ_val = _safe_get(row, integ_col)
@@ -575,11 +588,14 @@ def render_kpi_table_multinet(
                             and baseline > 0
                     ):
                         ratio = float(integ_val) / float(baseline)
-                        degrade_pct = max(0.0, (1.0 - ratio) * 100.0)
-                        # Solo mostramos el número, sin cambiar clase
-                        txt = f"{degrade_pct:.1f}"
+                        # porcentaje RESTANTE respecto a la media:
+                        # baseline=100, actual=80 → 80.0
+                        # baseline=100, actual=50 → 50.0
+                        health_pct = max(0.0, min(100.0, ratio * 100.0))
+                        txt = f"{health_pct:.1f}"
 
-                    cell = html.Div(txt, className="cell-neutral")  # 👈 siempre neutro
+                    # aquí la idea es NO pintarla, solo mostrar el número
+                    cell = html.Div(txt, className="cell-neutral")
 
                 # --- LÓGICA ESPECIAL PARA INTEGRITY (esta sí se pinta) ---
                 elif base_name == "integrity" and isinstance(num_val, (int, float)):

@@ -365,14 +365,17 @@ def build_heatmap_payloads_fast(
                     )
                     df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
 
+                    # --- alarmado por % según UMBRAL_CFG ---
                     thr_cache = {}
                     for pm in pct_metrics:
                         for net in networks:
                             try:
                                 orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
                             except Exception:
-                                orient, thr = ("lower_is_better",
-                                               {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0})
+                                orient, thr = (
+                                    "lower_is_better",
+                                    {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0},
+                                )
                             thr_cache[(pm, net)] = (orient, thr)
 
                     def _is_alarm_pct(metric, net, v):
@@ -390,6 +393,7 @@ def build_heatmap_payloads_fast(
                         for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
                     ]
 
+                    # --- por hora: una fila por (key, fecha, hora) con flag de alarma ---
                     df_hour = (
                         df_long.dropna(subset=["valores"])
                         .groupby(
@@ -399,22 +403,40 @@ def build_heatmap_payloads_fast(
                         .max()
                     )
 
-                    df_alarm = (
-                        df_hour.groupby(
-                            ["technology", "vendor", "noc_cluster", "network", "valores"],
-                            as_index=False
-                        )["alarm"]
-                        .sum()
-                        .rename(columns={"alarm": out_col})
+                    # Timestamp real de cada punto
+                    df_hour["ts"] = pd.to_datetime(
+                        df_hour["fecha"].astype(str) + " " + df_hour["hora"].astype(str),
+                        errors="coerce",
+                    )
+                    df_hour["ts_alarm"] = df_hour["ts"].where(df_hour["alarm"])
+
+                    grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
+
+                    # --- stats por fila (para ordenamiento) ---
+                    df_stats = (
+                        df_hour.groupby(grp_cols, as_index=False)
+                        .agg(
+                            alarm_hours=("alarm", "sum"),  # nº de horas en alarma (igual que antes)
+                            last_alarm_ts=("ts_alarm", "max"),  # última hora con alarma
+                        )
+                        .rename(columns={"alarm_hours": out_col})
                     )
 
-                    rows_all = rows_all.merge(
-                        df_alarm,
-                        on=["technology", "vendor", "noc_cluster", "network", "valores"],
-                        how="left"
+                    # máximo valor de la métrica % (para desempate)
+                    df_max = (
+                        df_long.dropna(subset=["valores"])
+                        .groupby(grp_cols, as_index=False)["value"]
+                        .max()
+                        .rename(columns={"value": "max_value"})
                     )
 
-            # --- alarm_hours UNIT (nuevo) ---
+                    df_stats = df_stats.merge(df_max, on=grp_cols, how="left")
+
+                    # merge a las filas del heatmap
+                    rows_all = rows_all.merge(df_stats, on=grp_cols, how="left")
+
+
+            # --- alarm_hours UNIT (nuevo, con última hora alarmada + max_value) ---
             elif order_by in ("alarm_hours_unit", "alarm_hours_fail"):
 
                 out_col = "alarm_hours_unit"
@@ -460,29 +482,47 @@ def build_heatmap_payloads_fast(
                         for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
                     ]
 
+                    # --- por hora: una fila por (key, fecha, hora) con flag de alarma ---
                     df_hour = (
                         df_long.dropna(subset=["valores"])
                         .groupby(
                             ["technology", "vendor", "noc_cluster", "network", "valores", "fecha", "hora"],
-                            as_index=False
+                            as_index=False,
                         )["alarm"]
                         .max()
                     )
 
-                    df_alarm = (
-                        df_hour.groupby(
-                            ["technology", "vendor", "noc_cluster", "network", "valores"],
-                            as_index=False
-                        )["alarm"]
-                        .sum()
-                        .rename(columns={"alarm": out_col})
+                    # timestamp real de cada punto
+                    df_hour["ts"] = pd.to_datetime(
+                        df_hour["fecha"].astype(str) + " " + df_hour["hora"].astype(str),
+                        errors="coerce",
+                    )
+                    df_hour["ts_alarm"] = df_hour["ts"].where(df_hour["alarm"])
+
+                    grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
+
+                    # --- stats UNIT por fila ---
+                    df_stats_unit = (
+                        df_hour.groupby(grp_cols, as_index=False)
+                        .agg(
+                            alarm_hours_unit=("alarm", "sum"),  # nº de horas UNIT en alarma
+                            last_alarm_ts_unit=("ts_alarm", "max"),  # última hora UNIT alarmada
+                        )
+                        .rename(columns={"alarm_hours_unit": out_col})
                     )
 
-                    rows_all = rows_all.merge(
-                        df_alarm,
-                        on=["technology", "vendor", "noc_cluster", "network", "valores"],
-                        how="left"
+                    # max UNIT (para desempate)
+                    df_max_unit = (
+                        df_long.dropna(subset=["valores"])
+                        .groupby(grp_cols, as_index=False)["value"]
+                        .max()
+                        .rename(columns={"value": "max_value_unit"})
                     )
+
+                    df_stats_unit = df_stats_unit.merge(df_max_unit, on=grp_cols, how="left")
+
+                    # merge a las filas del heatmap
+                    rows_all = rows_all.merge(df_stats_unit, on=grp_cols, how="left")
 
         # ===========================
         # Fallback original: max_pct / max_unit
@@ -528,8 +568,48 @@ def build_heatmap_payloads_fast(
 
     # --- orden final ---
     ord_col = "__ord__"
-    rows_all[ord_col] = rows_all[out_col].astype(float).fillna(float("-inf"))
-    rows_all = rows_all.sort_values(ord_col, ascending=False, kind="stable")
+
+    if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct"):
+        # --- orden basado en % ---
+        rows_all["__ord_last_alarm_ts"] = pd.to_datetime(
+            rows_all.get("last_alarm_ts"), errors="coerce"
+        ).fillna(pd.Timestamp("1970-01-01"))
+
+        rows_all["__ord_alarm_hours"] = pd.to_numeric(
+            rows_all.get("alarm_hours"), errors="coerce"
+        ).fillna(0.0)
+
+        rows_all["__ord_max_value"] = pd.to_numeric(
+            rows_all.get("max_value"), errors="coerce"
+        ).fillna(float("-inf"))
+
+    elif order_by in ("alarm_hours_unit", "alarm_hours_fail"):
+        # --- orden basado en UNIT ---
+        rows_all["__ord_last_alarm_ts"] = pd.to_datetime(
+            rows_all.get("last_alarm_ts_unit"), errors="coerce"
+        ).fillna(pd.Timestamp("1970-01-01"))
+
+        rows_all["__ord_alarm_hours"] = pd.to_numeric(
+            rows_all.get("alarm_hours_unit"), errors="coerce"
+        ).fillna(0.0)
+
+        rows_all["__ord_max_value"] = pd.to_numeric(
+            rows_all.get("max_value_unit"), errors="coerce"
+        ).fillna(float("-inf"))
+
+    else:
+        # fallback: lo que ya tenías (max_pct / max_unit, etc.)
+        rows_all["__ord_last_alarm_ts"] = pd.Timestamp("1970-01-01")
+        rows_all["__ord_alarm_hours"] = 0.0
+        rows_all["__ord_max_value"] = pd.to_numeric(
+            rows_all.get(out_col), errors="coerce"
+        ).fillna(float("-inf"))
+
+    rows_all = rows_all.sort_values(
+        ["__ord_last_alarm_ts", "__ord_alarm_hours", "__ord_max_value"],
+        ascending=[False, False, False],
+        kind="stable",
+    )
 
     # --- paginado ---
     total_rows = len(rows_all)
