@@ -451,22 +451,41 @@ def topoff_heatmap_callbacks(app):
                 alarm_keys=alarm_keys_set,
                 alarm_only=False,
                 offset=offset,
-                limit=limit
+                limit=limit,
+                domain=dom,  # PS / CS
             )
         else:
             pct_payload = unit_payload = None
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
         fig_pct = build_overlay_waves_figure_topoff(
-            pct_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="severity",
-            height=420, smooth_win=3, opacity=0.28, line_width=1.2, decimals=2,
-            show_yaxis_ticks=True, selected_wave=selected_wave
+            pct_payload,
+            UMBRAL_CFG=UM_MANAGER.config(),
+            mode="severity",
+            height=420,
+            smooth_win=3,
+            opacity=0.9,
+            line_width=1.2,
+            decimals=2,
+            show_yaxis_ticks=True,
+            selected_wave=selected_wave,
+            show_traffic_bars=True,  #barras grises de GB/ERL
+            traffic_agg="mean",
+            traffic_decimals=1,
         ) if pct_payload else go.Figure()
 
         fig_unit = build_overlay_waves_figure_topoff(
-            unit_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="progress",
-            height=420, smooth_win=3, opacity=0.25, line_width=1.2, decimals=0,
-            show_yaxis_ticks=True, selected_wave=selected_wave
+            unit_payload,
+            UMBRAL_CFG=UM_MANAGER.config(),
+            mode="progress",
+            height=420,
+            smooth_win=3,
+            opacity=0.9,
+            line_width=1.2,
+            decimals=0,
+            show_yaxis_ticks=True,
+            selected_wave=selected_wave,
+            show_traffic_bars=False,
         ) if unit_payload else go.Figure()
 
         _LAST_TOPOFF_HI_KEY = state_key

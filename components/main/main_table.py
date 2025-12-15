@@ -14,7 +14,7 @@ ROW_KEYS = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
 
 # Grupos SOLO de métricas (sin fecha/hora/vendor/cluster/tech)
 BASE_GROUPS = [
-    ("INTEG", ["integrity"]),
+    ("INTEG", ["integrity", "integrity_deg_pct"]),
     ("PS_TRAFF", ["ps_traff_delta", "ps_traff_gb"]),
     ("PS_RRC",   ["ps_rrc_ia_percent", "ps_rrc_fail"]),
     ("PS_RAB",   ["ps_rab_ia_percent", "ps_rab_fail"]),
@@ -24,7 +24,7 @@ BASE_GROUPS = [
     ("CS_RRC",   ["cs_rrc_ia_percent", "cs_rrc_fail"]),
     ("CS_RAB",   ["cs_rab_ia_percent", "cs_rab_fail"]),
     ("CS_DROP",  ["cs_drop_dc_percent", "cs_drop_abnrel"]),
-    ("ALARMAS", ["alarmas"])
+    ("OCURRENCE", ["alarmas"])
 ]
 
 # Columnas base que llevan progress bar y severidad (sin prefijo de red)
@@ -48,6 +48,7 @@ DISPLAY_NAME_BASE = {
 
     # Métricas
     "integrity": "Integ",
+    "integrity_deg_pct": "%",
 
     "ps_traff_delta": "DELTA",
     "ps_traff_gb": "GB",
@@ -551,8 +552,37 @@ def render_kpi_table_multinet(
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
 
-                # --- LÓGICA ESPECIAL PARA INTEGRITY ---
-                if base_name == "integrity" and isinstance(num_val, (int, float)):
+                # --- NUEVO: % de degrade vs baseline (solo texto, sin colores) ---
+                if base_name == "integrity_deg_pct":
+                    vendor_val = _safe_get(row, "vendor")
+                    cluster_val = _safe_get(row, "noc_cluster")
+                    tech_val = _safe_get(row, "technology")
+
+                    # clave para el baseline (igual que en integrity)
+                    key = (net, vendor_val, cluster_val, tech_val)
+                    baseline = None
+                    if integrity_baseline_map is not None:
+                        baseline = integrity_baseline_map.get(key)
+
+                    integ_col = col.replace("integrity_deg_pct", "integrity")
+                    integ_val = _safe_get(row, integ_col)
+
+                    txt = ""
+                    if (
+                            baseline is not None
+                            and isinstance(integ_val, (int, float))
+                            and not pd.isna(integ_val)
+                            and baseline > 0
+                    ):
+                        ratio = float(integ_val) / float(baseline)
+                        degrade_pct = max(0.0, (1.0 - ratio) * 100.0)
+                        # Solo mostramos el número, sin cambiar clase
+                        txt = f"{degrade_pct:.1f}"
+
+                    cell = html.Div(txt, className="cell-neutral")  # 👈 siempre neutro
+
+                # --- LÓGICA ESPECIAL PARA INTEGRITY (esta sí se pinta) ---
+                elif base_name == "integrity" and isinstance(num_val, (int, float)):
                     vendor_val = _safe_get(row, "vendor")
                     cluster_val = _safe_get(row, "noc_cluster")
                     tech_val = _safe_get(row, "technology")
@@ -564,8 +594,8 @@ def render_kpi_table_multinet(
 
                     if baseline is not None and baseline > 0:
                         ratio = float(num_val) / float(baseline)
-                        # Degrade ≥ 80% → valor actual <= 20% del baseline
-                        if ratio <= 0.2:
+                        # aquí ya decides si usas 0.2, 0.8, etc.
+                        if ratio <= 0.8:
                             cls = "cell-integrity-degraded"
                         else:
                             cls = "cell-neutral"
