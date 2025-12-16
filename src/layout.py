@@ -259,29 +259,8 @@ def serve_layout():
                         dbc.CardHeader(
                             dbc.Row(
                                 [
-                                    # ===== Fila 1: Título centrado =====
                                     dbc.Col(
                                         html.H4("Histogramas", className="m-0 text-center"),
-                                        width=12
-                                    ),
-
-                                    # ===== Fila 2: Dropdown centrado debajo =====
-                                    dbc.Col(
-                                        html.Div(
-                                            dcc.Dropdown(
-                                                id="kpi-domain",
-                                                options=[
-                                                    {"label": "PS", "value": "PS"},
-                                                    {"label": "CS", "value": "CS"},
-                                                ],
-                                                value="PS",
-                                                clearable=False,
-                                                searchable=False,
-                                                className="dd-black-options",
-                                                style={"minWidth": "120px"}
-                                            ),
-                                            className="d-flex justify-content-center mt-2"
-                                        ),
                                         width=12
                                     ),
                                 ],
@@ -291,19 +270,19 @@ def serve_layout():
                         ),
 
                         dbc.CardBody([
-                            # Store para sincronizar selección entre % y UNIT
-                            # dcc.Store(id="histo-selected-wave"),
+                            # ---------- Bloque PS ----------
+                            html.H5("PS", className="mb-2 text-center text-info"),
 
                             dbc.Row([
-                                # -------- Columna: HM % --------
+                                # PS %
                                 dbc.Col(
                                     html.Div(
                                         [
-                                            html.H5("%", className="mb-2 text-center"),
+                                            html.H6("%", className="mb-2 text-center"),
                                             html.Div(
                                                 dcc.Loading(
                                                     dcc.Graph(
-                                                        id="hi-pct",
+                                                        id="hi-pct-ps",
                                                         config={"displayModeBar": False},
                                                         className="histo-wide",
                                                         style={"height": "420px", "width": "1400px", "margin": "0"}
@@ -319,15 +298,70 @@ def serve_layout():
                                     md=6, sm=12, className="my-0"
                                 ),
 
-                                # -------- Columna: HM UNIT --------
+                                # PS UNIT
                                 dbc.Col(
                                     html.Div(
                                         [
-                                            html.H5("UNIT", className="mb-2 text-center"),
+                                            html.H6("UNIT", className="mb-2 text-center"),
                                             html.Div(
                                                 dcc.Loading(
                                                     dcc.Graph(
-                                                        id="hi-unit",
+                                                        id="hi-unit-ps",
+                                                        config={"displayModeBar": False},
+                                                        className="histo-wide",
+                                                        style={"height": "420px", "width": "1400px", "margin": "0"}
+                                                    ),
+                                                    type="default"
+                                                ),
+                                                className="histo-scroll"
+                                            ),
+                                        ],
+                                        className="hm-wrap",
+                                        style={"overflow": "hidden"}
+                                    ),
+                                    md=6, sm=12, className="my-0"
+                                ),
+                            ], className="g-3"),
+
+                            html.Hr(className="my-3"),
+
+                            # ---------- Bloque CS ----------
+                            html.H5("CS", className="mb-2 text-center text-warning"),
+
+                            dbc.Row([
+                                # CS %
+                                dbc.Col(
+                                    html.Div(
+                                        [
+                                            html.H6("%", className="mb-2 text-center"),
+                                            html.Div(
+                                                dcc.Loading(
+                                                    dcc.Graph(
+                                                        id="hi-pct-cs",
+                                                        config={"displayModeBar": False},
+                                                        className="histo-wide",
+                                                        style={"height": "420px", "width": "1400px", "margin": "0"}
+                                                    ),
+                                                    type="default"
+                                                ),
+                                                className="histo-scroll"
+                                            ),
+                                        ],
+                                        className="hm-wrap",
+                                        style={"overflow": "hidden", "marginBottom": "6px"}
+                                    ),
+                                    md=6, sm=12, className="my-0"
+                                ),
+
+                                # CS UNIT
+                                dbc.Col(
+                                    html.Div(
+                                        [
+                                            html.H6("UNIT", className="mb-2 text-center"),
+                                            html.Div(
+                                                dcc.Loading(
+                                                    dcc.Graph(
+                                                        id="hi-unit-cs",
                                                         config={"displayModeBar": False},
                                                         className="histo-wide",
                                                         style={"height": "420px", "width": "1400px", "margin": "0"}
@@ -505,7 +539,8 @@ def serve_layout():
                                                 dbc.CardBody([
                                                     dbc.Table([
                                                         html.Thead(html.Tr([
-                                                            html.Th("NodeB", className="w-nodeb"),
+                                                            html.Th("Cluster", className="w-cluster"),
+                                                            html.Th("Sitio", className="w-sitio"),
                                                             html.Th("Tech", className="w-tech"),
                                                             html.Th("Vendor", className="w-vendor"),
                                                             html.Th("Valor", className="w-valor"),

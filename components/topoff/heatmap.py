@@ -1,9 +1,5 @@
-# components/Heatmaps/topoff_heatmap.py
-import math
-import re
-import unicodedata
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -232,7 +228,7 @@ def build_heatmap_payloads_topoff(
             used_cols
         ].copy()
 
-        # --- alarm bins % (15m) ---
+        # --- alarm bins % (15m) con última bin alarmada + max_value ---
         if order_by in ("alarm_bins_pct", "alarm_pct"):
             out_col = "alarm_bins_pct"
 
@@ -255,8 +251,10 @@ def build_heatmap_payloads_topoff(
                     try:
                         orient, thr = _sev_cfg(pm, None, UMBRAL_CFG)
                     except Exception:
-                        orient, thr = ("lower_is_better",
-                                       {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0})
+                        orient, thr = (
+                            "lower_is_better",
+                            {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0},
+                        )
                     thr_cache[pm] = (orient, thr)
 
                 def _is_alarm_pct(metric, v):
@@ -281,19 +279,42 @@ def build_heatmap_payloads_topoff(
                     .max()
                 )
 
-                df_alarm = (
-                    df_bin.groupby(meta_present + ["valores"], as_index=False)["alarm"]
-                    .sum()
-                    .rename(columns={"alarm": out_col})
+                # timestamp por bin
+                df_bin["ts"] = pd.to_datetime(
+                    df_bin["fecha"].astype(str) + " " + df_bin["hora"].astype(str),
+                    errors="coerce",
                 )
+                df_bin["ts_alarm"] = df_bin["ts"].where(df_bin["alarm"])
+
+                grp_cols = meta_present + ["valores"]
+
+                # stats para ordenamiento
+                df_stats_pct = (
+                    df_bin.groupby(grp_cols, as_index=False)
+                    .agg(
+                        alarm_bins_pct=("alarm", "sum"),  # nº de bins en alarma
+                        last_alarm_ts_pct=("ts_alarm", "max"),  # última bin alarmada
+                    )
+                    .rename(columns={"alarm_bins_pct": out_col})
+                )
+
+                # max value % como desempate fino
+                df_maxp = (
+                    df_long.dropna(subset=["valores"])
+                    .groupby(grp_cols, as_index=False)["value"]
+                    .max()
+                    .rename(columns={"value": "max_value_pct"})
+                )
+
+                df_stats_pct = df_stats_pct.merge(df_maxp, on=grp_cols, how="left")
 
                 rows_all = rows_all.merge(
-                    df_alarm,
-                    on=meta_present + ["valores"],
-                    how="left"
+                    df_stats_pct,
+                    on=grp_cols,
+                    how="left",
                 )
 
-        # --- alarm bins UNIT (15m) ---
+        # --- alarm bins UNIT (15m) con última bin alarmada + max_value_unit ---
         elif order_by in ("alarm_bins_unit", "alarm_unit"):
             out_col = "alarm_bins_unit"
 
@@ -343,16 +364,39 @@ def build_heatmap_payloads_topoff(
                     .max()
                 )
 
-                df_alarm = (
-                    df_bin.groupby(meta_present + ["valores"], as_index=False)["alarm"]
-                    .sum()
-                    .rename(columns={"alarm": out_col})
+                # timestamp por bin
+                df_bin["ts"] = pd.to_datetime(
+                    df_bin["fecha"].astype(str) + " " + df_bin["hora"].astype(str),
+                    errors="coerce",
+                )
+                df_bin["ts_alarm"] = df_bin["ts"].where(df_bin["alarm"])
+
+                grp_cols = meta_present + ["valores"]
+
+                # stats UNIT para ordenamiento
+                df_stats_unit = (
+                    df_bin.groupby(grp_cols, as_index=False)
+                    .agg(
+                        alarm_bins_unit=("alarm", "sum"),         # nº de bins UNIT en alarma
+                        last_alarm_ts_unit=("ts_alarm", "max"),   # última bin UNIT alarmada
+                    )
+                    .rename(columns={"alarm_bins_unit": out_col})
                 )
 
+                # max UNIT para desempate
+                df_maxu = (
+                    df_long.dropna(subset=["valores"])
+                    .groupby(grp_cols, as_index=False)["value"]
+                    .max()
+                    .rename(columns={"value": "max_value_unit"})
+                )
+
+                df_stats_unit = df_stats_unit.merge(df_maxu, on=grp_cols, how="left")
+
                 rows_all = rows_all.merge(
-                    df_alarm,
-                    on=meta_present + ["valores"],
-                    how="left"
+                    df_stats_unit,
+                    on=grp_cols,
+                    how="left",
                 )
 
         # --- max % ---
@@ -427,10 +471,124 @@ def build_heatmap_payloads_topoff(
             out_col = "max_unit"
         rows_all[out_col] = np.nan
 
-    # --- orden final ---
-    ord_col = "__ord__"
-    rows_all[ord_col] = rows_all[out_col].astype(float).fillna(float("-inf"))
-    rows_all = rows_all.sort_values(ord_col, ascending=False, kind="stable")
+    # --- orden final multi-criterio ---
+    # =========================================================
+    # ORDEN FINAL POR BLOQUE (cluster/site):
+    #   1) cluster_last_alarm_ts (desc)
+    #   2) cluster_alarm_bins (desc)
+    #   3) cluster_max_value (desc)
+    #   4) dentro del bloque: valores en el orden de valores_order
+    # =========================================================
+    ord_last = "__ord_last_alarm_ts"
+    ord_bins = "__ord_alarm_bins"
+    ord_max = "__ord_max_value"
+
+    # Normalización de columnas de ordenamiento por fila
+    if order_by in ("alarm_bins_pct", "alarm_pct"):
+        rows_all[ord_last] = pd.to_datetime(
+            rows_all.get("last_alarm_ts_pct"), errors="coerce"
+        ).fillna(pd.Timestamp("1970-01-01"))
+
+        rows_all[ord_bins] = pd.to_numeric(
+            rows_all.get("alarm_bins_pct"), errors="coerce"
+        ).fillna(0.0)
+
+        rows_all[ord_max] = pd.to_numeric(
+            rows_all.get("max_value_pct"), errors="coerce"
+        ).fillna(float("-inf"))
+
+    elif order_by in ("alarm_bins_unit", "alarm_unit"):
+        rows_all[ord_last] = pd.to_datetime(
+            rows_all.get("last_alarm_ts_unit"), errors="coerce"
+        ).fillna(pd.Timestamp("1970-01-01"))
+
+        rows_all[ord_bins] = pd.to_numeric(
+            rows_all.get("alarm_bins_unit"), errors="coerce"
+        ).fillna(0.0)
+
+        rows_all[ord_max] = pd.to_numeric(
+            rows_all.get("max_value_unit"), errors="coerce"
+        ).fillna(float("-inf"))
+
+    else:
+        # modo fallback – solo max_value
+        rows_all[ord_last] = pd.Timestamp("1970-01-01")
+        rows_all[ord_bins] = 0.0
+        rows_all[ord_max] = pd.to_numeric(
+            rows_all.get(out_col), errors="coerce"
+        ).fillna(float("-inf"))
+
+    # =========================================================
+    # 1) Construimos una clave de CLUSTER para agrupar
+    #    (si no hay cluster, usamos site_att como fallback)
+    # =========================================================
+    # normalizamos textos
+    for col in ["technology", "vendor", "cluster", "site_att"]:
+        if col in rows_all.columns:
+            rows_all[col] = rows_all[col].astype(str)
+
+    # fallback: si no hay cluster, usamos el sitio
+    mask_empty_cluster = rows_all["cluster"].isin(["", "nan", "None"])
+    if "site_att" in rows_all.columns:
+        rows_all.loc[mask_empty_cluster, "cluster"] = rows_all.loc[
+            mask_empty_cluster, "site_att"
+        ].astype(str)
+
+    # grupo SOLO por cluster (bloque)
+    cluster_group_cols = ["cluster"]
+
+    # Stats de nivel cluster
+    cluster_stats = (
+        rows_all
+        .groupby(cluster_group_cols, as_index=False)
+        .agg(
+            cluster_last_alarm_ts=(ord_last, "max"),  # última alarma del BLOQUE
+            cluster_alarm_bins=(ord_bins, "sum"),  # total de bins en alarma del BLOQUE
+            cluster_max_value=(ord_max, "max"),  # peor valor del BLOQUE
+        )
+    )
+
+    # Merge de las stats de bloque a cada fila
+    rows_all = rows_all.merge(
+        cluster_stats,
+        on=cluster_group_cols,
+        how="left",
+        validate="many_to_one"
+    )
+
+    # =========================================================
+    # 2) Orden de valores (PS_RRC, CS_RRC, PS_DROP, ...)
+    # =========================================================
+    if valores_order:
+        rows_all["valores"] = pd.Categorical(
+            rows_all["valores"],
+            categories=list(valores_order),
+            ordered=True
+        )
+
+    # =========================================================
+    # 3) ORDEN FINAL:
+    #   - primero por cluster_last_alarm_ts/cluster_alarm_bins/cluster_max_value (desc)
+    #   - luego por cluster ascendente (para que se vean agrupados)
+    #   - dentro del bloque, por site_att, tech, vendor y valores
+    # =========================================================
+    sort_cols = [
+        "cluster_last_alarm_ts",
+        "cluster_alarm_bins",
+        "cluster_max_value",
+        "cluster",
+        "site_att",
+        "technology",
+        "vendor",
+        "valores",
+    ]
+    sort_cols = [c for c in sort_cols if c in rows_all.columns]
+
+    rows_all = rows_all.sort_values(
+        by=sort_cols,
+        ascending=[False, False, False, True, True, True, True, True][:len(sort_cols)],
+        kind="stable",
+    )
 
     # --- paginado ---
     total_rows = len(rows_all)
@@ -770,8 +928,10 @@ def render_heatmap_summary_table_topoff(
     z_raw_pct = (pct_payload or {}).get("z_raw")
     z_raw_unit = (unit_payload or {}).get("z_raw")
 
+    # ===== NEW HEADERS =====
     cols = [
-        ("NodeB", "w-nodeb"),
+        ("Cluster", "w-cluster"),
+        ("Sitio", "w-sitio"),
         ("Tech", "w-tech"),
         ("Vendor", "w-vendor"),
         ("Valor", "w-valor"),
@@ -779,11 +939,13 @@ def render_heatmap_summary_table_topoff(
         ("Valor de la última muestra (%)", "w-num"),
         ("Valor de la última muestra (UNIT)", "w-num"),
     ]
+
     thead = html.Thead(
         html.Tr([html.Th(n, className=c) for n, c in cols]),
         className="table-dark"
     )
 
+    # fmt helper
     def _fmt_full(v):
         try:
             f = float(v)
@@ -794,14 +956,20 @@ def render_heatmap_summary_table_topoff(
             return ""
 
     body_rows = []
-    for i in range(len(y)):
-        # detail ahora es tech/vendor/region/prov/mun/site/rnc/nodeb/valores
-        parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 8)
-        tech   = parts[0] if len(parts) > 0 else ""
-        vendor = parts[1] if len(parts) > 1 else ""
-        nodeb  = parts[7] if len(parts) > 7 else ""
-        valor  = parts[8] if len(parts) > 8 else ""
 
+    for i in range(len(y)):
+        # y-label contiene: tech/vendor/region/province/mun/site/rnc/nodeb/cluster/valores
+        parts_y = str(y[i]).split("/", 9)
+        site    = parts_y[5] if len(parts_y) > 5 else ""
+        cluster = parts_y[8] if len(parts_y) > 8 else ""
+        valor   = parts_y[9] if len(parts_y) > 9 else ""
+
+        # detail contiene: tech/vendor/region/prov/mun/site/rnc/nodeb/valores
+        parts_d = (detail[i] if i < len(detail) else str(y[i])).split("/", 8)
+        tech   = parts_d[0] if len(parts_d) > 0 else ""
+        vendor = parts_d[1] if len(parts_d) > 1 else ""
+
+        # últimas muestras
         last_pct  = _last_numeric(z_raw_pct[i]) if z_raw_pct and i < len(z_raw_pct) else None
         last_unit = _last_numeric(z_raw_unit[i]) if z_raw_unit and i < len(z_raw_unit) else None
 
@@ -811,13 +979,23 @@ def render_heatmap_summary_table_topoff(
 
         body_rows.append(
             html.Tr([
+                # Cluster
                 html.Td(
                     html.Span(
-                        html.Span(nodeb, className="unflip"),
+                        html.Span(cluster, className="unflip"),
                         className="ellipsis-left"
                     ),
-                    className="w-nodeb",
-                    title=nodeb
+                    className="w-cluster",
+                    title=cluster
+                ),
+                # Site
+                html.Td(
+                    html.Span(
+                        html.Span(site, className="unflip"),
+                        className="ellipsis-left"
+                    ),
+                    className="w-sitio",
+                    title=site
                 ),
                 html.Td(tech, className="w-tech", title=tech),
                 html.Td(
@@ -834,10 +1012,12 @@ def render_heatmap_summary_table_topoff(
 
     return dbc.Table(
         [thead, html.Tbody(body_rows)],
-        striped=True, bordered=False, hover=True, size="sm",
+        striped=True,
+        bordered=False,
+        hover=True,
+        size="sm",
         className="mb-0 table-dark kpi-table topoff-table compact"
     )
-
 
 # =========================================================
 # TIME HEADERS
