@@ -621,6 +621,7 @@ def build_overlay_waves_figure_topoff(
         ticks="outside",
         ticklen=5,
         fixedrange=True,
+        showgrid=False,
     )
     fig.update_yaxes(
         visible=show_yaxis_ticks,

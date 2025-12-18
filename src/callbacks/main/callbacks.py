@@ -28,8 +28,8 @@ _MAIN_CTX_CACHE = {}
 _MAIN_CTX_TTL = 120  # segundos
 
 MOCK_INTEGRITY_BASELINE = True
-MOCK_BASELINE_MULT = 6.0
-MOCK_ONLY_NETWORKS = {"NET"}  # si solo quieres NET
+MOCK_BASELINE_MULT = 1.25
+MOCK_ONLY_NETWORKS = {"NET", "ATT", "TEF"}  # si solo quieres NET
 # Última clave renderizada para evitar re-render idéntico
 _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
@@ -405,6 +405,47 @@ def register_callbacks(app):
             store_payload = {"columns": [], "rows": []}
             empty_alert = dbc.Alert("Sin datos para los filtros seleccionados.", color="warning")
             return empty_alert, "Página 1 de 1", "Sin resultados.", store_payload
+        # ---------- Reordenar GLOBAL por % integridad (solo modo global) ----------
+        if sort_mode != "alarmado":
+            def _health_pct_row(row):
+                net = row.get("network")
+                vendor_val = row.get("vendor")
+                cluster_val = row.get("noc_cluster")
+                tech_val = row.get("technology")
+                integ_val = row.get("integrity")
+
+                if not integrity_baseline_map:
+                    return None
+
+                key = (net, vendor_val, cluster_val, tech_val)
+                baseline = integrity_baseline_map.get(key)
+
+                if (
+                    baseline is None
+                    or baseline <= 0
+                    or not isinstance(integ_val, (int, float))
+                    or pd.isna(integ_val)
+                ):
+                    return None
+
+                ratio = float(integ_val) / float(baseline)
+                health_pct = max(0.0, min(100.0, ratio * 100.0))
+                return health_pct
+
+            # mismo % de integridad que usas para la columna %
+            df["integrity_health_pct"] = df.apply(_health_pct_row, axis=1)
+
+            # bucket: 0 = >=80%, 1 = resto (o sin dato)
+            df["complete_bucket"] = df["integrity_health_pct"].apply(
+                lambda x: 0 if isinstance(x, (int, float)) and x >= 80.0 else 1
+            )
+
+            # sort estable: respeta el orden por severidad que viene de SQL
+            df = df.sort_values(
+                by=["complete_bucket"],
+                ascending=[True],
+                kind="mergesort",
+            )
 
         # ---------- alarmas (sin apply) ----------
         if "network" in df.columns:

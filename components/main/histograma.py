@@ -368,9 +368,6 @@ def build_overlay_waves_figure(
     show_traffic_bars: bool = False,
     traffic_agg: str = "mean",    # "mean" | "sum"
     traffic_decimals: int = 1,
-
-    # compat opcional (si en otro lado lo pasas)
-    show_peak: bool = False,      # IGNORADO intencionalmente
 ):
     """
     Dibuja waves con valores CRUDOS en Y a partir de `payload` (z_raw, x_dt, y, row_detail).
@@ -680,6 +677,7 @@ def build_overlay_waves_figure(
         ticks="outside",
         ticklen=5,
         fixedrange=True,
+        showgrid=False,
     )
 
     # y principal

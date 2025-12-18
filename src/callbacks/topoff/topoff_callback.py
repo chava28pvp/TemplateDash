@@ -269,7 +269,16 @@ def register_topoff_callbacks(app):
 
 
         df = add_ucrr_streak_topoff(df)
-
+        if sort_by and sort_by in df.columns:
+            df = df.sort_values(
+                by=sort_by,
+                ascending=ascending,
+                na_position="last",
+                kind="mergesort",
+            ).reset_index(drop=True)
+        elif order_mode == "recent" and not sort_by:
+            # sólo en este caso queremos recientes arriba
+            df = df.sort_values(["fecha", "hora"], ascending=[False, False]).reset_index(drop=True)
         table = render_topoff_table(df, sort_state=sort_state)
 
         total_pages = max(1, math.ceil((total or 0) / max(1, page_size)))

@@ -611,7 +611,7 @@ def render_kpi_table_multinet(
                     if baseline is not None and baseline > 0:
                         ratio = float(num_val) / float(baseline)
                         # aquí ya decides si usas 0.2, 0.8, etc.
-                        if ratio <= 0.8:
+                        if ratio <= 0.799:
                             cls = "cell-integrity-degraded"
                         else:
                             cls = "cell-neutral"

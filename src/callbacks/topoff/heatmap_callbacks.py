@@ -223,7 +223,7 @@ def _run_topoff_histo_for_domain(
             decimals=2,
             show_yaxis_ticks=True,
             selected_wave=selected_wave,
-            show_traffic_bars=True,
+            show_traffic_bars=False,
             traffic_agg="mean",
             traffic_decimals=1,
         ) if pct_payload else go.Figure()

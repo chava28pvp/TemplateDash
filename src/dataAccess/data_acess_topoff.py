@@ -583,17 +583,16 @@ def fetch_topoff_paginated_global_sort(
     if sort_by_friendly and sort_by_friendly in COLMAP:
         real = COLMAP[sort_by_friendly]
         direction = "ASC" if ascending else "DESC"
+
         if sort_by_friendly in NUMERIC_COLS:
             real_expr = f"CAST(NULLIF({_quote(real)}, '') AS DECIMAL(18,6))"
         else:
             real_expr = f"NULLIF({_quote(real)}, '')"
-        order_by = (
-            f"({real_expr} IS NULL) ASC, "
-            f"{real_expr} {direction}, "
-            f"{_quote(COLMAP['fecha'])} DESC, "
-            f"{_quote(COLMAP['hora'])} DESC"
-        )
+
+        # ✅ SIN coma final
+        order_by = f"({real_expr} IS NULL) ASC, {real_expr} {direction}"
     else:
+        # fallback cuando no hay sort_by_friendly
         order_by = f"{_quote(COLMAP['fecha'])} DESC, {_quote(COLMAP['hora'])} DESC"
 
     count_sql = f"""
