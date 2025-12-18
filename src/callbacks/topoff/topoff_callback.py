@@ -4,6 +4,7 @@ from dash import Input, Output, State, ctx, ALL
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
+from src.Utils.alarmados import add_ucrr_streak_topoff
 from src.dataAccess.data_acess_topoff import (
     fetch_topoff_paginated,
     fetch_topoff_paginated_global_sort,
@@ -265,6 +266,9 @@ def register_topoff_callbacks(app):
         if df is None or df.empty:
             empty = dbc.Alert("Sin datos para mostrar.", color="warning")
             return empty, "Página 1 de 1", "Sin resultados."
+
+
+        df = add_ucrr_streak_topoff(df)
 
         table = render_topoff_table(df, sort_state=sort_state)
 

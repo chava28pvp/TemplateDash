@@ -19,6 +19,7 @@ ROW_KEYS = [
 ]
 
 BASE_GROUPS = [
+    ("OCURR", ["ucrr"]),
     ("PS_TRAFF", ["ps_traff_gb"]),
     ("PS_RRC", ["ps_rrc_ia_percent", "ps_rrc_fail"]),
     ("PS_RAB", ["ps_rab_ia_percent", "ps_rab_fail"]),
@@ -45,7 +46,7 @@ DISPLAY = {
     "rnc": "RNC",
     "nodeb": "NodeB",
     "cluster": "Cluster",
-
+    "ucrr": "Ocurr",
     # PS
     "ps_traff_gb": "GB",
     "ps_rrc_ia_percent": "%IA",
@@ -56,6 +57,7 @@ DISPLAY = {
     "ps_s1_fail": "FAIL",
     "ps_drop_dc_percent": "%DC",
     "ps_drop_abnrel": "ABNREL",
+
 
     # CS
     "cs_traff_erl": "ERL",
@@ -303,6 +305,7 @@ def build_header(sort_state=None):
 def render_topoff_table(df: pd.DataFrame, sort_state=None):
     if df is None or df.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
+
 
     metric_cols = [c for _, cols in BASE_GROUPS for c in cols]
     visible = [c for c in ROW_KEYS + metric_cols if c in df.columns]

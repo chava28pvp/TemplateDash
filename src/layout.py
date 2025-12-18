@@ -660,7 +660,6 @@ def serve_layout():
             dbc.Row([
                 dbc.Col(
                     dbc.Card([
-
                         dbc.CardHeader(
                             dbc.Row([
                                 dbc.Col(html.H4("Histogramas TopOff", className="m-0"), width="auto"),
@@ -670,78 +669,67 @@ def serve_layout():
 
                         dbc.CardBody([
 
-                            # Store de selección compartida (si no lo declaraste fuera)
-                            # dcc.Store(id="topoff-histo-selected-wave"),
+                            html.H5("PS", className="text-info text-center mb-3"),
 
                             dbc.Row([
-                                dbc.Col(
-                                    html.Div(
-                                        dcc.Dropdown(
-                                            id="topoff-kpi-domain",
-                                            options=[
-                                                {"label": "PS", "value": "PS"},
-                                                {"label": "CS", "value": "CS"},
-                                            ],
-                                            value="PS",
-                                            clearable=False,
-                                            searchable=False,
-                                            className="dd-black-options",
-                                            style={"width": "140px"}
-                                        ),
-                                        className="d-flex justify-content-center mb-2"
-                                    ),
-                                    md=12
-                                ),
-                                # -------- Histograma % --------
+                                # PS %
                                 dbc.Col(
                                     html.Div([
-                                        html.H5("%", className="mb-2 text-center"),
-                                        html.Div(
-                                            dcc.Loading(
-                                                dcc.Graph(
-                                                    id="topoff-hi-pct",
-                                                    config={"displayModeBar": False},
-                                                    className="histo-wide",
-                                                    style={"height": "420px", "width": "1400px", "margin": "0"}
-                                                ),
-                                                type="default"
-                                            ),
-                                            className="histo-scroll"
-                                        ),
-                                    ],
-                                        className="hm-wrap",
-                                        style={"overflow": "hidden", "marginBottom": "6px"}),
-                                    md=6, sm=12, className="my-0"
+                                        html.H6("%", className="mb-2 text-center"),
+                                        dcc.Loading(
+                                            dcc.Graph(id="topoff-hi-pct-ps", config={"displayModeBar": False}),
+                                            type="default"
+                                        )
+                                    ], className="histo-wrap"),
+                                    md=6
                                 ),
 
-                                # -------- Histograma UNIT --------
+                                # PS UNIT
                                 dbc.Col(
                                     html.Div([
-                                        html.H5("UNIT", className="mb-2 text-center"),
-                                        html.Div(
-                                            dcc.Loading(
-                                                dcc.Graph(
-                                                    id="topoff-hi-unit",
-                                                    config={"displayModeBar": False},
-                                                    className="histo-wide",
-                                                    style={"height": "420px", "width": "1400px", "margin": "0"}
-                                                ),
-                                                type="default"
-                                            ),
-                                            className="histo-scroll"
-                                        ),
-                                    ],
-                                        className="hm-wrap",
-                                        style={"overflow": "hidden"}),
-                                    md=6, sm=12, className="my-0"
+                                        html.H6("UNIT", className="mb-2 text-center"),
+                                        dcc.Loading(
+                                            dcc.Graph(id="topoff-hi-unit-ps", config={"displayModeBar": False}),
+                                            type="default"
+                                        )
+                                    ], className="histo-wrap"),
+                                    md=6
                                 ),
-
                             ], className="g-3"),
-                        ], className="p-2"),
 
+                            html.Hr(className="my-4"),
+
+                            html.H5("CS", className="text-warning text-center mb-3"),
+
+                            dbc.Row([
+                                # CS %
+                                dbc.Col(
+                                    html.Div([
+                                        html.H6("%", className="mb-2 text-center"),
+                                        dcc.Loading(
+                                            dcc.Graph(id="topoff-hi-pct-cs", config={"displayModeBar": False}),
+                                            type="default"
+                                        )
+                                    ], className="histo-wrap"),
+                                    md=6
+                                ),
+
+                                # CS UNIT
+                                dbc.Col(
+                                    html.Div([
+                                        html.H6("UNIT", className="mb-2 text-center"),
+                                        dcc.Loading(
+                                            dcc.Graph(id="topoff-hi-unit-cs", config={"displayModeBar": False}),
+                                            type="default"
+                                        )
+                                    ], className="histo-wrap"),
+                                    md=6
+                                ),
+                            ], className="g-3"),
+
+                        ], className="p-2"),
                     ], className="bg-dark text-white border-0 shadow-sm mb-2"),
-                    md=12
-                ),
+                )
             ]),
 
         ]),

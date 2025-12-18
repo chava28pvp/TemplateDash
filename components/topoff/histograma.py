@@ -201,15 +201,31 @@ def build_histo_payloads_topoff(
         mp = metric_maps.get(metric) or {}
         row = [mp.get((rid, off)) for off in range(192)]
 
-        if zero_after_last:
-            # último índice con valor real
-            last_idx = -1
-            for i, v in enumerate(row):
-                if v is not None:
-                    last_idx = i
-            if last_idx >= 0 and last_idx < len(row) - 1:
-                for j in range(last_idx + 1, len(row)):
-                    row[j] = 0.0  # 👈 a partir de aquí 0, no None
+        if not zero_after_last:
+            return row
+
+        # Índice del PRIMER valor real
+        first_idx = -1
+        last_idx = -1
+        for i, v in enumerate(row):
+            if v is not None:
+                if first_idx == -1:
+                    first_idx = i
+                last_idx = i
+
+        # Si no hubo ningún valor real, deja que _interp_nan lo maneje
+        if first_idx == -1:
+            return row
+
+        # 👉 Antes del primer valor, pon 0.0
+        if first_idx > 0:
+            for j in range(0, first_idx):
+                row[j] = 0.0
+
+        # 👉 Después del último valor, pon 0.0 (como ya hacías)
+        if last_idx < len(row) - 1:
+            for j in range(last_idx + 1, len(row)):
+                row[j] = 0.0
 
         return row
 
