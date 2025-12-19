@@ -14,7 +14,7 @@ ROW_KEYS = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
 
 # Grupos SOLO de métricas (sin fecha/hora/vendor/cluster/tech)
 BASE_GROUPS = [
-    ("INTEG", ["integrity"]),
+    ("INTEG", ["alarmas", "integrity", "integrity_deg_pct"]),
     ("PS_TRAFF", ["ps_traff_delta", "ps_traff_gb"]),
     ("PS_RRC",   ["ps_rrc_ia_percent", "ps_rrc_fail"]),
     ("PS_RAB",   ["ps_rab_ia_percent", "ps_rab_fail"]),
@@ -46,7 +46,8 @@ DISPLAY_NAME_BASE = {
     "noc_cluster": "Cluster",
 
     # Métricas
-    "integrity": "Integrity",
+    "integrity": "Integ",
+    "integrity_deg_pct": "%",
 
     "ps_traff_delta": "DELTA",
     "ps_traff_gb": "GB",
@@ -67,6 +68,7 @@ DISPLAY_NAME_BASE = {
     "cs_rab_fail": "FAIL",
     "cs_drop_dc_percent": "%DC",
     "cs_drop_abnrel": "ABNREL",
+    "alarmas": "Ocurr",
 }
 
 # Derivados
@@ -279,17 +281,40 @@ def prefixed_progress_cols(networks: list[str]):
 def prefixed_severity_cols(networks: list[str]):
     return {f"{net}__{c}" for net in networks for c in BASE_SEVERITY_COLS}
 
-def pivot_by_network(df_long: pd.DataFrame, networks=None) -> pd.DataFrame:
+def pivot_by_network(df_long: pd.DataFrame, networks=None, order_map=None) -> pd.DataFrame:
     if networks is None:
         networks = sorted(df_long["network"].dropna().unique().tolist())
+
     df = df_long[df_long["network"].isin(networks)].copy()
     if df.empty:
-       return df
+        return df
 
-    wide = df.pivot_table(index=INDEX_KEYS, columns="network", values=VALUE_COLS, aggfunc="first")
+    value_cols = [c for c in VALUE_COLS if c in df.columns]
+    if not value_cols:
+        return df[INDEX_KEYS].drop_duplicates().reset_index(drop=True)
+
+    wide = df.pivot_table(
+        index=INDEX_KEYS,
+        columns="network",
+        values=value_cols,
+        aggfunc="first",
+        sort=False,  # 👈 importante
+    )
+
     wide.columns = [f"{net}__{val}" for (val, net) in wide.columns]
     wide = wide.reset_index()
+
+    # 👇 aplica orden estable si te lo pasan
+    if order_map:
+        wide["_ord"] = wide[INDEX_KEYS].apply(
+            lambda r: order_map.get(tuple(r.values.tolist()), 10**9),
+            axis=1
+        )
+        wide = wide.sort_values("_ord").drop(columns=["_ord"])
+
     return wide
+
+
 
 # =========================
 # Header 3 niveles (keys + grupos por network)
@@ -300,12 +325,29 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
     ascending = (sort_state or {}).get("ascending", True)
 
     # Nivel 1: keys fijos (igual que antes)
-    left = [
-        html.Th(DISPLAY_NAME_BASE.get(k, k).title(),
-                rowSpan=3,
-                className=f"th-left th-{k}")  # clase específica por columna
-        for k in ROW_KEYS
-    ]
+    left = []
+    for k in ROW_KEYS:
+        label = DISPLAY_NAME_BASE.get(k, k).title()
+
+        if k == "noc_cluster":
+            # 👇 El <th> es clickeable, pero visualmente sigue siendo un th normal
+            left.append(
+                html.Th(
+                    label,
+                    id="main-cluster-header-reset",  # ID para el callback
+                    n_clicks=0,  # habilita clicks
+                    rowSpan=3,
+                    className=f"th-left th-{k} th-clickable",
+                )
+            )
+        else:
+            left.append(
+                html.Th(
+                    label,
+                    rowSpan=3,
+                    className=f"th-left th-{k}",
+                )
+            )
 
     # Nivel 1: Networks
     net_to_span = {}
@@ -331,7 +373,6 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
                 html.Button(
                     arrow,
                     id={"type": "sort-btn", "col": c},
-                    n_clicks=0,
                     className="sort-btn",
                     **{"aria-label": f"Ordenar {c}"}
                 )
@@ -349,8 +390,13 @@ def build_header_3lvl(groups_3lvl, end_of_group_set, sort_state=None):
 # =========================
 # Render principal
 # =========================
-
-def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=None, progress_max_by_col=None):
+def render_kpi_table_multinet(
+    df_in: pd.DataFrame,
+    networks=None,
+    sort_state=None,
+    progress_max_by_col=None,
+    integrity_baseline_map=None,
+):
     if df_in is None or df_in.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
 
@@ -383,6 +429,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
     PROGRESS_COLS = prefixed_progress_cols(networks)
     SEVERITY_COLS = prefixed_severity_cols(networks)
 
+    # --- PROGRESS_MAX_BY_COL: usar dict externo o calcular localmente ---
     if progress_max_by_col is not None:
         PROGRESS_MAX_BY_COL = progress_max_by_col
     else:
@@ -396,6 +443,8 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
                     PROGRESS_MAX_BY_COL[col] = float(valid.max())
                 else:
                     PROGRESS_MAX_BY_COL[col] = None
+            else:
+                PROGRESS_MAX_BY_COL[col] = None
 
     if sort_state:
         sort_col_req = (sort_state or {}).get("column")
@@ -406,7 +455,7 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
 
     # 5) Header (pasa sort_state para flecha)
     header = build_header_3lvl(groups_3lvl, END_OF_GROUP, sort_state=sort_state)
-    VISIBLE_ORDER = ROW_KEYS + METRIC_ORDER
+    VISIBLE_ORDER = ROW_KEYS + METRIC_ORDER  # por si lo usas luego
     idx_map = {c: i for i, c in enumerate(df_wide.columns)}
 
     def _safe_get(row_tuple, col):
@@ -430,12 +479,38 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
             if key == "vendor":
                 cell_content = vendor_badge(val)
                 tds.append(html.Td(cell_content, className=f"td-key td-{key}"))
+
+            elif key == "noc_cluster":
+                content = _fmt_number(val, key)
+                # sacamos también vendor y tech de la fila para el link
+                vendor_val = _safe_get(row, "vendor")
+                tech_val = _safe_get(row, "technology")
+
+                btn = html.Button(
+                    content or "",
+                    id={
+                        "type": "main-cluster-link",
+                        "cluster": val,
+                        "vendor": vendor_val,
+                        "technology": tech_val,
+                    },
+                    n_clicks=0,
+                    className="cluster-link-btn cell-key",  # puedes estilizarla en CSS
+                    title=str(content) if content else "",
+                )
+                tds.append(
+                    html.Td(
+                        btn,
+                        className=f"td-key td-{key}",
+                    )
+                )
+
             else:
                 content = _fmt_number(val, key)
                 tds.append(
                     html.Td(
                         html.Div(content, className="cell-key", title=str(content) if content else ""),
-                        className=f"td-key td-{key}"
+                        className=f"td-key td-{key}",
                     )
                 )
 
@@ -445,6 +520,9 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
             base_name = strip_net(col)
             net = col.split("__", 1)[0] if "__" in col else None
 
+            # ======================================================
+            # PROGRESS BARS
+            # ======================================================
             if col in PROGRESS_COLS:
                 cfg = progress_cfg(base_name, network=net, profile="main")
 
@@ -478,24 +556,98 @@ def render_kpi_table_multinet(df_in: pd.DataFrame, networks=None, sort_state=Non
                     vmax=vmax,
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
-                    width_px=140,
+                    width_px=80,  # más compacto
                     show_value_right=False,
                     scale="log" if use_log else "linear",
                 )
+                td_type_cls = "td-progress"
+
+            # ======================================================
+            # CELDAS NORMALES
+            # ======================================================
             else:
                 num_val = None if (val is None or (isinstance(val, float) and pd.isna(val))) else val
-                if (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
+
+                # --- NUEVO: % de degrade vs baseline (solo texto, sin colores) ---
+                if base_name == "integrity_deg_pct":
+                    vendor_val = _safe_get(row, "vendor")
+                    cluster_val = _safe_get(row, "noc_cluster")
+                    tech_val = _safe_get(row, "technology")
+
+                    key = (net, vendor_val, cluster_val, tech_val)
+                    baseline = integrity_baseline_map.get(key) if integrity_baseline_map else None
+
+                    integ_col = col.replace("integrity_deg_pct", "integrity")
+                    integ_val = _safe_get(row, integ_col)
+
+                    txt = ""
+                    if (
+                            baseline is not None
+                            and isinstance(integ_val, (int, float))
+                            and not pd.isna(integ_val)
+                            and baseline > 0
+                    ):
+                        ratio = float(integ_val) / float(baseline)
+                        # porcentaje RESTANTE respecto a la media:
+                        # baseline=100, actual=80 → 80.0
+                        # baseline=100, actual=50 → 50.0
+                        health_pct = max(0.0, min(100.0, ratio * 100.0))
+                        txt = f"{health_pct:.1f}"
+
+                    # aquí la idea es NO pintarla, solo mostrar el número
+                    cell = html.Div(txt, className="cell-neutral")
+
+                # --- LÓGICA ESPECIAL PARA INTEGRITY (esta sí se pinta) ---
+                elif base_name == "integrity" and isinstance(num_val, (int, float)):
+                    vendor_val = _safe_get(row, "vendor")
+                    cluster_val = _safe_get(row, "noc_cluster")
+                    tech_val = _safe_get(row, "technology")
+                    key = (net, vendor_val, cluster_val, tech_val)
+
+                    baseline = None
+                    if integrity_baseline_map is not None:
+                        baseline = integrity_baseline_map.get(key)
+
+                    if baseline is not None and baseline > 0:
+                        ratio = float(num_val) / float(baseline)
+                        # aquí ya decides si usas 0.2, 0.8, etc.
+                        if ratio <= 0.799:
+                            cls = "cell-integrity-degraded"
+                        else:
+                            cls = "cell-neutral"
+                    else:
+                        cls = "cell-neutral"
+
+                    cell = html.Div(_fmt_number(val, base_name), className=cls)
+
+                # --- SEVERITY normal ---
+                elif (col in SEVERITY_COLS) and isinstance(num_val, (int, float)):
                     cls = f"cell-{cell_severity(base_name, float(num_val), network=net, profile='main')}"
+                    cell = html.Div(_fmt_number(val, base_name), className=cls)
+
+                # --- neutro ---
                 else:
                     cls = "cell-neutral"
-                cell = html.Div(_fmt_number(val, base_name), className=cls)
+                    cell = html.Div(_fmt_number(val, base_name), className=cls)
 
-            td_cls = "td-cell" + (" td-end-of-group" if col in END_OF_GROUP else "")
+                td_type_cls = "td-plain"
+
+            # clases comunes de la celda KPI
+            td_cls = "td-cell " + td_type_cls + (" td-end-of-group" if col in END_OF_GROUP else "")
             tds.append(html.Td(cell, className=td_cls))
 
         body_rows.append(html.Tr(tds))
 
     body = html.Tbody(body_rows)
-    table = dbc.Table([header, body], bordered=False, hover=True, responsive=True, striped=True, size="sm",
-                      className="kpi-table compact")
+    table = dbc.Table(
+        [header, body],
+        bordered=False,
+        hover=True,
+        responsive=True,
+        striped=True,
+        size="sm",
+        className="kpi-table compact",
+    )
     return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
+
+

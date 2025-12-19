@@ -1,8 +1,39 @@
-# src/Utils/thresholds.py
 import os
 import json
 from functools import lru_cache
+import pandas as pd
 from typing import Dict, Any, Optional
+
+from src.Utils.umbrales.utils_umbrales import cell_severity
+
+SEVERITY_METRICS = [
+    "ps_rrc_ia_percent",
+    "ps_rab_ia_percent",
+    "ps_s1_ia_percent",
+    "ps_drop_dc_percent",
+    "cs_rrc_ia_percent",
+    "cs_rab_ia_percent",
+    "cs_drop_dc_percent",
+]
+SEVERITY_KPIS_TOPOFF = [
+    "ps_rrc_ia_percent",
+    "ps_rab_ia_percent",
+    "ps_s1_ia_percent",
+    "ps_drop_dc_percent",
+    "cs_rrc_ia_percent",
+    "cs_rab_ia_percent",
+    "cs_drop_dc_percent",
+    "rtx_tnl_tx_percent",
+]
+
+_MIN_SAFE_COLUMNS = [
+    "fecha", "hora", "technology", "vendor", "cluster"
+]
+# Claves que definen un "registro" para la racha
+KEY_COLS = ["network", "vendor", "noc_cluster", "technology"]
+
+# Columnas de tiempo para ordenar
+TIME_COLS = ["fecha", "hora"]
 
 def load_threshold_cfg(path: str = "data/umbrales.json") -> Dict[str, Any]:
     """
@@ -55,3 +86,152 @@ def excess_base_for(kpi: str, network: str, cfg: Optional[Dict[str, Any]] = None
     cfg = cfg or load_threshold_cfg()
     # si no hay 'excess_base', caerá a 'max' (o lo que exista) vía _get_threshold
     return _get_threshold(kpi, network, cfg, kind="excess_base")
+
+def add_alarm_streak(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Añade 2 columnas al DataFrame:
+      - has_alarm: True/False si tiene al menos 1 KPI en nivel 'critico'
+      - alarmas: racha de horas consecutivas con alarma (se reinicia a 0 cuando no hay alarma)
+
+    Se asume que df tiene columnas:
+      - fecha, hora
+      - network, vendor, noc_cluster, technology
+      - KPIs definidos en SEVERITY_METRICS
+    """
+    if df is None or df.empty:
+        df = pd.DataFrame()
+        df["has_alarm"] = []
+        df["alarmas"] = []
+        return df
+
+    df = df.copy()
+
+    # 1) bandera de alarma por fila
+    def _row_has_alarm(row):
+        net = row.get("network")
+        for metric in SEVERITY_METRICS:
+            if metric not in row:
+                continue
+            val = row[metric]
+            if pd.isna(val):
+                continue
+            try:
+                sev = cell_severity(metric, float(val), network=net, profile="main")
+            except Exception:
+                continue
+            if sev == "critico":
+                return True
+        return False
+
+    df["has_alarm"] = df.apply(_row_has_alarm, axis=1)
+
+    # 2) ordenar por claves + tiempo
+    sort_cols = [c for c in (KEY_COLS + TIME_COLS) if c in df.columns]
+    df = df.sort_values(sort_cols)
+
+    # 3) calcular racha dentro de cada grupo
+    def _compute_group_streak(group: pd.DataFrame) -> pd.DataFrame:
+        streak = 0
+        out = []
+        for flag in group["has_alarm"]:
+            if flag:
+                streak += 1
+            else:
+                streak = 0
+            out.append(streak)
+        group = group.copy()
+        group["alarmas"] = out
+        return group
+
+    df = (
+        df.groupby(KEY_COLS, group_keys=False)
+          .apply(_compute_group_streak)
+          .reset_index(drop=True)
+    )
+
+    return df
+
+def add_ucrr_streak_topoff(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Añade columnas:
+      - has_alarm_topoff: True/False si al menos 1 KPI de severidad está en 'critico'
+                          (usando profile="topoff")
+      - ucrr: racha de registros consecutivos con alarma por
+              (technology, vendor, cluster) en orden fecha/hora/ID.
+    """
+    if df is None or df.empty:
+        df = pd.DataFrame()
+        df["has_alarm_topoff"] = []
+        df["ucrr"] = []
+        return df
+
+    df = df.copy()
+
+    # 1) bandera de alarma por fila (perfil "topoff")
+    def _row_has_alarm_topoff(row):
+        net = row.get("network")  # si existe; si no, no pasa nada
+        for metric in SEVERITY_KPIS_TOPOFF:
+            if metric not in row:
+                continue
+            val = row[metric]
+            if pd.isna(val):
+                continue
+            try:
+                sev = cell_severity(metric, float(val), network=net, profile="topoff")
+            except Exception:
+                continue
+            if sev == "critico":
+                return True
+        return False
+
+    df["has_alarm_topoff"] = df.apply(_row_has_alarm_topoff, axis=1)
+
+    # 2) Definir columnas de grupo y de orden
+
+    # a) columnas mínimas disponibles en el DF
+    safe_cols = [c for c in _MIN_SAFE_COLUMNS if c in df.columns]
+
+    # Para AGRUPAR la racha nos interesan solo las columnas de identidad,
+    # sin fecha/hora (la fecha/hora se usa para el orden, no para definir "quién es quién").
+    group_cols = [c for c in safe_cols if c not in ("fecha", "hora")]
+
+    # Si por alguna razón no viene technology/vendor/cluster, caemos a lo que haya
+    if not group_cols:
+        group_cols = safe_cols[:]  # en el peor caso usamos todo
+
+    # b) columnas de orden: fecha, hora, y luego ID (si existe) para romper empates
+    sort_cols = []
+    for c in ("fecha", "hora"):
+        if c in df.columns:
+            sort_cols.append(c)
+    if "ID" in df.columns:
+        sort_cols.append("ID")
+
+    if sort_cols:
+        df = df.sort_values(sort_cols)
+
+    # 3) calcular racha dentro de cada grupo
+    def _compute_group_streak(group: pd.DataFrame) -> pd.DataFrame:
+        streak = 0
+        out = []
+        for flag in group["has_alarm_topoff"]:
+            if flag:
+                streak += 1
+            else:
+                streak = 0
+            out.append(streak)
+        group = group.copy()
+        group["ucrr"] = out
+        return group
+
+    if group_cols:
+        df = (
+            df.groupby(group_cols, group_keys=False)
+              .apply(_compute_group_streak)
+              .reset_index(drop=True)
+        )
+    else:
+        # si no hay columnas de grupo, aplica racha global
+        df = _compute_group_streak(df)
+
+    return df

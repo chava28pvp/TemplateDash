@@ -19,6 +19,7 @@ ROW_KEYS = [
 ]
 
 BASE_GROUPS = [
+    ("OCURR", ["ucrr"]),
     ("PS_TRAFF", ["ps_traff_gb"]),
     ("PS_RRC", ["ps_rrc_ia_percent", "ps_rrc_fail"]),
     ("PS_RAB", ["ps_rab_ia_percent", "ps_rab_fail"]),
@@ -45,7 +46,7 @@ DISPLAY = {
     "rnc": "RNC",
     "nodeb": "NodeB",
     "cluster": "Cluster",
-
+    "ucrr": "Ocurr",
     # PS
     "ps_traff_gb": "GB",
     "ps_rrc_ia_percent": "%IA",
@@ -56,6 +57,7 @@ DISPLAY = {
     "ps_s1_fail": "FAIL",
     "ps_drop_dc_percent": "%DC",
     "ps_drop_abnrel": "ABNREL",
+
 
     # CS
     "cs_traff_erl": "ERL",
@@ -250,10 +252,27 @@ def build_header(sort_state=None):
     sort_col = (sort_state or {}).get("column")
     ascending = (sort_state or {}).get("ascending", True)
 
-    row1 = [
-        html.Th(DISPLAY.get(k, k).title(), rowSpan=2, className=f"th-left th-{k}")
-        for k in ROW_KEYS
-    ]
+    row1 = []
+    for k in ROW_KEYS:
+        # 🔹 Header especial para Cluster: un "button" invisible
+        if k == "cluster":
+            content = html.Button(
+                DISPLAY.get(k, k).title(),
+                id="topoff-cluster-header-btn",
+                n_clicks=0,
+                className="cluster-header-btn",  # lo estilizamos para que no parezca botón
+            )
+        else:
+            content = DISPLAY.get(k, k).title()
+
+        row1.append(
+            html.Th(
+                content,
+                rowSpan=2,
+                className=f"th-left th-{k}",
+            )
+        )
+
     for grp, cols in BASE_GROUPS:
         row1.append(html.Th(grp, colSpan=len(cols), className="th-group"))
 
@@ -277,6 +296,7 @@ def build_header(sort_state=None):
             )
             cls = "th-sub" + (" th-sorted" if is_sorted else "")
             row2.append(html.Th(inner, className=cls))
+
     return html.Thead([html.Tr(row1), html.Tr(row2)])
 
 
@@ -285,6 +305,7 @@ def build_header(sort_state=None):
 def render_topoff_table(df: pd.DataFrame, sort_state=None):
     if df is None or df.empty:
         return dbc.Alert("Sin datos para los filtros seleccionados.", color="warning", className="my-3")
+
 
     metric_cols = [c for _, cols in BASE_GROUPS for c in cols]
     visible = [c for c in ROW_KEYS + metric_cols if c in df.columns]
@@ -371,7 +392,7 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
                     vmax=vmax,
                     label_tpl=cfg.get("label", "{value:.1f}"),
                     decimals=cfg.get("decimals", 1),
-                    width_px=140,
+                    width_px=80,
                     show_value_right=False,
                     scale="log" if use_log else "linear",
                 )

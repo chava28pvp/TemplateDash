@@ -65,3 +65,10 @@
 .kb--warning { --kb-fill: #ffc107; }
 .kb--danger  { --kb-fill: #dc3545; }
 .kb--info    { --kb-fill: #0dcaf0; }
+/* color on integrity */
+
+.cell-integrity-degraded {
+    background-color: #9a7cc7;
+    color: #ffffff;
+    font-weight: 600;
+}

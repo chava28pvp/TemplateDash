@@ -22,8 +22,17 @@ _DFTS_TTL = 300  # segundos
 
 # Última clave renderizada para evitar re-render idéntico
 _LAST_HEATMAP_KEY = None
-_LAST_HI_KEY = None
+_LAST_HI_KEY = {"PS": None, "CS": None}
+# Cache simple en memoria para meta de alarmados
+_ALARM_META_CACHE = {}
+_ALARM_META_TTL = 300  # seg
 
+# Cache de payloads del heatmap por state_key
+_HM_PAYLOAD_CACHE = {}
+_HM_PAYLOAD_TTL = 120  # seg
+
+PS_VALORES = ("PS_RRC", "PS_S1", "PS_DROP", "PS_RAB")
+CS_VALORES = ("CS_RRC", "CS_DROP", "CS_RAB")
 
 def _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit):
     """Clave estable del estado visible del heatmap (sin hora)."""
@@ -78,6 +87,175 @@ def _as_list(x):
     if isinstance(x, (list, tuple)):
         return list(x)
     return [x]
+def _cache_get(cache: dict, key, ttl: int):
+    now = time.time()
+    hit = cache.get(key)
+    if hit and (now - hit["ts"] < ttl):
+        return hit["data"]
+    return None
+
+
+def _cache_set(cache: dict, key, data):
+    cache[key] = {"data": data, "ts": time.time()}
+
+
+def _fetch_alarm_meta_cached(today_str, vendors, clusters, networks, technologies):
+    key = (
+        "alarm_meta",
+        today_str,
+        tuple(sorted(vendors or [])),
+        tuple(sorted(clusters or [])),
+        tuple(sorted(networks or [])),
+        tuple(sorted(technologies or [])),
+    )
+    hit = _cache_get(_ALARM_META_CACHE, key, _ALARM_META_TTL)
+    if hit is not None:
+        return hit
+
+    df_meta, keys = fetch_alarm_meta_for_heatmap(
+        fecha=today_str,
+        vendors=vendors or None,
+        clusters=clusters or None,
+        networks=networks or None,
+        technologies=technologies or None,
+    )
+
+    data = (df_meta, keys)
+    _cache_set(_ALARM_META_CACHE, key, data)
+    return data
+
+def _valores_by_domain(domain: str):
+    return CS_VALORES if str(domain).upper() == "CS" else PS_VALORES
+
+def _build_histograma_for_domain(
+    domain: str,
+    sel_wave,
+    fecha,
+    networks,
+    technologies,
+    vendors,
+    clusters,
+    hm_page_state,
+    link_state,
+):
+    global _LAST_HI_KEY
+
+    selected_wave = (sel_wave or {}).get("series_key")
+
+    # Normaliza filtros
+    networks = _as_list(networks)
+    technologies = _as_list(technologies)
+    vendors = _as_list(vendors)
+    clusters = _as_list(clusters)
+
+    # APLICAR filtro extra desde main (igual que en TopOff)
+    clusters_effective = clusters
+    vendors_effective = vendors
+    technologies_effective = technologies
+
+    if link_state and link_state.get("selected"):
+        sel = link_state["selected"]
+        clus = sel.get("cluster")
+        ven = sel.get("vendor")
+        tech = sel.get("technology")
+
+        if clus:
+            clusters_effective = [clus]
+        if ven:
+            vendors_effective = [ven]
+        if tech:
+            technologies_effective = [tech]
+
+    # Paginado
+    page = int((hm_page_state or {}).get("page", 1))
+    page_sz = int((hm_page_state or {}).get("page_size", 50))
+    offset = max(0, (page - 1) * page_sz)
+    limit = max(1, page_sz)
+
+    # Clave de estado (sin selected_x) por dominio
+    state_key = (
+        _hm_key(
+            fecha,
+            networks,
+            technologies_effective,
+            vendors_effective,
+            clusters_effective,
+            offset,
+            limit,
+        )
+        + f"|selw={selected_wave}|dom={domain}"
+    )
+
+    if _LAST_HI_KEY.get(domain) == state_key and ctx.triggered_id != "histo-selected-wave":
+        return None, None, None, True  # marca que no hay cambios (usaremos no_update fuera)
+
+    # Fechas
+    try:
+        today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
+    except Exception:
+        today_dt = datetime.utcnow()
+    yday_dt = today_dt - timedelta(days=1)
+    today_str = today_dt.strftime("%Y-%m-%d")
+    yday_str = yday_dt.strftime("%Y-%m-%d")
+
+    # Datos
+    df_ts = _fetch_df_ts_cached(
+        today_str, yday_str,
+        networks,
+        technologies_effective,
+        vendors_effective,
+        clusters_effective,
+    )
+
+    if networks:
+        nets_heat = networks
+    else:
+        nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) if (
+            df_ts is not None and not df_ts.empty and "network" in df_ts.columns
+        ) else []
+
+    df_meta_heat, alarm_keys_set = fetch_alarm_meta_for_heatmap(
+        fecha=today_str,
+        vendors=vendors_effective or None,
+        clusters=clusters_effective or None,
+        networks=nets_heat or None,
+        technologies=technologies_effective or None,
+    )
+
+    if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
+        traffic_metric = "ps_traff_gb" if str(domain).upper() != "CS" else "cs_traff_erl"
+        pct_payload, unit_payload, page_info = build_histo_payloads_fast(
+            df_meta=df_meta_heat,
+            df_ts=df_ts,
+            UMBRAL_CFG=UM_MANAGER.config(),
+            networks=nets_heat,
+            valores_order=_valores_by_domain(domain),
+            today=today_str, yday=yday_str,
+            alarm_keys=alarm_keys_set,
+            alarm_only=False,
+            offset=offset, limit=limit,
+            traffic_metric=traffic_metric,
+        )
+    else:
+        pct_payload = unit_payload = None
+        page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+
+    # Figuras (sin selected_x)
+    fig_pct = build_overlay_waves_figure(
+        pct_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="severity",
+        height=420, smooth_win=3, opacity=0.28, line_width=1.2, decimals=2,
+        show_yaxis_ticks=True, selected_wave=selected_wave, show_traffic_bars=True,
+        traffic_agg="mean", traffic_decimals=1
+    ) if pct_payload else go.Figure()
+
+    fig_unit = build_overlay_waves_figure(
+        unit_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="progress",
+        height=420, smooth_win=3, opacity=0.25, line_width=1.2, decimals=0,
+        show_yaxis_ticks=True, selected_wave=selected_wave, show_traffic_bars=False,
+    ) if unit_payload else go.Figure()
+
+    _LAST_HI_KEY[domain] = state_key
+    return fig_pct, fig_unit, page_info, False
 
 
 def heatmap_callbacks(app):
@@ -99,12 +277,12 @@ def heatmap_callbacks(app):
         State("f-vendor", "value"),
         State("f-cluster", "value"),
         State("heatmap-page-state", "data"),
+        State("hm-order-by", "value"),
         prevent_initial_call=True,
     )
-    def refresh_heatmaps(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state):
+    def refresh_heatmaps(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state, hm_order_by):
         """Render heatmaps + tabla alineados fila-a-fila."""
         global _LAST_HEATMAP_KEY
-
 
         networks = _as_list(networks)
         technologies = _as_list(technologies)
@@ -117,21 +295,24 @@ def heatmap_callbacks(app):
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit)
+        # --- Key de estado (incluye orden) ---
+        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|ord={hm_order_by}"
         if _LAST_HEATMAP_KEY == state_key:
             return (
-                no_update,  # hm-table-container.children
-                no_update,  # hm-pct.figure
-                no_update,  # hm-unit.figure
-                no_update,  # hm-page-indicator.children
-                no_update,  # hm-total-rows-banner.children
-                no_update  # heatmap-page-info.data
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update
             )
+
         # --- Fechas HOY/AYER (sin hora) ---
         try:
             today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
         except Exception:
             today_dt = datetime.utcnow()
+
         yday_dt = today_dt - timedelta(days=1)
         today_str = today_dt.strftime("%Y-%m-%d")
         yday_str = yday_dt.strftime("%Y-%m-%d")
@@ -146,45 +327,59 @@ def heatmap_callbacks(app):
             nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) \
                 if not df_ts.empty and "network" in df_ts.columns else []
 
-        # --- Meta de alarmados (filas base) ---
-        df_meta_heat, alarm_keys_set = fetch_alarm_meta_for_heatmap(
-            fecha=today_str,
-            vendors=vendors or None, clusters=clusters or None,
-            networks=nets_heat or None, technologies=technologies or None,
+        # --- Meta de alarmados (cache) ---
+        # REQUIERE que tengas definido _fetch_alarm_meta_cached(...)
+        df_meta_heat, alarm_keys_set = _fetch_alarm_meta_cached(
+            today_str,
+            vendors,
+            clusters,
+            nets_heat,
+            technologies
         )
-        # DEBUG: ver si el cluster TBD / 3G / NOKIA aparece en df_meta_heat
 
-        # --- Payloads ---
-        if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
-            pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
-                df_meta=df_meta_heat,
-                df_ts=df_ts,
-                UMBRAL_CFG=UM_MANAGER.config(),
-                networks=nets_heat,
-                valores_order=("PS_RRC", "CS_RRC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
-                today=today_str, yday=yday_str,
-                alarm_keys=alarm_keys_set,
-                alarm_only=False,
-                offset=offset,
-                limit=limit,
-            )
+        # --- Payloads con cache por state_key ---
+        # REQUIERE que tengas definidos _HM_PAYLOAD_CACHE, _HM_PAYLOAD_TTL, _cache_get, _cache_set
+        cached = _cache_get(_HM_PAYLOAD_CACHE, state_key, _HM_PAYLOAD_TTL)
+        if cached is not None:
+            pct_payload, unit_payload, page_info = cached
         else:
-            pct_payload = unit_payload = None
-            page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+            if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
+                pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
+                    df_meta=df_meta_heat,
+                    df_ts=df_ts,
+                    UMBRAL_CFG=UM_MANAGER.config(),
+                    networks=nets_heat,
+                    valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+                    today=today_str, yday=yday_str,
+                    alarm_keys=alarm_keys_set,
+                    alarm_only=False,
+                    offset=offset,
+                    limit=limit,
+                    order_by=hm_order_by or "alarm_hours"
+                )
+            else:
+                pct_payload = unit_payload = None
+                page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
+            _cache_set(_HM_PAYLOAD_CACHE, state_key, (pct_payload, unit_payload, page_info))
+
+        # --- Altura alineada a filas ---
         nrows = len((pct_payload or unit_payload or {}).get("y") or [])
         hm_height = _hm_height(nrows)
 
+        # --- Figuras ---
         fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
         fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
 
-        # Tabla
+        # --- Tabla ---
         if pct_payload or unit_payload:
-            table_component = render_heatmap_summary_table(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
+            table_component = render_heatmap_summary_table(
+                pct_payload, unit_payload, pct_decimals=2, unit_decimals=0
+            )
         else:
             table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
 
-        # Indicadores
+        # --- Indicadores ---
         total = int(page_info.get("total_rows", 0))
         showing = int(page_info.get("showing", 0))
         start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
@@ -193,18 +388,16 @@ def heatmap_callbacks(app):
         hm_indicator = f"Página {int((hm_page_state or {}).get('page', 1))} de {total_pg}"
         hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
 
-        # === NUEVO: construir encabezados de tiempo (2 filas) ===
-        if pct_payload or unit_payload:
-            x_dt = (pct_payload or unit_payload).get("x_dt") or []
-            dates_children, hours_children = _build_time_header_children(x_dt)
-        else:
-            dates_children, hours_children = [], []
-
         _LAST_HEATMAP_KEY = state_key
 
-        return (table_component, fig_pct, fig_unit,
-                hm_indicator, hm_banner, page_info
-                )
+        return (
+            table_component,
+            fig_pct,
+            fig_unit,
+            hm_indicator,
+            hm_banner,
+            page_info
+        )
 
     @app.callback(
         Output("heatmap-trigger", "data"),
@@ -214,9 +407,10 @@ def heatmap_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("heatmap-page-state", "data"),  # dispara por paginado del heatmap
+        Input("hm-order-by", "value"),
         prevent_initial_call=False,  # permite “bootstrap” al cargar
     )
-    def heatmap_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state):
+    def heatmap_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state, _ord):
         return {"ts": time.time()}
 
     @app.callback(
@@ -227,9 +421,10 @@ def heatmap_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("hm-page-size", "value"),
+        Input("hm-order-by", "value"),
         prevent_initial_call=False,  # bootstrap
     )
-    def hm_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
+    def hm_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size, _ord):
         ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 
@@ -269,96 +464,51 @@ def heatmap_callbacks(app):
     # 8) Histograma render
     # -------------------------------------------------
     @app.callback(
-        Output("hi-pct", "figure"),
-        Output("hi-unit", "figure"),
+        Output("hi-pct-ps", "figure"),
+        Output("hi-unit-ps", "figure"),
         Output("histo-page-info", "data"),
         Input("histo-trigger", "data"),
-        Input("histo-selected-wave", "data"),  # 👈 sólo wave
+        Input("histo-selected-wave", "data"),
         State("f-fecha", "date"),
         State("f-network", "value"),
         State("f-technology", "value"),
         State("f-vendor", "value"),
         State("f-cluster", "value"),
         State("histo-page-state", "data"),
+        State("topoff-link-state", "data"),
         prevent_initial_call=True,
     )
-    def refresh_histograma(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state):
-        global _LAST_HI_KEY
-
-        selected_wave = (sel_wave or {}).get("series_key")
-
-        # Normaliza filtros
-        networks = _as_list(networks)
-        technologies = _as_list(technologies)
-        vendors = _as_list(vendors)
-        clusters = _as_list(clusters)
-
-        # Paginado
-        page = int((hm_page_state or {}).get("page", 1))
-        page_sz = int((hm_page_state or {}).get("page_size", 50))
-        offset = max(0, (page - 1) * page_sz)
-        limit = max(1, page_sz)
-
-        # Clave de estado (sin selected_x)
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|selw={selected_wave}"
-        if _LAST_HI_KEY == state_key and ctx.triggered_id != "histo-selected-wave":
-            return no_update, no_update, no_update
-
-        # Fechas
-        try:
-            today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
-        except Exception:
-            today_dt = datetime.utcnow()
-        yday_dt = today_dt - timedelta(days=1)
-        today_str = today_dt.strftime("%Y-%m-%d")
-        yday_str = yday_dt.strftime("%Y-%m-%d")
-
-        # Datos
-        df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
-        if networks:
-            nets_heat = networks
-        else:
-            nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) if (
-                        df_ts is not None and not df_ts.empty and "network" in df_ts.columns) else []
-
-        df_meta_heat, alarm_keys_set = fetch_alarm_meta_for_heatmap(
-            fecha=today_str,
-            vendors=vendors or None, clusters=clusters or None,
-            networks=nets_heat or None, technologies=technologies or None,
+    def refresh_histograma_ps(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state,
+                              link_state):
+        fig_pct, fig_unit, page_info, is_cache_hit = _build_histograma_for_domain(
+            "PS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state
         )
-
-        if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
-            pct_payload, unit_payload, page_info = build_histo_payloads_fast(
-                df_meta=df_meta_heat,
-                df_ts=df_ts,
-                UMBRAL_CFG=UM_MANAGER.config(),
-                networks=nets_heat,
-                valores_order=("PS_RRC", "CS_RRC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
-                today=today_str, yday=yday_str,
-                alarm_keys=alarm_keys_set,
-                alarm_only=False,
-                offset=offset, limit=limit,
-            )
-        else:
-            pct_payload = unit_payload = None
-            page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
-
-        # Figuras (sin selected_x)
-        fig_pct = build_overlay_waves_figure(
-            pct_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="severity",
-            height=420, smooth_win=3, opacity=0.28, line_width=1.2, decimals=2,
-            show_yaxis_ticks=True, selected_wave=selected_wave
-        ) if pct_payload else go.Figure()
-
-        fig_unit = build_overlay_waves_figure(
-            unit_payload, UMBRAL_CFG=UM_MANAGER.config(), mode="progress",
-            height=420, smooth_win=3, opacity=0.25, line_width=1.2, decimals=0,
-            show_yaxis_ticks=True, selected_wave=selected_wave
-        ) if unit_payload else go.Figure()
-
-        _LAST_HI_KEY = state_key
+        if is_cache_hit:
+            return no_update, no_update, no_update
         return fig_pct, fig_unit, page_info
 
+    @app.callback(
+        Output("hi-pct-cs", "figure"),
+        Output("hi-unit-cs", "figure"),
+        Input("histo-trigger", "data"),
+        Input("histo-selected-wave", "data"),
+        State("f-fecha", "date"),
+        State("f-network", "value"),
+        State("f-technology", "value"),
+        State("f-vendor", "value"),
+        State("f-cluster", "value"),
+        State("histo-page-state", "data"),
+        State("topoff-link-state", "data"),
+        prevent_initial_call=True,
+    )
+    def refresh_histograma_cs(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state,
+                              link_state):
+        fig_pct, fig_unit, _page_info, is_cache_hit = _build_histograma_for_domain(
+            "CS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state
+        )
+        if is_cache_hit:
+            return no_update, no_update
+        return fig_pct, fig_unit
 
     @app.callback(
         Output("histo-trigger", "data"),
@@ -367,12 +517,12 @@ def heatmap_callbacks(app):
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
-        Input("histo-page-state", "data"),  # dispara por paginado del heatmap
-        prevent_initial_call=False,  # permite “bootstrap” al cargar
+        Input("histo-page-state", "data"),
+        Input("topoff-link-state", "data"),
+        prevent_initial_call=False,
     )
-    def histo_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state):
+    def histo_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state, _link_state):
         return {"ts": time.time()}
-
 
     @app.callback(
         Output("histo-page-state", "data"),
@@ -382,9 +532,10 @@ def heatmap_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("hm-page-size", "value"),
-        prevent_initial_call=False,  # bootstrap
+        Input("topoff-link-state", "data"),
+        prevent_initial_call=False,
     )
-    def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size):
+    def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size, _link_state):
         ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 
@@ -409,13 +560,14 @@ def heatmap_callbacks(app):
         return {"page": page, "page_size": ps}
 
     # Click en % (hi-pct)
+    # Click en % PS
     @app.callback(
         Output("histo-selected-wave", "data"),
-        Input("hi-pct", "clickData"),
-        State("hi-pct", "figure"),
+        Input("hi-pct-ps", "clickData"),
+        State("hi-pct-ps", "figure"),
         prevent_initial_call=True,
     )
-    def on_click_wave_pct(clickData, fig):
+    def on_click_wave_pct_ps(clickData, fig):
         if not clickData or not fig:
             return no_update
         pt = (clickData.get("points") or [{}])[0]
@@ -426,17 +578,59 @@ def heatmap_callbacks(app):
         cd = traces[i].get("customdata")
         if not cd or not cd[0]:
             return no_update
-        series_key = cd[0][0]  # 👈 primera columna del customdata
+        series_key = cd[0][0]
         return {"series_key": series_key}
 
-    # Click en UNIT (hi-unit)
+    # Click en UNIT PS
     @app.callback(
         Output("histo-selected-wave", "data", allow_duplicate=True),
-        Input("hi-unit", "clickData"),
-        State("hi-unit", "figure"),
+        Input("hi-unit-ps", "clickData"),
+        State("hi-unit-ps", "figure"),
         prevent_initial_call=True,
     )
-    def on_click_wave_unit(clickData, fig):
+    def on_click_wave_unit_ps(clickData, fig):
+        if not clickData or not fig:
+            return no_update
+        pt = (clickData.get("points") or [{}])[0]
+        i = pt.get("curveNumber")
+        traces = (fig or {}).get("data") or []
+        if i is None or i >= len(traces):
+            return no_update
+        cd = traces[i].get("customdata")
+        if not cd or not cd[0]:
+            return no_update
+        series_key = cd[0][0]
+        return {"series_key": series_key}
+
+    # Click en % CS
+    @app.callback(
+        Output("histo-selected-wave", "data", allow_duplicate=True),
+        Input("hi-pct-cs", "clickData"),
+        State("hi-pct-cs", "figure"),
+        prevent_initial_call=True,
+    )
+    def on_click_wave_pct_cs(clickData, fig):
+        if not clickData or not fig:
+            return no_update
+        pt = (clickData.get("points") or [{}])[0]
+        i = pt.get("curveNumber")
+        traces = (fig or {}).get("data") or []
+        if i is None or i >= len(traces):
+            return no_update
+        cd = traces[i].get("customdata")
+        if not cd or not cd[0]:
+            return no_update
+        series_key = cd[0][0]
+        return {"series_key": series_key}
+
+    # Click en UNIT CS
+    @app.callback(
+        Output("histo-selected-wave", "data", allow_duplicate=True),
+        Input("hi-unit-cs", "clickData"),
+        State("hi-unit-cs", "figure"),
+        prevent_initial_call=True,
+    )
+    def on_click_wave_unit_cs(clickData, fig):
         if not clickData or not fig:
             return no_update
         pt = (clickData.get("points") or [{}])[0]
@@ -452,67 +646,98 @@ def heatmap_callbacks(app):
 
     @app.callback(
         Output("histo-selected-wave", "data", allow_duplicate=True),
-        Input("hi-pct", "relayoutData"),
-        Input("hi-unit", "relayoutData"),
+        Input("hi-pct-ps", "relayoutData"),
+        Input("hi-unit-ps", "relayoutData"),
+        Input("hi-pct-cs", "relayoutData"),
+        Input("hi-unit-cs", "relayoutData"),
         prevent_initial_call=True,
     )
-    def clear_wave_on_doubleclick(r1, r2):
+    def clear_wave_on_doubleclick(r_ps_pct, r_ps_unit, r_cs_pct, r_cs_unit):
         def is_autosize(r):
-            # Plotly manda estas claves cuando haces doble cliick
             return bool(r) and (
                     r.get("autosize") is True
                     or r.get("xaxis.autorange") is True
                     or r.get("yaxis.autorange") is True
             )
 
-        if is_autosize(r1) or is_autosize(r2):
-            return {}  # ← limpia la selección (deselecciona la wave)
+        if any(is_autosize(r) for r in [r_ps_pct, r_ps_unit, r_cs_pct, r_cs_unit]):
+            return {}
         return no_update
 
+    # PS
     @app.callback(
-        Output("hi-unit", "figure", allow_duplicate=True),
-        Input("hi-pct", "restyleData"),
-        State("hi-unit", "figure"),
-        State("hi-pct", "figure"),
+        Output("hi-unit-ps", "figure", allow_duplicate=True),
+        Input("hi-pct-ps", "restyleData"),
+        State("hi-unit-ps", "figure"),
+        State("hi-pct-ps", "figure"),
         prevent_initial_call=True,
     )
-    def sync_legend_from_pct_to_unit(restyle, unit_fig, pct_fig):
-        # Si no hay interacción o figuras, no hacemos nada
+    def sync_legend_from_pct_to_unit_ps(restyle, unit_fig, pct_fig):
         if not restyle or not unit_fig or not pct_fig:
             return no_update
-
-        # restyle = [update_dict, [indices]]
         try:
             update, idxs = restyle
         except Exception:
             return no_update
-
         if "visible" not in update:
-            # Nos interesa solo cuando cambia la visibilidad vía leyenda
             return no_update
 
         vis_update = update["visible"]
-        # normaliza a lista
         if not isinstance(vis_update, (list, tuple)):
             vis_update = [vis_update] * len(idxs)
 
-        # Copia mutable de la figura de UNIT
         new_unit_fig = unit_fig.copy()
         data_unit = new_unit_fig.get("data", [])
         data_pct = pct_fig.get("data", [])
 
-        # Por cada traza afectada en hi-pct…
         for v, idx in zip(vis_update, idxs):
             if idx is None or idx >= len(data_pct):
                 continue
             trace_pct = data_pct[idx]
-            # cluster viene del legendgroup o del name
             cluster = trace_pct.get("legendgroup") or trace_pct.get("name")
             if not cluster:
                 continue
 
-            # …aplicamos la misma visibilidad a TODAS las trazas
-            # del mismo cluster en hi-unit
+            for t in data_unit:
+                if t.get("legendgroup") == cluster or t.get("name") == cluster:
+                    t["visible"] = v
+
+        return new_unit_fig
+
+    # CS
+    @app.callback(
+        Output("hi-unit-cs", "figure", allow_duplicate=True),
+        Input("hi-pct-cs", "restyleData"),
+        State("hi-unit-cs", "figure"),
+        State("hi-pct-cs", "figure"),
+        prevent_initial_call=True,
+    )
+    def sync_legend_from_pct_to_unit_cs(restyle, unit_fig, pct_fig):
+        if not restyle or not unit_fig or not pct_fig:
+            return no_update
+        try:
+            update, idxs = restyle
+        except Exception:
+            return no_update
+        if "visible" not in update:
+            return no_update
+
+        vis_update = update["visible"]
+        if not isinstance(vis_update, (list, tuple)):
+            vis_update = [vis_update] * len(idxs)
+
+        new_unit_fig = unit_fig.copy()
+        data_unit = new_unit_fig.get("data", [])
+        data_pct = pct_fig.get("data", [])
+
+        for v, idx in zip(vis_update, idxs):
+            if idx is None or idx >= len(data_pct):
+                continue
+            trace_pct = data_pct[idx]
+            cluster = trace_pct.get("legendgroup") or trace_pct.get("name")
+            if not cluster:
+                continue
+
             for t in data_unit:
                 if t.get("legendgroup") == cluster or t.get("name") == cluster:
                     t["visible"] = v

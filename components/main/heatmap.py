@@ -16,6 +16,7 @@ VALORES_MAP = {
     "CS_RAB":  ("cs_rab_ia_percent", "cs_rab_fail"),
     "PS_DROP": ("ps_drop_dc_percent", "ps_drop_abnrel"),
     "CS_DROP": ("cs_drop_dc_percent", "cs_drop_abnrel"),
+    "PS_S1":   ("ps_s1_ia_percent", "ps_s1_fail"),
 }
 SEV_COLORS = {
     "excelente": "#2ecc71",  # verde
@@ -75,7 +76,7 @@ def _normalize_profile_cfg(cfg: dict, profile: str = "main") -> dict:
 
 def _sev_cfg(metric: str, net: str | None, cfg: dict):
     """Obtiene thresholds y orientación para métricas de % (severity)."""
-    cfg = _normalize_profile_cfg(cfg, profile="main")   # 👈 NUEVO
+    cfg = _normalize_profile_cfg(cfg, profile="main")
     s = (cfg.get("severity") or {}).get(metric) or {}
     # soporta tanto {"orientation":..., "thresholds":{...}} como {"default":{...}, "per_network":{...}}
     if "thresholds" in s:
@@ -258,13 +259,14 @@ def build_heatmap_payloads_fast(
     *,
     UMBRAL_CFG: dict,
     networks=None,
-    valores_order=("PS_RRC","CS_RRC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
+    valores_order=("PS_RRC","CS_RRC","PS_S1", "PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
     today=None,
     yday=None,
     alarm_keys=None,
     alarm_only=False,
     offset=0,
     limit=5,
+    order_by="unit"
 ):
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
@@ -317,50 +319,297 @@ def build_heatmap_payloads_fast(
 
     rows_all = pd.concat(rows_all_list, ignore_index=True)
 
-    # ---- Max UNIT en ayer/hoy (para ordenar filas) ----
-    if df_ts is not None and not df_ts.empty:
-        um_cols = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
-        if um_cols:
-            df_long = df_ts.loc[
-                df_ts["fecha"].astype(str).isin([yday, today]),
-                ["technology","vendor","noc_cluster","network"] + um_cols
-            ]
-            df_long = df_long.melt(
-                id_vars=["technology","vendor","noc_cluster","network"],
-                value_vars=um_cols,
-                var_name="metric",
-                value_name="value",
-            )
-            UM_TO_VAL = {um: name for name, (_, um) in VALORES_MAP.items() if um}
-            df_long["valores"] = df_long["metric"].map(UM_TO_VAL)
+    # ---- Ordenamiento por criterio ----
+    order_by = (order_by or "unit").lower()
 
-            df_maxu = (
-                df_long
-                .dropna(subset=["valores"])
-                .groupby(["technology","vendor","noc_cluster","network","valores"], as_index=False)["value"]
-                .max()
-                .rename(columns={"value":"max_unit"})
-            )
-            rows_all = rows_all.merge(
-                df_maxu,
-                on=["technology","vendor","noc_cluster","network","valores"],
-                how="left"
-            )
+    if df_ts is not None and not df_ts.empty:
+
+        # métricas disponibles
+        pct_metrics = [pm for pm, _ in VALORES_MAP.values() if pm and pm in df_ts.columns]
+        unit_metrics = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
+
+        # filtra ayer/hoy
+        base_cols = ["technology", "vendor", "noc_cluster", "network", "fecha", "hora"]
+        used_cols = base_cols + [c for c in (pct_metrics + unit_metrics) if c in df_ts.columns]
+        df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
+
+        # ===========================
+        # alarm_hours SOLO %
+        # ===========================
+        order_by = (order_by or "unit").lower()
+
+        if df_ts is not None and not df_ts.empty:
+
+            pct_metrics = [pm for pm, _ in VALORES_MAP.values() if pm and pm in df_ts.columns]
+            unit_metrics = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
+
+            base_cols = ["technology", "vendor", "noc_cluster", "network", "fecha", "hora"]
+            used_cols = base_cols + [c for c in (pct_metrics + unit_metrics) if c in df_ts.columns]
+            df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
+
+            # --- alarm_hours % (actual) ---
+            if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct"):
+
+                out_col = "alarm_hours"
+
+                if not pct_metrics:
+                    rows_all[out_col] = np.nan
+                else:
+                    COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP.items() if pm}
+
+                    df_long = df2.melt(
+                        id_vars=base_cols,
+                        value_vars=pct_metrics,
+                        var_name="metric",
+                        value_name="value",
+                    )
+                    df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
+
+                    # --- alarmado por % según UMBRAL_CFG ---
+                    thr_cache = {}
+                    for pm in pct_metrics:
+                        for net in networks:
+                            try:
+                                orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
+                            except Exception:
+                                orient, thr = (
+                                    "lower_is_better",
+                                    {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0},
+                                )
+                            thr_cache[(pm, net)] = (orient, thr)
+
+                    def _is_alarm_pct(metric, net, v):
+                        if v is None or (isinstance(v, float) and np.isnan(v)):
+                            return False
+                        orient, thr = thr_cache.get((metric, net), ("lower_is_better", None))
+                        if not thr:
+                            return False
+                        crit = float(thr.get("critico", 0.0))
+                        fv = float(v)
+                        return (fv <= crit) if orient == "higher_is_better" else (fv >= crit)
+
+                    df_long["alarm"] = [
+                        _is_alarm_pct(m, n, v)
+                        for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
+                    ]
+
+                    # --- por hora: una fila por (key, fecha, hora) con flag de alarma ---
+                    df_hour = (
+                        df_long.dropna(subset=["valores"])
+                        .groupby(
+                            ["technology", "vendor", "noc_cluster", "network", "valores", "fecha", "hora"],
+                            as_index=False
+                        )["alarm"]
+                        .max()
+                    )
+
+                    # Timestamp real de cada punto
+                    df_hour["ts"] = pd.to_datetime(
+                        df_hour["fecha"].astype(str) + " " + df_hour["hora"].astype(str),
+                        errors="coerce",
+                    )
+                    df_hour["ts_alarm"] = df_hour["ts"].where(df_hour["alarm"])
+
+                    grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
+
+                    # --- stats por fila (para ordenamiento) ---
+                    df_stats = (
+                        df_hour.groupby(grp_cols, as_index=False)
+                        .agg(
+                            alarm_hours=("alarm", "sum"),  # nº de horas en alarma (igual que antes)
+                            last_alarm_ts=("ts_alarm", "max"),  # última hora con alarma
+                        )
+                        .rename(columns={"alarm_hours": out_col})
+                    )
+
+                    # máximo valor de la métrica % (para desempate)
+                    df_max = (
+                        df_long.dropna(subset=["valores"])
+                        .groupby(grp_cols, as_index=False)["value"]
+                        .max()
+                        .rename(columns={"value": "max_value"})
+                    )
+
+                    df_stats = df_stats.merge(df_max, on=grp_cols, how="left")
+
+                    # merge a las filas del heatmap
+                    rows_all = rows_all.merge(df_stats, on=grp_cols, how="left")
+
+
+            # --- alarm_hours UNIT (nuevo, con última hora alarmada + max_value) ---
+            elif order_by in ("alarm_hours_unit", "alarm_hours_fail"):
+
+                out_col = "alarm_hours_unit"
+
+                if not unit_metrics:
+                    rows_all[out_col] = np.nan
+                else:
+                    COL_TO_VAL_UNIT = {um: name for name, (_, um) in VALORES_MAP.items() if um}
+
+                    df_long = df2.melt(
+                        id_vars=base_cols,
+                        value_vars=unit_metrics,
+                        var_name="metric",
+                        value_name="value",
+                    )
+                    df_long["valores"] = df_long["metric"].map(COL_TO_VAL_UNIT)
+
+                    # cache min/max por (metric, net) usando tu config progress
+                    prog_cache = {}
+                    for um in unit_metrics:
+                        for net in networks:
+                            try:
+                                mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
+                            except Exception:
+                                mn, mx = (0.0, 1.0)
+                            prog_cache[(um, net)] = (mn, mx)
+
+                    # criterio de alarma UNIT:
+                    # "alarmado" si value >= max configurado (por red si aplica)
+                    def _is_alarm_unit(metric, net, v):
+                        if v is None or (isinstance(v, float) and np.isnan(v)):
+                            return False
+                        mn, mx = prog_cache.get((metric, net), (0.0, None))
+                        if mx is None:
+                            return False
+                        try:
+                            return float(v) >= float(mx)
+                        except Exception:
+                            return False
+
+                    df_long["alarm"] = [
+                        _is_alarm_unit(m, n, v)
+                        for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
+                    ]
+
+                    # --- por hora: una fila por (key, fecha, hora) con flag de alarma ---
+                    df_hour = (
+                        df_long.dropna(subset=["valores"])
+                        .groupby(
+                            ["technology", "vendor", "noc_cluster", "network", "valores", "fecha", "hora"],
+                            as_index=False,
+                        )["alarm"]
+                        .max()
+                    )
+
+                    # timestamp real de cada punto
+                    df_hour["ts"] = pd.to_datetime(
+                        df_hour["fecha"].astype(str) + " " + df_hour["hora"].astype(str),
+                        errors="coerce",
+                    )
+                    df_hour["ts_alarm"] = df_hour["ts"].where(df_hour["alarm"])
+
+                    grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
+
+                    # --- stats UNIT por fila ---
+                    df_stats_unit = (
+                        df_hour.groupby(grp_cols, as_index=False)
+                        .agg(
+                            alarm_hours_unit=("alarm", "sum"),  # nº de horas UNIT en alarma
+                            last_alarm_ts_unit=("ts_alarm", "max"),  # última hora UNIT alarmada
+                        )
+                        .rename(columns={"alarm_hours_unit": out_col})
+                    )
+
+                    # max UNIT (para desempate)
+                    df_max_unit = (
+                        df_long.dropna(subset=["valores"])
+                        .groupby(grp_cols, as_index=False)["value"]
+                        .max()
+                        .rename(columns={"value": "max_value_unit"})
+                    )
+
+                    df_stats_unit = df_stats_unit.merge(df_max_unit, on=grp_cols, how="left")
+
+                    # merge a las filas del heatmap
+                    rows_all = rows_all.merge(df_stats_unit, on=grp_cols, how="left")
+
+        # ===========================
+        # Fallback original: max_pct / max_unit
+        # ===========================
         else:
-            rows_all["max_unit"] = np.nan
-        mask_debug = (
-                (rows_all["noc_cluster"] == "TBD") &
-                (rows_all["technology"] == "3G") &
-                (rows_all["vendor"].str.upper() == "NOKIA") &
-                (rows_all["network"] == "NET")
-        )
+            if order_by == "pct":
+                cols = pct_metrics
+                COL_TO_VAL2 = {pm: name for name, (pm, _) in VALORES_MAP.items() if pm}
+                out_col = "max_pct"
+            else:
+                cols = unit_metrics
+                COL_TO_VAL2 = {um: name for name, (_, um) in VALORES_MAP.items() if um}
+                out_col = "max_unit"
+
+            if cols:
+                df_long = df2.melt(
+                    id_vars=["technology", "vendor", "noc_cluster", "network"],
+                    value_vars=cols,
+                    var_name="metric",
+                    value_name="value",
+                )
+                df_long["valores"] = df_long["metric"].map(COL_TO_VAL2)
+
+                df_max = (
+                    df_long.dropna(subset=["valores"])
+                    .groupby(["technology", "vendor", "noc_cluster", "network", "valores"], as_index=False)["value"]
+                    .max()
+                    .rename(columns={"value": out_col})
+                )
+
+                rows_all = rows_all.merge(
+                    df_max,
+                    on=["technology", "vendor", "noc_cluster", "network", "valores"],
+                    how="left"
+                )
+            else:
+                rows_all[out_col] = np.nan
 
     else:
-        rows_all["max_unit"] = np.nan
+        out_col = "alarm_hours" if order_by in ("alarm", "alarm_hours", "hours") else \
+            ("max_pct" if order_by == "pct" else "max_unit")
+        rows_all[out_col] = np.nan
 
-    # ---- ordenar filas por max_unit DESC ----
-    rows_all["__ord_max_unit__"] = rows_all["max_unit"].astype(float).fillna(float("-inf"))
-    rows_all = rows_all.sort_values("__ord_max_unit__", ascending=False, kind="stable")
+    # --- orden final ---
+    ord_col = "__ord__"
+
+    if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct"):
+        # --- orden basado en % ---
+        rows_all["__ord_last_alarm_ts"] = pd.to_datetime(
+            rows_all.get("last_alarm_ts"), errors="coerce"
+        ).fillna(pd.Timestamp("1970-01-01"))
+
+        rows_all["__ord_alarm_hours"] = pd.to_numeric(
+            rows_all.get("alarm_hours"), errors="coerce"
+        ).fillna(0.0)
+
+        rows_all["__ord_max_value"] = pd.to_numeric(
+            rows_all.get("max_value"), errors="coerce"
+        ).fillna(float("-inf"))
+
+    elif order_by in ("alarm_hours_unit", "alarm_hours_fail"):
+        # --- orden basado en UNIT ---
+        rows_all["__ord_last_alarm_ts"] = pd.to_datetime(
+            rows_all.get("last_alarm_ts_unit"), errors="coerce"
+        ).fillna(pd.Timestamp("1970-01-01"))
+
+        rows_all["__ord_alarm_hours"] = pd.to_numeric(
+            rows_all.get("alarm_hours_unit"), errors="coerce"
+        ).fillna(0.0)
+
+        rows_all["__ord_max_value"] = pd.to_numeric(
+            rows_all.get("max_value_unit"), errors="coerce"
+        ).fillna(float("-inf"))
+
+    else:
+        # fallback: lo que ya tenías (max_pct / max_unit, etc.)
+        rows_all["__ord_last_alarm_ts"] = pd.Timestamp("1970-01-01")
+        rows_all["__ord_alarm_hours"] = 0.0
+        rows_all["__ord_max_value"] = pd.to_numeric(
+            rows_all.get(out_col), errors="coerce"
+        ).fillna(float("-inf"))
+
+    rows_all = rows_all.sort_values(
+        ["__ord_last_alarm_ts", "__ord_alarm_hours", "__ord_max_value"],
+        ascending=[False, False, False],
+        kind="stable",
+    )
 
     # --- paginado ---
     total_rows = len(rows_all)
@@ -381,7 +630,7 @@ def build_heatmap_payloads_fast(
             keys_df,
             on=["technology","vendor","noc_cluster","network"]
         )
-        hh = df_small["hora"].astype(str).str.split(":", n=1, expand=True)[0]
+        hh = df_small["hora"].astype(str).str.split(":", n=1).str[0]
         df_small["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s >= 0) & (s <= 23))
         df_small["offset48"] = df_small["h"] + np.where(df_small["fecha"].astype(str) == today, 24, 0)
         df_small = df_small.dropna(subset=["offset48"])
@@ -392,6 +641,7 @@ def build_heatmap_payloads_fast(
             on=["technology", "vendor", "noc_cluster", "network"],
             how="left",
         )
+
     # --- diccionarios (rid, offset48) → valor por métrica ---
     metric_maps = {}
     if not df_small.empty:
@@ -433,17 +683,19 @@ def build_heatmap_payloads_fast(
             r.noc_cluster,
             r.network,
             r.valores,
-            r.rid,  # 👈 rid real de keys_df
+            r.rid,
         )
         pm, um = VALORES_MAP.get(valores, (None, None))
 
-        y_labels.append(f"{clus} | {tech}/{vend}/{valores}")
-        row_detail.append(f"{tech}/{vend}/{clus}/{net}/{valores}")
+        y_id = f"{tech}/{vend}/{clus}/{net}/{valores}"
+
+        y_labels.append(y_id)
+        row_detail.append(y_id)
 
         row_raw = _row48_raw(pm, rid) if pm else [None] * 48
         row_raw_u = _row48_raw(um, rid) if um else [None] * 48
 
-        # --- % (severity) → score continuo basado en umbrales JSON ---
+        # --- % (severity) → score continuo ---
         if pm:
             orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
             row_color = [
@@ -460,7 +712,7 @@ def build_heatmap_payloads_fast(
             z_pct.append([None] * 48)
             z_pct_raw.append(row_raw)
 
-        # --- UNIT (progress) → normalizado por min/max de config ---
+        # --- UNIT (progress) → normalizado ---
         if um:
             mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
             row_norm = [
@@ -477,7 +729,7 @@ def build_heatmap_payloads_fast(
             z_unit.append([None] * 48)
             z_unit_raw.append(row_raw_u)
 
-        # --- stats por fila (última muestra / máximos) ---
+        # --- stats por fila ---
         arr_u = np.array(
             [v if isinstance(v, (int, float)) else np.nan for v in row_raw_u],
             float
@@ -507,8 +759,8 @@ def build_heatmap_payloads_fast(
 
     # --- rangos dinámicos para color (% y UNIT) ---
     if all_scores_pct:
-        zmin_pct = min(all_scores_pct)
-        zmax_pct = max(all_scores_pct)
+        zmin_pct = 0.0
+        zmax_pct = 1.0
     else:
         zmin_pct, zmax_pct = 0.0, 1.0
 
@@ -558,7 +810,6 @@ def build_heatmap_payloads_fast(
 
     return pct_payload, unit_payload, page_info
 
-
 # =========================
 # Figura de Heatmap (Plotly) — detalle en hover, eje Y ligero
 # =========================
@@ -591,7 +842,7 @@ def build_heatmap_figure(
         ]
     else:  # progress
         colorscale = [
-            [0.0, "#f8f9fa"],
+            [0.0, "#9ec5fe"],
             [1.0, "#0d6efd"],
         ]
 

@@ -570,25 +570,6 @@ def fetch_kpis_paginated_severity_global_sort(
     ascending=True,
     na_as_empty=False,
 ):
-    """
-    GLOBAL basado en umbrales del JSON (profiles.main.severity):
-
-      - NO descarta registros (incluye todos los que cumplan el WHERE).
-
-      MODO POR DEFECTO (sin columna seleccionada):
-        ORDER BY
-            severity_score DESC,
-            Date DESC,
-            Time DESC
-
-      MODO CON COLUMNA (sort_by_friendly válido):
-        ORDER BY
-            (metric_expr IS NULL) ASC,   -- NULLS LAST
-            metric_expr {ASC|DESC},      -- criterio principal
-            severity_score DESC,         -- desempate
-            Date DESC,
-            Time DESC
-    """
     page = max(1, int(page))
     page_size = max(1, int(page_size))
     offset = (page - 1) * page_size
@@ -688,7 +669,6 @@ def fetch_kpis_paginated_severity_global_sort(
     return df, int(total)
 
 
-
 def fetch_kpis_paginated_severity_sort(
     *,
     fecha=None,
@@ -720,6 +700,13 @@ def fetch_kpis_paginated_severity_sort(
     # Construye expresiones de severidad a partir del JSON
     cfg = load_threshold_cfg()  # data/umbrales.json
     severity_expr, crit_expr, thr_params = _build_severity_expressions_from_json(cfg, profile="main")
+    # 👇 flag de completitud usando INTEGRITY como % (>=80 = completo)
+    c_integ = _quote(COLMAP["integrity"])  # -> `INTEGRITY`
+    complete_flag_expr = (
+        f"CASE "
+        f"WHEN {c_integ} >= 80 THEN 0 "
+        f"ELSE 1 END"
+    )
 
     # COUNT con al menos un KPI en nivel 'critico'
     count_sql = f"""
@@ -735,17 +722,19 @@ def fetch_kpis_paginated_severity_sort(
 
     sel_sql = f"""
         SELECT
-            {", ".join(select_cols)},
-            ({severity_expr}) AS severity_score,
-            ({crit_expr})      AS crit_count
-        FROM {_quote_table(_TABLE_NAME)}
-        WHERE {where_sql}
-          AND ( {crit_expr} ) > 0
-        ORDER BY
-            severity_score DESC,
-            crit_count     DESC,
-            {_quote(COLMAP['noc_cluster'])} ASC
-        LIMIT :_limit OFFSET :_offset
+        {", ".join(select_cols)},
+        ({severity_expr}) AS severity_score,
+        ({crit_expr})      AS crit_count,
+        {complete_flag_expr} AS complete_flag
+    FROM {_quote_table(_TABLE_NAME)}
+    WHERE {where_sql}
+      AND ( {crit_expr} ) > 0
+    ORDER BY
+        complete_flag ASC,
+        {c_integ}   DESC, 
+        severity_score DESC,
+        {_quote(COLMAP['noc_cluster'])} ASC
+    LIMIT :_limit OFFSET :_offset
     """
 
     eng = get_engine()
@@ -990,5 +979,86 @@ def fetch_alarm_meta_for_heatmap(
     # Devuelve sólo columnas base (pero ya vienen en orden)
     df_out = df_meta_heat[["technology","vendor","noc_cluster"]].drop_duplicates().reset_index(drop=True)
     return df_out, alarm_keys_set
+
+def fetch_integrity_baseline_week(
+    *,
+    fecha: str,
+    vendors=None,
+    clusters=None,
+    networks=None,
+    technologies=None,
+) -> pd.DataFrame:
+    """
+    Calcula la media semanal de INTEGRITY para la SEMANA ANTERIOR fija
+    a la semana de `fecha`, usando semanas lunes–domingo.
+
+    Ejemplo:
+      - Si fecha = miércoles 8 de enero,
+        semana actual = lun 6 .. dom 12,
+        semana anterior = lun 30 dic .. dom 5 ene.
+
+    Agrupa por: network, vendor, noc_cluster, technology.
+    """
+    if not fecha:
+        return pd.DataFrame()
+
+    try:
+        selected_dt = datetime.strptime(fecha, "%Y-%m-%d")
+    except Exception:
+        return pd.DataFrame()
+
+    # Lunes de la semana actual (semana fija lunes–domingo)
+    current_monday = selected_dt - timedelta(days=selected_dt.weekday())
+    # Semana anterior completa
+    prev_monday = current_monday - timedelta(days=7)
+    prev_sunday = current_monday - timedelta(days=1)
+
+    start_date = prev_monday.strftime("%Y-%m-%d")
+    end_date = prev_sunday.strftime("%Y-%m-%d")
+
+    # WHERE para vendors/clusters/networks/technologies (sin fecha ni hora)
+    where_sql, params, uv, uc, un, ut = _filters_where_and_params(
+        fecha=None,
+        hora=None,
+        vendors=vendors,
+        clusters=clusters,
+        networks=networks,
+        technologies=technologies,
+    )
+
+    # Añadimos rango de fechas de la semana anterior fija
+    where_sql = (
+        f"({where_sql}) "
+        f"AND {_quote(COLMAP['fecha'])} >= :start_date "
+        f"AND {_quote(COLMAP['fecha'])} <= :end_date"
+    )
+    params["start_date"] = start_date
+    params["end_date"] = end_date
+
+    tbl = _quote_table(_TABLE_NAME)
+    c_net = _quote(COLMAP["network"])
+    c_vend = _quote(COLMAP["vendor"])
+    c_clus = _quote(COLMAP["noc_cluster"])
+    c_tech = _quote(COLMAP["technology"])
+    c_integ = _quote(COLMAP["integrity"])
+
+    sql = f"""
+        SELECT
+            {c_net}  AS network,
+            {c_vend} AS vendor,
+            {c_clus} AS noc_cluster,
+            {c_tech} AS technology,
+            AVG(CAST({c_integ} AS DECIMAL(20,6))) AS integrity_week_avg
+        FROM {tbl}
+        WHERE {where_sql}
+        GROUP BY {c_net}, {c_vend}, {c_clus}, {c_tech}
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(sql, uv, uc, un, ut)
+        df = pd.read_sql(stmt, conn, params=params)
+
+    return df
 
 
