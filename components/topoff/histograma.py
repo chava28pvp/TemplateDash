@@ -547,8 +547,8 @@ def build_overlay_waves_figure_topoff(
             line_color    = base_hex
 
         # Leyenda: una por NodeB · Cluster
-        display_name = f"{cluster} · {valores}" if cluster else str(valores or nodeb)
-        legend_key = display_name
+        display_name = f"{tech} · {vendor} · {cluster} · {site} · {valores}"
+        legend_key = f"{tech}__{vendor}__{cluster}__{site}__{valores}"
 
         showlegend = legend_key not in seen_legend
         seen_legend.add(legend_key)

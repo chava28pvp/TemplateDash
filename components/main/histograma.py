@@ -620,7 +620,8 @@ def build_overlay_waves_figure(
             line_color    = base_color_hex
 
         # leyenda por cluster
-        legend_key = f"{cluster}__{valores}"
+        display_name = f"{tech} • {vendor} • {cluster} • {valores}"
+        legend_key = f"{tech}__{vendor}__{cluster}__{valores}"
         showlegend = legend_key not in seen_legend
         seen_legend.add(legend_key)
 
@@ -640,7 +641,7 @@ def build_overlay_waves_figure(
             x=x, y=raw_plot,
             mode="lines",
             line=dict(width=line_w, color=line_color),
-            name=f"{cluster} • {valores}",
+            name=display_name,
             legendgroup=legend_key,
             showlegend=showlegend,
             opacity=overall_alpha,
