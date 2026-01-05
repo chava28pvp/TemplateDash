@@ -250,6 +250,33 @@ def _sev_score_continuo(value: float | None, orient: str, thr: dict, max_ratio: 
 
     return r
 
+def _sev_level_safe(v, orient, thr):
+    # devuelve 0..4 (0=excelente ... 4=critico)
+    try:
+        fv = float(v)
+    except Exception:
+        return -1
+
+    exc = float(thr.get("excelente", 0))
+    bue = float(thr.get("bueno", exc))
+    reg = float(thr.get("regular", bue))
+    cri = float(thr.get("critico", reg))
+
+    if orient == "higher_is_better":
+        # aquí "peor" es más bajo (invierte)
+        if fv <= cri: return 4
+        if fv <= reg: return 3
+        if fv <= bue: return 2
+        if fv <= exc: return 1
+        return 0
+    else:
+        # lower_is_better: peor es más alto
+        if fv >= cri: return 4
+        if fv >= reg: return 3
+        if fv >= bue: return 2
+        if fv >= exc: return 1
+        return 0
+
 # =========================
 # Payloads de heatmap (48 columnas: Ayer 0–23 | Hoy 24–47) con paginado
 # =========================
@@ -259,7 +286,7 @@ def build_heatmap_payloads_fast(
     *,
     UMBRAL_CFG: dict,
     networks=None,
-    valores_order=("PS_RRC","CS_RRC","PS_S1", "PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
+    valores_order=("PS_RRC","CS_RRC","PS_S1","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
     today=None,
     yday=None,
     alarm_keys=None,
@@ -268,6 +295,10 @@ def build_heatmap_payloads_fast(
     limit=5,
     order_by="unit"
 ):
+    import numpy as np
+    import pandas as pd
+    from datetime import datetime, timedelta
+
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
@@ -299,6 +330,7 @@ def build_heatmap_payloads_fast(
     # --- cartesian (meta x networks) ---
     meta_cols = ["technology", "vendor", "noc_cluster"]
     base = df_meta.drop_duplicates(subset=meta_cols)[meta_cols].reset_index(drop=True)
+
     rows_full = base.assign(_tmp=1).merge(
         pd.DataFrame({"network": networks, "_tmp": 1}),
         on="_tmp"
@@ -322,294 +354,318 @@ def build_heatmap_payloads_fast(
     # ---- Ordenamiento por criterio ----
     order_by = (order_by or "unit").lower()
 
+    # “features” de escalerita (por % o por unit)
+    stair_sort_cols_pct = None
+    stair_sort_cols_unit = None
+
+    # =========================================================
+    # 1) Construye features de orden si hay TS
+    # =========================================================
     if df_ts is not None and not df_ts.empty:
 
-        # métricas disponibles
         pct_metrics = [pm for pm, _ in VALORES_MAP.values() if pm and pm in df_ts.columns]
         unit_metrics = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
 
-        # filtra ayer/hoy
         base_cols = ["technology", "vendor", "noc_cluster", "network", "fecha", "hora"]
         used_cols = base_cols + [c for c in (pct_metrics + unit_metrics) if c in df_ts.columns]
         df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
 
-        # ===========================
-        # alarm_hours SOLO %
-        # ===========================
-        order_by = (order_by or "unit").lower()
+        # --- offset48 (0..47) ---
+        # hora puede venir como "03:00:00" o "03"
+        hh = df2["hora"].astype(str).str.split(":", n=1).str[0]
+        df2["h"] = pd.to_numeric(hh, errors="coerce")
+        df2 = df2[(df2["h"] >= 0) & (df2["h"] <= 23)].copy()
+        df2["h"] = df2["h"].astype(int)
+        df2["offset48"] = df2["h"] + np.where(df2["fecha"].astype(str) == today, 24, 0)
+        df2["offset48"] = pd.to_numeric(df2["offset48"], errors="coerce").fillna(-1).astype(int)
 
-        if df_ts is not None and not df_ts.empty:
+        # ---------------------------------------------------------
+        # A) %: si el modo es alarm_hours -> calcula escalerita %,
+        #    PERO sin cambiar el dropdown (mismo order_by).
+        # ---------------------------------------------------------
+        if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct") and pct_metrics:
 
-            pct_metrics = [pm for pm, _ in VALORES_MAP.values() if pm and pm in df_ts.columns]
-            unit_metrics = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
+            COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP.items() if pm}
+            df_long = df2.melt(
+                id_vars=base_cols + ["offset48"],
+                value_vars=pct_metrics,
+                var_name="metric",
+                value_name="value",
+            )
+            df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
+            if "offset48" not in df2.columns:
+                hh = df2["hora"].astype(str).str.split(":", n=1).str[0]
+                df2["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s >= 0) & (s <= 23))
+                df2 = df2.dropna(subset=["h"]).copy()
+                df2["h"] = df2["h"].astype(int)
+                df2["offset48"] = df2["h"] + np.where(df2["fecha"].astype(str) == today, 24, 0)
+                df2["offset48"] = df2["offset48"].astype(int)
 
-            base_cols = ["technology", "vendor", "noc_cluster", "network", "fecha", "hora"]
-            used_cols = base_cols + [c for c in (pct_metrics + unit_metrics) if c in df_ts.columns]
-            df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
-
-            # --- alarm_hours % (actual) ---
-            if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct"):
-
-                out_col = "alarm_hours"
-
-                if not pct_metrics:
-                    rows_all[out_col] = np.nan
-                else:
-                    COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP.items() if pm}
-
-                    df_long = df2.melt(
-                        id_vars=base_cols,
-                        value_vars=pct_metrics,
-                        var_name="metric",
-                        value_name="value",
-                    )
-                    df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
-
-                    # --- alarmado por % según UMBRAL_CFG ---
-                    thr_cache = {}
-                    for pm in pct_metrics:
-                        for net in networks:
-                            try:
-                                orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
-                            except Exception:
-                                orient, thr = (
-                                    "lower_is_better",
-                                    {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0},
-                                )
-                            thr_cache[(pm, net)] = (orient, thr)
-
-                    def _is_alarm_pct(metric, net, v):
-                        if v is None or (isinstance(v, float) and np.isnan(v)):
-                            return False
-                        orient, thr = thr_cache.get((metric, net), ("lower_is_better", None))
-                        if not thr:
-                            return False
-                        crit = float(thr.get("critico", 0.0))
-                        fv = float(v)
-                        return (fv <= crit) if orient == "higher_is_better" else (fv >= crit)
-
-                    df_long["alarm"] = [
-                        _is_alarm_pct(m, n, v)
-                        for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
-                    ]
-
-                    # --- por hora: una fila por (key, fecha, hora) con flag de alarma ---
-                    df_hour = (
-                        df_long.dropna(subset=["valores"])
-                        .groupby(
-                            ["technology", "vendor", "noc_cluster", "network", "valores", "fecha", "hora"],
-                            as_index=False
-                        )["alarm"]
-                        .max()
-                    )
-
-                    # Timestamp real de cada punto
-                    df_hour["ts"] = pd.to_datetime(
-                        df_hour["fecha"].astype(str) + " " + df_hour["hora"].astype(str),
-                        errors="coerce",
-                    )
-                    df_hour["ts_alarm"] = df_hour["ts"].where(df_hour["alarm"])
-
-                    grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
-
-                    # --- stats por fila (para ordenamiento) ---
-                    df_stats = (
-                        df_hour.groupby(grp_cols, as_index=False)
-                        .agg(
-                            alarm_hours=("alarm", "sum"),  # nº de horas en alarma (igual que antes)
-                            last_alarm_ts=("ts_alarm", "max"),  # última hora con alarma
-                        )
-                        .rename(columns={"alarm_hours": out_col})
-                    )
-
-                    # máximo valor de la métrica % (para desempate)
-                    df_max = (
-                        df_long.dropna(subset=["valores"])
-                        .groupby(grp_cols, as_index=False)["value"]
-                        .max()
-                        .rename(columns={"value": "max_value"})
-                    )
-
-                    df_stats = df_stats.merge(df_max, on=grp_cols, how="left")
-
-                    # merge a las filas del heatmap
-                    rows_all = rows_all.merge(df_stats, on=grp_cols, how="left")
-
-
-            # --- alarm_hours UNIT (nuevo, con última hora alarmada + max_value) ---
-            elif order_by in ("alarm_hours_unit", "alarm_hours_fail"):
-
-                out_col = "alarm_hours_unit"
-
-                if not unit_metrics:
-                    rows_all[out_col] = np.nan
-                else:
-                    COL_TO_VAL_UNIT = {um: name for name, (_, um) in VALORES_MAP.items() if um}
-
-                    df_long = df2.melt(
-                        id_vars=base_cols,
-                        value_vars=unit_metrics,
-                        var_name="metric",
-                        value_name="value",
-                    )
-                    df_long["valores"] = df_long["metric"].map(COL_TO_VAL_UNIT)
-
-                    # cache min/max por (metric, net) usando tu config progress
-                    prog_cache = {}
-                    for um in unit_metrics:
-                        for net in networks:
-                            try:
-                                mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
-                            except Exception:
-                                mn, mx = (0.0, 1.0)
-                            prog_cache[(um, net)] = (mn, mx)
-
-                    # criterio de alarma UNIT:
-                    # "alarmado" si value >= max configurado (por red si aplica)
-                    def _is_alarm_unit(metric, net, v):
-                        if v is None or (isinstance(v, float) and np.isnan(v)):
-                            return False
-                        mn, mx = prog_cache.get((metric, net), (0.0, None))
-                        if mx is None:
-                            return False
-                        try:
-                            return float(v) >= float(mx)
-                        except Exception:
-                            return False
-
-                    df_long["alarm"] = [
-                        _is_alarm_unit(m, n, v)
-                        for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
-                    ]
-
-                    # --- por hora: una fila por (key, fecha, hora) con flag de alarma ---
-                    df_hour = (
-                        df_long.dropna(subset=["valores"])
-                        .groupby(
-                            ["technology", "vendor", "noc_cluster", "network", "valores", "fecha", "hora"],
-                            as_index=False,
-                        )["alarm"]
-                        .max()
-                    )
-
-                    # timestamp real de cada punto
-                    df_hour["ts"] = pd.to_datetime(
-                        df_hour["fecha"].astype(str) + " " + df_hour["hora"].astype(str),
-                        errors="coerce",
-                    )
-                    df_hour["ts_alarm"] = df_hour["ts"].where(df_hour["alarm"])
-
-                    grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
-
-                    # --- stats UNIT por fila ---
-                    df_stats_unit = (
-                        df_hour.groupby(grp_cols, as_index=False)
-                        .agg(
-                            alarm_hours_unit=("alarm", "sum"),  # nº de horas UNIT en alarma
-                            last_alarm_ts_unit=("ts_alarm", "max"),  # última hora UNIT alarmada
-                        )
-                        .rename(columns={"alarm_hours_unit": out_col})
-                    )
-
-                    # max UNIT (para desempate)
-                    df_max_unit = (
-                        df_long.dropna(subset=["valores"])
-                        .groupby(grp_cols, as_index=False)["value"]
-                        .max()
-                        .rename(columns={"value": "max_value_unit"})
-                    )
-
-                    df_stats_unit = df_stats_unit.merge(df_max_unit, on=grp_cols, how="left")
-
-                    # merge a las filas del heatmap
-                    rows_all = rows_all.merge(df_stats_unit, on=grp_cols, how="left")
-
-        # ===========================
-        # Fallback original: max_pct / max_unit
-        # ===========================
-        else:
-            if order_by == "pct":
-                cols = pct_metrics
-                COL_TO_VAL2 = {pm: name for name, (pm, _) in VALORES_MAP.items() if pm}
-                out_col = "max_pct"
-            else:
-                cols = unit_metrics
-                COL_TO_VAL2 = {um: name for name, (_, um) in VALORES_MAP.items() if um}
-                out_col = "max_unit"
-
-            if cols:
-                df_long = df2.melt(
-                    id_vars=["technology", "vendor", "noc_cluster", "network"],
-                    value_vars=cols,
-                    var_name="metric",
-                    value_name="value",
-                )
-                df_long["valores"] = df_long["metric"].map(COL_TO_VAL2)
-
-                df_max = (
-                    df_long.dropna(subset=["valores"])
-                    .groupby(["technology", "vendor", "noc_cluster", "network", "valores"], as_index=False)["value"]
-                    .max()
-                    .rename(columns={"value": out_col})
-                )
-
-                rows_all = rows_all.merge(
-                    df_max,
-                    on=["technology", "vendor", "noc_cluster", "network", "valores"],
+            if "offset48" not in df_long.columns:
+                df_long = df_long.merge(
+                    df2[["technology", "vendor", "noc_cluster", "network", "fecha", "hora",
+                         "offset48"]].drop_duplicates(),
+                    on=["technology", "vendor", "noc_cluster", "network", "fecha", "hora"],
                     how="left"
                 )
-            else:
-                rows_all[out_col] = np.nan
 
-    else:
-        out_col = "alarm_hours" if order_by in ("alarm", "alarm_hours", "hours") else \
-            ("max_pct" if order_by == "pct" else "max_unit")
-        rows_all[out_col] = np.nan
+            grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
 
-    # --- orden final ---
-    ord_col = "__ord__"
+            # cache thresholds por (metric, net)
+            thr_cache = {}
+            for pm in pct_metrics:
+                for net in networks:
+                    try:
+                        orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
+                    except Exception:
+                        orient, thr = ("lower_is_better",
+                                       {"excelente": 0.0, "bueno": 0.0, "regular": 0.0, "critico": 1.0})
+                    thr_cache[(pm, net)] = (orient, thr)
 
+            def _score_pct(metric, net, v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return np.nan
+                orient, thr = thr_cache.get((metric, net), ("lower_is_better",
+                                                            {"excelente": 0.0, "bueno": 0.0, "regular": 0.0,
+                                                             "critico": 1.0}))
+                return _sev_score_continuo(v, orient, thr, max_ratio=2.0)
+
+            def _level_pct(metric, net, v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return -1
+                orient, thr = thr_cache.get((metric, net), ("lower_is_better",
+                                                            {"excelente": 0.0, "bueno": 0.0, "regular": 0.0,
+                                                             "critico": 1.0}))
+                return _sev_level_safe(v, orient, thr)
+
+            # score continuo
+            df_long["score_pct"] = [
+                _score_pct(m, n, v) for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
+            ]
+
+            # nivel discreto (0..4)
+            df_long["lvl_pct"] = [
+                _level_pct(m, n, v) for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
+            ]
+
+            # >>> SOLO regular(3) y critico(4) cuentan para la escalera
+            df_long["score_interest_pct"] = np.where(df_long["lvl_pct"] >= 3.0, df_long["score_pct"], np.nan)
+
+            # Compacta a 1 score por hora (max) por fila (solo “interesantes”)
+            df_score_hour = (
+                df_long.dropna(subset=["valores", "offset48"])
+                .groupby(grp_cols + ["offset48"], as_index=False)["score_interest_pct"]
+                .max()
+                .dropna(subset=["score_interest_pct"])
+            )
+
+            # Si hay algo “interesante”, genera columnas __p_XX para ordenar
+            stair_sort_cols_pct = None
+            if not df_score_hour.empty:
+                df_last = (df_score_hour.sort_values("offset48")
+                           .groupby(grp_cols, as_index=False)
+                           .tail(1)
+                           .rename(columns={"offset48": "__last_off_pct", "score_interest_pct": "__last_score_pct"}))
+
+                wide = df_score_hour.pivot(index=grp_cols, columns="offset48",
+                                           values="score_interest_pct").reset_index()
+                wide = wide.rename(
+                    columns={c: f"__p_{int(c):02d}" for c in wide.columns if isinstance(c, (int, np.integer))})
+
+                rows_all = rows_all.merge(wide, on=grp_cols, how="left")
+                rows_all = rows_all.merge(df_last[grp_cols + ["__last_off_pct", "__last_score_pct"]], on=grp_cols,
+                                          how="left")
+
+                max_off = int(df2["offset48"].max()) if not df2.empty else 47
+                for off in range(0, max_off + 1):
+                    c = f"__p_{off:02d}"
+                    if c not in rows_all.columns:
+                        rows_all[c] = np.nan
+
+                stair_sort_cols_pct = [f"__p_{off:02d}" for off in range(max_off, -1, -1)]
+
+        # ---------------------------------------------------------
+        # B) UNIT: escalerita UNIT (filtrando solo "regular/critico")
+        # ---------------------------------------------------------
+        if order_by in ("alarm_hours_unit", "alarm_hours_fail", "unit") and unit_metrics:
+
+            COL_TO_VAL_UNIT = {um: name for name, (_, um) in VALORES_MAP.items() if um}
+            df_long_u = df2.melt(
+                id_vars=base_cols + ["offset48"],
+                value_vars=unit_metrics,
+                var_name="metric",
+                value_name="value",
+            )
+            df_long_u["valores"] = df_long_u["metric"].map(COL_TO_VAL_UNIT)
+            df_long_u = df_long_u.dropna(subset=["valores"])
+
+            grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
+
+            # cache min/max por (metric, net)
+            prog_cache = {}
+            for um in unit_metrics:
+                for net in networks:
+                    try:
+                        mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
+                    except Exception:
+                        mn, mx = (0.0, 1.0)
+                    prog_cache[(um, net)] = (mn, mx)
+
+            def _score_unit(metric, net, v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return np.nan
+                mn, mx = prog_cache.get((metric, net), (0.0, 1.0))
+                s = _normalize(v, mn, mx)  # 0..1 (puede >1 si rebasa)
+                try:
+                    return float(s)
+                except Exception:
+                    return np.nan
+
+            # score (continuo)
+            df_long_u["score_unit"] = [
+                _score_unit(m, n, v)
+                for m, n, v in zip(df_long_u["metric"], df_long_u["network"], df_long_u["value"])
+            ]
+
+            # >>> NIVEL DISCRETO para UNIT (sin config de "regular", lo inferimos por score)
+            # critico: >=1.0 (ya rebasó max)
+            # regular: >=0.80 (cerca de max)
+            # bueno:   >=0.60
+            # excelente: <0.60
+            su = df_long_u["score_unit"]
+            df_long_u["lvl_unit"] = np.select(
+                [su >= 1.0, su >= 0.80, su >= 0.60],
+                [3, 2, 1],
+                default=0
+            )
+
+            # >>> SOLO regular(2) y critico(3) cuentan para escalerita
+            df_long_u["score_interest_unit"] = np.where(df_long_u["lvl_unit"] >= 2, df_long_u["score_unit"], np.nan)
+
+            # 1 score por hora (max) SOLO “interesantes”
+            df_score_hour_u = (
+                df_long_u.dropna(subset=["offset48", "score_interest_unit"])
+                .groupby(grp_cols + ["offset48"], as_index=False)["score_interest_unit"]
+                .max()
+                .dropna(subset=["score_interest_unit"])
+            )
+
+            stair_sort_cols_unit = None
+            if not df_score_hour_u.empty:
+                df_last_u = (
+                    df_score_hour_u.sort_values("offset48")
+                    .groupby(grp_cols, as_index=False)
+                    .tail(1)
+                    .rename(columns={"offset48": "__last_off_unit",
+                                     "score_interest_unit": "__last_score_unit"})
+                )
+
+                wide_u = df_score_hour_u.pivot(index=grp_cols, columns="offset48",
+                                               values="score_interest_unit").reset_index()
+                wide_u = wide_u.rename(columns={
+                    c: f"__u_{int(c):02d}" for c in wide_u.columns if isinstance(c, (int, np.integer))
+                })
+
+                rows_all = rows_all.merge(wide_u, on=grp_cols, how="left")
+                rows_all = rows_all.merge(
+                    df_last_u[grp_cols + ["__last_off_unit", "__last_score_unit"]],
+                    on=grp_cols,
+                    how="left",
+                )
+
+                max_off = int(df2["offset48"].max()) if ("offset48" in df2.columns and not df2.empty) else 47
+                for off in range(0, max_off + 1):
+                    c = f"__u_{off:02d}"
+                    if c not in rows_all.columns:
+                        rows_all[c] = np.nan
+
+                stair_sort_cols_unit = [f"__u_{off:02d}" for off in range(max_off, -1, -1)]
+
+    # =========================================================
+    # 2) Orden final
+    # =========================================================
     if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct"):
-        # --- orden basado en % ---
-        rows_all["__ord_last_alarm_ts"] = pd.to_datetime(
-            rows_all.get("last_alarm_ts"), errors="coerce"
-        ).fillna(pd.Timestamp("1970-01-01"))
 
-        rows_all["__ord_alarm_hours"] = pd.to_numeric(
-            rows_all.get("alarm_hours"), errors="coerce"
-        ).fillna(0.0)
+        # Si ya construimos la escalera de interés (%), úsala como orden principal
+        if stair_sort_cols_pct and ("__last_off_pct" in rows_all.columns) and ("__last_score_pct" in rows_all.columns):
 
-        rows_all["__ord_max_value"] = pd.to_numeric(
-            rows_all.get("max_value"), errors="coerce"
-        ).fillna(float("-inf"))
+            rows_all["__last_off_pct"] = pd.to_numeric(rows_all["__last_off_pct"], errors="coerce").fillna(-1).astype(
+                int)
+            rows_all["__last_score_pct"] = pd.to_numeric(rows_all["__last_score_pct"], errors="coerce").fillna(
+                float("-inf"))
 
-    elif order_by in ("alarm_hours_unit", "alarm_hours_fail"):
-        # --- orden basado en UNIT ---
-        rows_all["__ord_last_alarm_ts"] = pd.to_datetime(
-            rows_all.get("last_alarm_ts_unit"), errors="coerce"
-        ).fillna(pd.Timestamp("1970-01-01"))
+            # convierte NaN a -inf para que “sin interés” se vaya al fondo
+            for c in stair_sort_cols_pct:
+                rows_all[c] = pd.to_numeric(rows_all[c], errors="coerce").fillna(float("-inf"))
 
-        rows_all["__ord_alarm_hours"] = pd.to_numeric(
-            rows_all.get("alarm_hours_unit"), errors="coerce"
-        ).fillna(0.0)
+            # flag: tiene algo regular/crítico en 48h
+            rows_all["__has_interest_pct"] = (rows_all["__last_off_pct"] >= 0).astype(int)
 
-        rows_all["__ord_max_value"] = pd.to_numeric(
-            rows_all.get("max_value_unit"), errors="coerce"
-        ).fillna(float("-inf"))
+            # Orden tipo “escalerita”:
+            # 1) primero los que tienen algo regular/crítico
+            # 2) dentro de esos: última hora con interés (más reciente arriba)
+            # 3) desempate: score de esa última hora
+            # 4) luego la escalerita completa (última hora -> ... -> primera)
+            rows_all = rows_all.sort_values(
+                by=["__has_interest_pct", "__last_off_pct", "__last_score_pct"] + stair_sort_cols_pct,
+                ascending=[False, False, False] + ([False] * len(stair_sort_cols_pct)),
+                kind="stable",
+            )
+
+        else:
+            # fallback: tu orden actual (última alarma / horas alarma / max_value)
+            rows_all["__ord_last_alarm_ts"] = pd.to_datetime(rows_all.get("last_alarm_ts"), errors="coerce").fillna(
+                pd.Timestamp("1970-01-01"))
+            rows_all["__ord_alarm_hours"] = pd.to_numeric(rows_all.get("alarm_hours"), errors="coerce").fillna(0.0)
+            rows_all["__ord_max_value"] = pd.to_numeric(rows_all.get("max_value"), errors="coerce").fillna(
+                float("-inf"))
+
+            rows_all = rows_all.sort_values(
+                ["__ord_last_alarm_ts", "__ord_alarm_hours", "__ord_max_value"],
+                ascending=[False, False, False],
+                kind="stable",
+            )
+
+
+    elif order_by in ("alarm_hours_unit", "alarm_hours_fail", "unit") and stair_sort_cols_unit:
+
+        # escalerita UNIT (solo regular/critico)
+
+        rows_all["__last_off_unit"] = pd.to_numeric(rows_all.get("__last_off_unit"), errors="coerce").fillna(-1).astype(
+            int)
+
+        rows_all["__last_score_unit"] = pd.to_numeric(rows_all.get("__last_score_unit"), errors="coerce").fillna(
+            float("-inf"))
+
+        for c in stair_sort_cols_unit:
+            rows_all[c] = pd.to_numeric(rows_all[c], errors="coerce").fillna(float("-inf"))
+
+        # flag: tiene algo regular/critico en 48h
+
+        rows_all["__has_interest_unit"] = (rows_all["__last_off_unit"] >= 0).astype(int)
+
+        rows_all = rows_all.sort_values(
+
+            by=["__has_interest_unit", "__last_off_unit", "__last_score_unit"] + stair_sort_cols_unit,
+
+            ascending=[False, False, False] + ([False] * len(stair_sort_cols_unit)),
+
+            kind="stable",
+
+        )
 
     else:
-        # fallback: lo que ya tenías (max_pct / max_unit, etc.)
+        # fallback original (si no hay features escalerita)
+        out_col = "max_unit" if order_by == "unit" else "max_pct"
         rows_all["__ord_last_alarm_ts"] = pd.Timestamp("1970-01-01")
         rows_all["__ord_alarm_hours"] = 0.0
-        rows_all["__ord_max_value"] = pd.to_numeric(
-            rows_all.get(out_col), errors="coerce"
-        ).fillna(float("-inf"))
+        rows_all["__ord_max_value"] = pd.to_numeric(rows_all.get(out_col), errors="coerce").fillna(float("-inf"))
 
-    rows_all = rows_all.sort_values(
-        ["__ord_last_alarm_ts", "__ord_alarm_hours", "__ord_max_value"],
-        ascending=[False, False, False],
-        kind="stable",
-    )
+        rows_all = rows_all.sort_values(
+            ["__ord_last_alarm_ts", "__ord_alarm_hours", "__ord_max_value"],
+            ascending=[False, False, False],
+            kind="stable",
+        )
 
     # --- paginado ---
     total_rows = len(rows_all)
@@ -630,9 +686,13 @@ def build_heatmap_payloads_fast(
             keys_df,
             on=["technology","vendor","noc_cluster","network"]
         )
+
         hh = df_small["hora"].astype(str).str.split(":", n=1).str[0]
-        df_small["h"] = pd.to_numeric(hh, errors="coerce").where(lambda s: (s >= 0) & (s <= 23))
+        df_small["h"] = pd.to_numeric(hh, errors="coerce")
+        df_small = df_small[(df_small["h"] >= 0) & (df_small["h"] <= 23)].copy()
+        df_small["h"] = df_small["h"].astype(int)
         df_small["offset48"] = df_small["h"] + np.where(df_small["fecha"].astype(str) == today, 24, 0)
+        df_small["offset48"] = pd.to_numeric(df_small["offset48"], errors="coerce")
         df_small = df_small.dropna(subset=["offset48"])
         df_small["offset48"] = df_small["offset48"].astype(int)
 
@@ -661,15 +721,10 @@ def build_heatmap_payloads_fast(
         return [mp.get((rid, off)) for off in range(48)]
 
     # --- matrices y stats ---
-    x_dt = [
-        f"{yday}T{h:02d}:00:00" for h in range(24)
-    ] + [
-        f"{today}T{h:02d}:00:00" for h in range(24)
-    ]
+    x_dt = [f"{yday}T{h:02d}:00:00" for h in range(24)] + [f"{today}T{h:02d}:00:00" for h in range(24)]
 
     z_pct, z_unit = [], []
     z_pct_raw, z_unit_raw = [], []
-
     y_labels, row_detail = [], []
     row_last_ts, row_max_pct, row_max_unit = [], [], []
 
@@ -678,30 +733,47 @@ def build_heatmap_payloads_fast(
 
     for r in rows_page.itertuples(index=False):
         tech, vend, clus, net, valores, rid = (
-            r.technology,
-            r.vendor,
-            r.noc_cluster,
-            r.network,
-            r.valores,
-            r.rid,
+            r.technology, r.vendor, r.noc_cluster, r.network, r.valores, r.rid
         )
         pm, um = VALORES_MAP.get(valores, (None, None))
 
         y_id = f"{tech}/{vend}/{clus}/{net}/{valores}"
-
         y_labels.append(y_id)
         row_detail.append(y_id)
 
         row_raw = _row48_raw(pm, rid) if pm else [None] * 48
         row_raw_u = _row48_raw(um, rid) if um else [None] * 48
 
+
         # --- % (severity) → score continuo ---
         if pm:
             orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
-            row_color = [
-                _sev_score_continuo(v, orient, thr, max_ratio=2.0) if v is not None else None
-                for v in row_raw
-            ]
+
+            def _hm_score_pct(v):
+                if v is None:
+                    return None
+
+                # score continuo (0..1 aprox, puede acercarse a 1)
+                s = _sev_score_continuo(v, orient, thr, max_ratio=2.0)
+
+                # nivel discreto según umbrales: excelente/bueno/regular/critico
+                lvl = _sev_level_safe(v, orient, thr)  # típico: 0..4 (4 = critico)
+
+                # convierte/limpia
+                try:
+                    s = float(s)
+                except Exception:
+                    return None
+
+                # rojo SOLO si es critico
+                if lvl >= 4:
+                    return 1.0
+
+                # si NO es critico, jamás permitir 1.0 (evita "casi rojo" como 4.99)
+                return min(s, 0.999)
+
+            row_color = [_hm_score_pct(v) for v in row_raw]
+
             z_pct.append(row_color)
             z_pct_raw.append(row_raw)
 
@@ -715,13 +787,9 @@ def build_heatmap_payloads_fast(
         # --- UNIT (progress) → normalizado ---
         if um:
             mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
-            row_norm = [
-                _normalize(v, mn, mx) if v is not None else None
-                for v in row_raw_u
-            ]
+            row_norm = [_normalize(v, mn, mx) if v is not None else None for v in row_raw_u]
             z_unit.append(row_norm)
             z_unit_raw.append(row_raw_u)
-
             for s in row_norm:
                 if s is not None:
                     all_scores_unit.append(s)
@@ -730,14 +798,8 @@ def build_heatmap_payloads_fast(
             z_unit_raw.append(row_raw_u)
 
         # --- stats por fila ---
-        arr_u = np.array(
-            [v if isinstance(v, (int, float)) else np.nan for v in row_raw_u],
-            float
-        )
-        arr_p = np.array(
-            [v if isinstance(v, (int, float)) else np.nan for v in row_raw],
-            float
-        )
+        arr_u = np.array([v if isinstance(v, (int, float)) else np.nan for v in row_raw_u], float)
+        arr_p = np.array([v if isinstance(v, (int, float)) else np.nan for v in row_raw], float)
 
         if np.isfinite(arr_u).any():
             rmax_u = np.nanmax(arr_u)
@@ -758,19 +820,12 @@ def build_heatmap_payloads_fast(
         row_max_unit.append(rmax_u)
 
     # --- rangos dinámicos para color (% y UNIT) ---
-    if all_scores_pct:
-        zmin_pct = 0.0
-        zmax_pct = 1.0
-    else:
-        zmin_pct, zmax_pct = 0.0, 1.0
-
+    zmin_pct, zmax_pct = (0.0, 1.0)
     if all_scores_unit:
-        zmin_unit = min(all_scores_unit)
-        zmax_unit = max(all_scores_unit)
+        zmin_unit, zmax_unit = min(all_scores_unit), max(all_scores_unit)
     else:
         zmin_unit, zmax_unit = 0.0, 1.0
 
-    # --- payloads ---
     pct_payload = {
         "z": z_pct,
         "z_raw": z_pct_raw,
@@ -810,6 +865,7 @@ def build_heatmap_payloads_fast(
 
     return pct_payload, unit_payload, page_info
 
+
 # =========================
 # Figura de Heatmap (Plotly) — detalle en hover, eje Y ligero
 # =========================
@@ -835,10 +891,11 @@ def build_heatmap_figure(
     # ----- Colores según modo -----
     if mode == "severity":
         colorscale = [
-            [0/3, SEV_COLORS["excelente"]],
-            [1/3, SEV_COLORS["bueno"]],
-            [2/3, SEV_COLORS["regular"]],
-            [3/3, SEV_COLORS["critico"]],
+            [0.00, SEV_COLORS["excelente"]],
+            [1 / 3, SEV_COLORS["bueno"]],
+            [2 / 3, SEV_COLORS["regular"]],
+            [0.999, SEV_COLORS["regular"]],  # <- mantiene naranja hasta 0.999
+            [1.00, SEV_COLORS["critico"]],  # <- rojo solo en 1.00
         ]
     else:  # progress
         colorscale = [

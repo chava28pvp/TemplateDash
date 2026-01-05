@@ -1,3 +1,4 @@
+import os
 import math
 import pandas as pd
 from dash import Input, Output, State, no_update, ctx
@@ -295,8 +296,10 @@ def heatmap_callbacks(app):
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
+        hm_order_by_norm = (hm_order_by or "alarm_hours")
+        hm_order_by_norm = str(hm_order_by_norm).strip().lower()
         # --- Key de estado (incluye orden) ---
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|ord={hm_order_by}"
+        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|ord={hm_order_by_norm}"
         if _LAST_HEATMAP_KEY == state_key:
             return (
                 no_update,
@@ -355,7 +358,7 @@ def heatmap_callbacks(app):
                     alarm_only=False,
                     offset=offset,
                     limit=limit,
-                    order_by=hm_order_by or "alarm_hours"
+                    order_by=hm_order_by_norm
                 )
             else:
                 pct_payload = unit_payload = None
@@ -384,12 +387,11 @@ def heatmap_callbacks(app):
         showing = int(page_info.get("showing", 0))
         start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
         end_i = start_i + showing - 1 if showing else 0
-        total_pg = max(1, math.ceil(total / max(1, int((hm_page_state or {}).get("page_size", 5)))))
-        hm_indicator = f"Página {int((hm_page_state or {}).get('page', 1))} de {total_pg}"
+        total_pg = max(1, math.ceil(total / max(1, page_sz)))
+        hm_indicator = f"Página {page} de {total_pg}"
         hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
 
         _LAST_HEATMAP_KEY = state_key
-
         return (
             table_component,
             fig_pct,
