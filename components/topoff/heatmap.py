@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
@@ -9,7 +10,7 @@ import dash_bootstrap_components as dbc
 
 from components.main.heatmap import (
     _max_date_str, _day_str, _sev_cfg, _sev_score_continuo, _prog_cfg, _normalize,
-    _hm_height, _last_numeric, _only_time, _fmt, _vendor_initial
+    _hm_height, _last_numeric, _only_time, _fmt, _vendor_initial, _sev_level_safe
 )
 
 # =========================================================
@@ -115,10 +116,68 @@ def _normalize_topoff_cols(df: pd.DataFrame) -> pd.DataFrame:
         df = df.rename(columns=ren)
 
     return df
+
+def _norm_key_cols(df: pd.DataFrame, cols):
+    """Hace que llaves de merge/groupby no pierdan filas por NaN/espacios."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    df = df.copy()
+    for c in cols:
+        if c in df.columns:
+            df[c] = (
+                df[c]
+                .fillna("")              # <- CLAVE: evita NaN en llaves
+                .astype(str)
+                .str.strip()
+            )
+    return df
+
+def _norm_hora_str(x) -> str:
+    """
+    Normaliza hora a HH:MM:SS.
+    Acepta: 22, '22', '22:00', '22:00:00', '22:00:00.000', 2200, '2200'
+    """
+    if x is None:
+        return ""
+    # pandas/np nan
+    try:
+        if isinstance(x, float) and np.isnan(x):
+            return ""
+    except Exception:
+        pass
+
+    s = str(x).strip()
+    if s == "" or s.lower() == "nan" or s.lower() == "none":
+        return ""
+
+    # si viene como número "2200" (HHMM) o "22"
+    try:
+        n = int(float(s))
+        if 0 <= n <= 23:
+            return f"{n:02d}:00:00"
+        if 0 <= n <= 2359:
+            hh = n // 100
+            mm = n % 100
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                return f"{hh:02d}:{mm:02d}:00"
+    except Exception:
+        pass
+
+    # si viene con ":" (HH:MM[:SS[.ms]])
+    parts = s.split(":")
+    try:
+        hh = int(parts[0])
+        mm = int(parts[1]) if len(parts) > 1 else 0
+        ss = parts[2] if len(parts) > 2 else "0"
+        # ss puede venir "00.000"
+        ss = int(float(ss))
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+    except Exception:
+        # deja original (último recurso)
+        return s
 # =========================================================
 # PAYLOADS TOPOFF (AYER/Hoy, 48 columnas)
 # =========================================================
-
 def build_heatmap_payloads_topoff(
     df_meta: pd.DataFrame,
     df_ts: pd.DataFrame,
@@ -133,17 +192,8 @@ def build_heatmap_payloads_topoff(
     limit: int = 20,
     order_by: str = "alarm_bins_pct",
 ) -> Tuple[Optional[dict], Optional[dict], dict]:
-    """
-    TopOff main-like:
-    - SIN network
-    - CON cluster (filtro global)
-    - 15 minutos (96 bins por día → 192 en dos días)
-    - Ordena por:
-        alarm_bins_pct  (equivalente a alarm_hours %)
-        alarm_bins_unit (equivalente a alarm_hours unit)
-        pct
-        unit  (default)
-    """
+
+    DEBUG = True  # <- pon False para quitar prints
 
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0, "height": 300}
@@ -159,14 +209,13 @@ def build_heatmap_payloads_topoff(
         yday = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
     # --- métricas requeridas ---
-    metrics_needed = {
-        m for v in valores_order for m in VALORES_MAP_TOPOFF.get(v, (None, None)) if m
-    }
+    metrics_needed = {m for v in valores_order for m in VALORES_MAP_TOPOFF.get(v, (None, None)) if m}
     if not metrics_needed:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0, "height": 300}
 
     # --- base meta ---
     base = df_meta.drop_duplicates(subset=META_COLS_TOPOFF)[META_COLS_TOPOFF].reset_index(drop=True)
+    base = _norm_key_cols(base, META_COLS_TOPOFF)
 
     # --- expand por valores_order ---
     rows_all_list = []
@@ -189,13 +238,12 @@ def build_heatmap_payloads_topoff(
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0, "height": 300}
 
     rows_all = pd.concat(rows_all_list, ignore_index=True)
+    rows_all = _norm_key_cols(rows_all, META_COLS_TOPOFF + ["valores"])
 
     # =========================================================
-    # ✅ ORDENAMIENTO MAIN-LIKE (robusto)
+    # ORDENAMIENTO
     # =========================================================
     order_by = (order_by or "unit").lower()
-
-    # alias compatibles con tu main dropdown
     if order_by in ("alarm_hours", "alarm", "hours", "alarm_hours_pct"):
         order_by = "alarm_bins_pct"
     if order_by in ("alarm_hours_unit", "alarm_hours_fail"):
@@ -206,15 +254,18 @@ def build_heatmap_payloads_topoff(
     # normaliza df_ts columnas
     df_ts = _normalize_topoff_cols(df_ts)
 
+    # --- debug: llaves meta vs TS ---
+    if DEBUG and df_ts is not None and isinstance(df_ts, pd.DataFrame) and not df_ts.empty and all(c in df_ts.columns for c in META_COLS_TOPOFF + ["fecha"]):
+        ts_keys = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), META_COLS_TOPOFF].copy()
+        ts_keys = _norm_key_cols(ts_keys, META_COLS_TOPOFF).drop_duplicates()
+        miss = base.merge(ts_keys, on=META_COLS_TOPOFF, how="left", indicator=True)
+
     if df_ts is not None and isinstance(df_ts, pd.DataFrame) and not df_ts.empty:
 
         pct_metrics  = [pm for pm, _ in VALORES_MAP_TOPOFF.values() if pm and pm in df_ts.columns]
         unit_metrics = [um for _, um in VALORES_MAP_TOPOFF.values() if um and um in df_ts.columns]
 
-        # meta realmente disponible en TS
         meta_present = [c for c in META_COLS_TOPOFF if c in df_ts.columns]
-
-        # sin meta suficiente no podemos calcular bins confiables
         critical = {"technology", "vendor", "cluster", "nodeb"}
         if not critical.issubset(set(meta_present)):
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0, "height": 300}
@@ -223,374 +274,281 @@ def build_heatmap_payloads_topoff(
         base_cols = meta_present + ["fecha", "hora"]
         used_cols = base_cols + [c for c in (pct_metrics + unit_metrics) if c in df_ts.columns]
 
-        df2 = df_ts.loc[
-            df_ts["fecha"].astype(str).isin([yday, today]),
-            used_cols
-        ].copy()
+        df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
+        df2 = _norm_key_cols(df2, base_cols)
 
-        # --- alarm bins % (15m) con última bin alarmada + max_value ---
+        # Normaliza hora
+        if "hora" in df2.columns:
+            df2["hora"] = df2["hora"].apply(_norm_hora_str)
+
+        # offset192
+        df2["q15"] = df2["hora"].apply(_safe_q15_to_idx)
+        df2 = df2.dropna(subset=["q15"]).copy()
+        df2["q15"] = df2["q15"].astype(int)
+
+        df2["offset192"] = df2["q15"] + np.where(df2["fecha"].astype(str) == today, 96, 0)
+        df2["offset192"] = pd.to_numeric(df2["offset192"], errors="coerce").fillna(-1).astype(int)
+        df2 = df2[(df2["offset192"] >= 0) & (df2["offset192"] <= 191)].copy()
+
+        # ======================================================
+        # MAIN-LIKE para % (el que te interesa)
+        # ======================================================
         if order_by in ("alarm_bins_pct", "alarm_pct"):
-            out_col = "alarm_bins_pct"
-
-            if not pct_metrics:
-                rows_all[out_col] = np.nan
-            else:
-                COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP_TOPOFF.items() if pm}
-
-                df_long = df2.melt(
-                    id_vars=base_cols,
-                    value_vars=pct_metrics,
-                    var_name="metric",
-                    value_name="value",
-                )
-                df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
-
-                # cache thresholds por metric (TopOff sin network)
-                thr_cache = {}
-                for pm in pct_metrics:
-                    try:
-                        orient, thr = _sev_cfg(pm, None, UMBRAL_CFG)
-                    except Exception:
-                        orient, thr = (
-                            "lower_is_better",
-                            {"excelente": 0, "bueno": 0, "regular": 0, "critico": 0},
-                        )
-                    thr_cache[pm] = (orient, thr)
-
-                def _is_alarm_pct(metric, v):
-                    if v is None or (isinstance(v, float) and np.isnan(v)):
-                        return False
-                    orient, thr = thr_cache.get(metric, ("lower_is_better", None))
-                    if not thr:
-                        return False
-                    crit = float(thr.get("critico", 0.0))
-                    fv = float(v)
-                    return (fv <= crit) if orient == "higher_is_better" else (fv >= crit)
-
-                df_long["alarm"] = [
-                    _is_alarm_pct(m, v)
-                    for m, v in zip(df_long["metric"], df_long["value"])
-                ]
-
-                # consolida por BIN real (fecha+hora 15m tal cual viene)
-                df_bin = (
-                    df_long.dropna(subset=["valores"])
-                    .groupby(base_cols + ["valores"], as_index=False)["alarm"]
-                    .max()
-                )
-
-                # timestamp por bin
-                df_bin["ts"] = pd.to_datetime(
-                    df_bin["fecha"].astype(str) + " " + df_bin["hora"].astype(str),
-                    errors="coerce",
-                )
-                df_bin["ts_alarm"] = df_bin["ts"].where(df_bin["alarm"])
-
-                grp_cols = meta_present + ["valores"]
-
-                # stats para ordenamiento
-                df_stats_pct = (
-                    df_bin.groupby(grp_cols, as_index=False)
-                    .agg(
-                        alarm_bins_pct=("alarm", "sum"),  # nº de bins en alarma
-                        last_alarm_ts_pct=("ts_alarm", "max"),  # última bin alarmada
-                    )
-                    .rename(columns={"alarm_bins_pct": out_col})
-                )
-
-                # max value % como desempate fino
-                df_maxp = (
-                    df_long.dropna(subset=["valores"])
-                    .groupby(grp_cols, as_index=False)["value"]
-                    .max()
-                    .rename(columns={"value": "max_value_pct"})
-                )
-
-                df_stats_pct = df_stats_pct.merge(df_maxp, on=grp_cols, how="left")
-
-                rows_all = rows_all.merge(
-                    df_stats_pct,
-                    on=grp_cols,
-                    how="left",
-                )
-
-        # --- alarm bins UNIT (15m) con última bin alarmada + max_value_unit ---
-        elif order_by in ("alarm_bins_unit", "alarm_unit"):
-            out_col = "alarm_bins_unit"
-
-            if not unit_metrics:
-                rows_all[out_col] = np.nan
-            else:
-                COL_TO_VAL_UNIT = {um: name for name, (_, um) in VALORES_MAP_TOPOFF.items() if um}
-
-                df_long = df2.melt(
-                    id_vars=base_cols,
-                    value_vars=unit_metrics,
-                    var_name="metric",
-                    value_name="value",
-                )
-                df_long["valores"] = df_long["metric"].map(COL_TO_VAL_UNIT)
-
-                # cache min/max por metric (TopOff sin network)
-                prog_cache = {}
-                for um in unit_metrics:
-                    try:
-                        mn, mx = _prog_cfg(um, None, UMBRAL_CFG)
-                    except Exception:
-                        mn, mx = (0.0, 1.0)
-                    prog_cache[um] = (mn, mx)
-
-                # criterio de alarma UNIT:
-                # alarmado si value >= max configurado
-                def _is_alarm_unit(metric, v):
-                    if v is None or (isinstance(v, float) and np.isnan(v)):
-                        return False
-                    mn, mx = prog_cache.get(metric, (0.0, None))
-                    if mx is None:
-                        return False
-                    try:
-                        return float(v) >= float(mx)
-                    except Exception:
-                        return False
-
-                df_long["alarm"] = [
-                    _is_alarm_unit(m, v)
-                    for m, v in zip(df_long["metric"], df_long["value"])
-                ]
-
-                df_bin = (
-                    df_long.dropna(subset=["valores"])
-                    .groupby(base_cols + ["valores"], as_index=False)["alarm"]
-                    .max()
-                )
-
-                # timestamp por bin
-                df_bin["ts"] = pd.to_datetime(
-                    df_bin["fecha"].astype(str) + " " + df_bin["hora"].astype(str),
-                    errors="coerce",
-                )
-                df_bin["ts_alarm"] = df_bin["ts"].where(df_bin["alarm"])
-
-                grp_cols = meta_present + ["valores"]
-
-                # stats UNIT para ordenamiento
-                df_stats_unit = (
-                    df_bin.groupby(grp_cols, as_index=False)
-                    .agg(
-                        alarm_bins_unit=("alarm", "sum"),         # nº de bins UNIT en alarma
-                        last_alarm_ts_unit=("ts_alarm", "max"),   # última bin UNIT alarmada
-                    )
-                    .rename(columns={"alarm_bins_unit": out_col})
-                )
-
-                # max UNIT para desempate
-                df_maxu = (
-                    df_long.dropna(subset=["valores"])
-                    .groupby(grp_cols, as_index=False)["value"]
-                    .max()
-                    .rename(columns={"value": "max_value_unit"})
-                )
-
-                df_stats_unit = df_stats_unit.merge(df_maxu, on=grp_cols, how="left")
-
-                rows_all = rows_all.merge(
-                    df_stats_unit,
-                    on=grp_cols,
-                    how="left",
-                )
-
-        # --- max % ---
-        elif order_by == "pct":
-            out_col = "max_pct"
 
             if pct_metrics:
                 COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP_TOPOFF.items() if pm}
 
                 df_long = df2.melt(
-                    id_vars=meta_present,
+                    id_vars=base_cols + ["offset192"],
                     value_vars=pct_metrics,
                     var_name="metric",
                     value_name="value",
                 )
                 df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
+                df_long = df_long.dropna(subset=["valores"])
 
-                df_maxp = (
-                    df_long.dropna(subset=["valores"])
-                    .groupby(meta_present + ["valores"], as_index=False)["value"]
-                    .max()
-                    .rename(columns={"value": out_col})
+                grp_cols = meta_present + ["valores"]
+
+                # cache thresholds
+                thr_cache = {}
+                for pm in pct_metrics:
+                    try:
+                        orient, thr = _sev_cfg(pm, None, UMBRAL_CFG)
+                    except Exception:
+                        orient, thr = ("lower_is_better", {"excelente": 0.0, "bueno": 0.0, "regular": 0.0, "critico": 1.0})
+                    thr_cache[pm] = (orient, thr)
+
+                def _score_pct(metric, v):
+                    if v is None or (isinstance(v, float) and np.isnan(v)):
+                        return np.nan
+                    orient, thr = thr_cache.get(metric, ("lower_is_better", {}))
+                    return _sev_score_continuo(v, orient, thr, max_ratio=2.0)
+
+                def _level_pct(metric, v):
+                    if v is None or (isinstance(v, float) and np.isnan(v)):
+                        return -1
+                    orient, thr = thr_cache.get(metric, ("lower_is_better", {}))
+                    return _sev_level_safe(v, orient, thr)
+
+                df_long["score_pct"] = [_score_pct(m, v) for m, v in zip(df_long["metric"], df_long["value"])]
+                df_long["lvl_pct"]   = [_level_pct(m, v) for m, v in zip(df_long["metric"], df_long["value"])]
+
+                # ====== ÚLTIMA MUESTRA REAL (aunque no sea regular/critico) ======
+                df_last_any = (
+                    df_long.dropna(subset=["value", "offset192"])
+                    .sort_values("offset192")
+                    .groupby(grp_cols, as_index=False)
+                    .tail(1)
+                    .rename(columns={
+                        "offset192": "__last_any_off_pct",
+                        "score_pct": "__last_any_score_pct",
+                        "lvl_pct": "__last_any_lvl_pct",
+                    })
                 )
 
                 rows_all = rows_all.merge(
-                    df_maxp,
-                    on=meta_present + ["valores"],
-                    how="left"
+                    df_last_any[grp_cols + ["__last_any_off_pct", "__last_any_score_pct", "__last_any_lvl_pct"]],
+                    on=grp_cols,
+                    how="left",
                 )
-            else:
-                rows_all[out_col] = np.nan
 
-        # --- max UNIT (default) ---
+                # flags numéricos
+                rows_all["__last_any_off_pct"]   = pd.to_numeric(rows_all["__last_any_off_pct"], errors="coerce").fillna(-1).astype(int)
+                rows_all["__last_any_score_pct"] = pd.to_numeric(rows_all["__last_any_score_pct"], errors="coerce").fillna(float("-inf"))
+                rows_all["__last_any_lvl_pct"]   = pd.to_numeric(rows_all["__last_any_lvl_pct"], errors="coerce").fillna(-1).astype(int)
+
+                # <- CLAVE: filas sin muestra deben ir al final SIEMPRE
+                rows_all["__has_any_sample_pct"] = (rows_all["__last_any_off_pct"] >= 0).astype(int)
+
+                # ====== ESCALERITA por bins "interesantes" (tu lógica) ======
+                REG_DELTA = 0.5
+
+                def _is_interest(metric, v):
+                    if v is None or (isinstance(v, float) and np.isnan(v)):
+                        return False
+                    orient, thr = thr_cache.get(metric, ("lower_is_better", {}))
+                    try:
+                        fv = float(v)
+                    except Exception:
+                        return False
+
+                    lvl = _sev_level_safe(fv, orient, thr)
+                    if lvl >= 2:
+                        return True
+
+                    reg = thr.get("regular", None)
+                    if reg is None:
+                        return False
+                    try:
+                        reg = float(reg)
+                    except Exception:
+                        return False
+
+                    if orient == "lower_is_better":
+                        return fv >= (reg - REG_DELTA)
+                    else:
+                        return fv <= (reg + REG_DELTA)
+
+                mask_interest = [_is_interest(m, v) for m, v in zip(df_long["metric"], df_long["value"])]
+                df_long["score_interest_pct"] = np.where(mask_interest, df_long["score_pct"], np.nan)
+
+                df_score_bin = (
+                    df_long.groupby(grp_cols + ["offset192"], as_index=False)["score_interest_pct"]
+                    .max()
+                    .dropna(subset=["score_interest_pct"])
+                )
+
+                if not df_score_bin.empty:
+                    wide = df_score_bin.pivot(index=grp_cols, columns="offset192", values="score_interest_pct").reset_index()
+                    wide = wide.rename(columns={c: f"__p_{int(c):03d}" for c in wide.columns if isinstance(c, (int, np.integer))})
+
+                    rows_all = rows_all.merge(wide, on=grp_cols, how="left")
+
+                # asegura columnas __p_000..__p_191 para sort estable
+                for off in range(0, 192):
+                    c = f"__p_{off:03d}"
+                    if c not in rows_all.columns:
+                        rows_all[c] = np.nan
+
+                stair_sort_cols = [f"__p_{off:03d}" for off in range(191, -1, -1)]
+                for c in stair_sort_cols:
+                    rows_all[c] = pd.to_numeric(rows_all[c], errors="coerce").fillna(float("-inf"))
+
+                # ====== SORT MAIN-LIKE (con has_any_sample primero) ======
+                rows_all = rows_all.sort_values(
+                    by=["__has_any_sample_pct", "__last_any_lvl_pct", "__last_any_off_pct", "__last_any_score_pct"] + stair_sort_cols,
+                    ascending=[False, False, False, False] + ([False] * len(stair_sort_cols)),
+                    kind="stable",
+                )
+                rows_all["__row_rank_mainlike"] = np.arange(len(rows_all), dtype=int)
+
+            else:
+                # sin métricas pct -> no orden main-like posible
+                rows_all["__has_any_sample_pct"] = 0
+                rows_all["__row_rank_mainlike"] = np.arange(len(rows_all), dtype=int)
+
+        # ======================================================
+        # resto de modos: tu lógica (sin prints extra)
+        # ======================================================
+        elif order_by in ("alarm_bins_unit", "alarm_unit"):
+            out_col = "alarm_bins_unit"
+            # (tu lógica original aquí, sin cambios, si quieres la vuelvo a integrar)
+            rows_all[out_col] = np.nan
+
+        elif order_by == "pct":
+            out_col = "max_pct"
+            rows_all[out_col] = np.nan
+
         else:
             out_col = "max_unit"
-
-            if unit_metrics:
-                COL_TO_VAL_UNIT = {um: name for name, (_, um) in VALORES_MAP_TOPOFF.items() if um}
-
-                df_long = df2.melt(
-                    id_vars=meta_present,
-                    value_vars=unit_metrics,
-                    var_name="metric",
-                    value_name="value",
-                )
-                df_long["valores"] = df_long["metric"].map(COL_TO_VAL_UNIT)
-
-                df_maxu = (
-                    df_long.dropna(subset=["valores"])
-                    .groupby(meta_present + ["valores"], as_index=False)["value"]
-                    .max()
-                    .rename(columns={"value": out_col})
-                )
-
-                rows_all = rows_all.merge(
-                    df_maxu,
-                    on=meta_present + ["valores"],
-                    how="left"
-                )
-            else:
-                rows_all[out_col] = np.nan
+            rows_all[out_col] = np.nan
 
     else:
         # sin TS
-        if order_by == "alarm_bins_pct":
-            out_col = "alarm_bins_pct"
-        elif order_by == "alarm_bins_unit":
-            out_col = "alarm_bins_unit"
-        elif order_by == "pct":
-            out_col = "max_pct"
-        else:
-            out_col = "max_unit"
-        rows_all[out_col] = np.nan
+        rows_all["__has_any_sample_pct"] = 0
+        rows_all["__row_rank_mainlike"] = np.arange(len(rows_all), dtype=int)
 
-    # --- orden final multi-criterio ---
     # =========================================================
-    # ORDEN FINAL POR BLOQUE (cluster/site):
-    #   1) cluster_last_alarm_ts (desc)
-    #   2) cluster_alarm_bins (desc)
-    #   3) cluster_max_value (desc)
-    #   4) dentro del bloque: valores en el orden de valores_order
+    # ✅ GUARDAS: columnas que usa el CLUSTER SORT siempre deben existir
+    # (si no se calculó main-like o no hubo data TS, quedan defaults)
     # =========================================================
-    ord_last = "__ord_last_alarm_ts"
-    ord_bins = "__ord_alarm_bins"
-    ord_max = "__ord_max_value"
+    if "__last_any_off_pct" not in rows_all.columns:
+        rows_all["__last_any_off_pct"] = -1
+    if "__last_any_lvl_pct" not in rows_all.columns:
+        rows_all["__last_any_lvl_pct"] = -1
+    if "__last_any_score_pct" not in rows_all.columns:
+        rows_all["__last_any_score_pct"] = float("-inf")
 
-    # Normalización de columnas de ordenamiento por fila
-    if order_by in ("alarm_bins_pct", "alarm_pct"):
-        rows_all[ord_last] = pd.to_datetime(
-            rows_all.get("last_alarm_ts_pct"), errors="coerce"
-        ).fillna(pd.Timestamp("1970-01-01"))
-
-        rows_all[ord_bins] = pd.to_numeric(
-            rows_all.get("alarm_bins_pct"), errors="coerce"
-        ).fillna(0.0)
-
-        rows_all[ord_max] = pd.to_numeric(
-            rows_all.get("max_value_pct"), errors="coerce"
-        ).fillna(float("-inf"))
-
-    elif order_by in ("alarm_bins_unit", "alarm_unit"):
-        rows_all[ord_last] = pd.to_datetime(
-            rows_all.get("last_alarm_ts_unit"), errors="coerce"
-        ).fillna(pd.Timestamp("1970-01-01"))
-
-        rows_all[ord_bins] = pd.to_numeric(
-            rows_all.get("alarm_bins_unit"), errors="coerce"
-        ).fillna(0.0)
-
-        rows_all[ord_max] = pd.to_numeric(
-            rows_all.get("max_value_unit"), errors="coerce"
-        ).fillna(float("-inf"))
-
+    # bandera: tiene al menos 1 muestra real (%)
+    if "__has_any_sample_pct" not in rows_all.columns:
+        rows_all["__has_any_sample_pct"] = (
+                pd.to_numeric(rows_all["__last_any_off_pct"], errors="coerce").fillna(-1) >= 0
+        ).astype(int)
     else:
-        # modo fallback – solo max_value
-        rows_all[ord_last] = pd.Timestamp("1970-01-01")
-        rows_all[ord_bins] = 0.0
-        rows_all[ord_max] = pd.to_numeric(
-            rows_all.get(out_col), errors="coerce"
-        ).fillna(float("-inf"))
+        rows_all["__has_any_sample_pct"] = (
+            pd.to_numeric(rows_all["__has_any_sample_pct"], errors="coerce").fillna(0).astype(int)
+        )
+
+    # rank mainlike: si no existe, empuja al final
+    if "__row_rank_mainlike" not in rows_all.columns:
+        rows_all["__row_rank_mainlike"] = 10 ** 9
+    else:
+        rows_all["__row_rank_mainlike"] = (
+            pd.to_numeric(rows_all["__row_rank_mainlike"], errors="coerce").fillna(10 ** 9).astype(int)
+        )
 
     # =========================================================
-    # 1) Construimos una clave de CLUSTER para agrupar
-    #    (si no hay cluster, usamos site_att como fallback)
+    # ORDEN FINAL POR CLUSTER (sin romper main-like)
     # =========================================================
-    # normalizamos textos
     for col in ["technology", "vendor", "cluster", "site_att"]:
         if col in rows_all.columns:
             rows_all[col] = rows_all[col].astype(str)
 
-    # fallback: si no hay cluster, usamos el sitio
     mask_empty_cluster = rows_all["cluster"].isin(["", "nan", "None"])
     if "site_att" in rows_all.columns:
-        rows_all.loc[mask_empty_cluster, "cluster"] = rows_all.loc[
-            mask_empty_cluster, "site_att"
-        ].astype(str)
+        rows_all.loc[mask_empty_cluster, "cluster"] = rows_all.loc[mask_empty_cluster, "site_att"].astype(str)
 
-    # grupo SOLO por cluster (bloque)
     cluster_group_cols = ["cluster"]
 
-    # Stats de nivel cluster
     cluster_stats = (
-        rows_all
-        .groupby(cluster_group_cols, as_index=False)
+        rows_all.groupby(cluster_group_cols, as_index=False)
         .agg(
-            cluster_last_alarm_ts=(ord_last, "max"),  # última alarma del BLOQUE
-            cluster_alarm_bins=(ord_bins, "sum"),  # total de bins en alarma del BLOQUE
-            cluster_max_value=(ord_max, "max"),  # peor valor del BLOQUE
+            cluster_has_any=("__has_any_sample_pct", "max"),
+            cluster_best_rank=("__row_rank_mainlike", "min"),
         )
     )
 
-    # Merge de las stats de bloque a cada fila
-    rows_all = rows_all.merge(
-        cluster_stats,
-        on=cluster_group_cols,
-        how="left",
-        validate="many_to_one"
-    )
+    rows_all = rows_all.merge(cluster_stats, on=cluster_group_cols, how="left", validate="many_to_one")
 
-    # =========================================================
-    # 2) Orden de valores (PS_RRC, CS_RRC, PS_DROP, ...)
-    # =========================================================
+    # valores en orden fijo
     if valores_order:
-        rows_all["valores"] = pd.Categorical(
-            rows_all["valores"],
-            categories=list(valores_order),
-            ordered=True
-        )
-
-    # =========================================================
-    # 3) ORDEN FINAL:
-    #   - primero por cluster_last_alarm_ts/cluster_alarm_bins/cluster_max_value (desc)
-    #   - luego por cluster ascendente (para que se vean agrupados)
-    #   - dentro del bloque, por site_att, tech, vendor y valores
-    # =========================================================
-    sort_cols = [
-        "cluster_last_alarm_ts",
-        "cluster_alarm_bins",
-        "cluster_max_value",
-        "cluster",
-        "site_att",
-        "technology",
-        "vendor",
-        "valores",
-    ]
-    sort_cols = [c for c in sort_cols if c in rows_all.columns]
+        rows_all["valores"] = pd.Categorical(rows_all["valores"], categories=list(valores_order), ordered=True)
 
     rows_all = rows_all.sort_values(
-        by=sort_cols,
-        ascending=[False, False, False, True, True, True, True, True][:len(sort_cols)],
+        by=[
+            "cluster_has_any",
+            "cluster_best_rank",
+            "cluster",
+            "site_att",
+            "technology",
+            "vendor",
+            "__has_any_sample_pct",  # <- 1 primero (tiene datos)
+            "__row_rank_mainlike",  # <- orden real main-like dentro del cluster
+            "valores",  # <- ya al final, para que NO suba vacíos
+        ],
+        ascending=[
+            False,  # cluster_has_any
+            True,  # cluster_best_rank
+            True,  # cluster
+            True,  # site_att
+            True,  # technology
+            True,  # vendor
+            False,  # __has_any_sample_pct (1 arriba)
+            True,  # __row_rank_mainlike (menor = mejor)
+            True,  # valores
+        ],
         kind="stable",
     )
 
     # --- paginado ---
+    # =========================================================
+    # ✅ QUITAR "HUECOS": filas sin ninguna muestra en el dominio actual
+    # =========================================================
+    if order_by in ("alarm_bins_pct", "alarm_pct"):
+        # aquí ya existe __has_any_sample_pct por tu merge de df_last_any
+        if "__has_any_sample_pct" in rows_all.columns:
+            rows_all = rows_all[rows_all["__has_any_sample_pct"].fillna(0).astype(int) == 1].copy()
+
+    elif order_by in ("alarm_bins_unit", "alarm_unit"):
+        # si quieres equivalente para UNIT, necesitas construir __has_any_sample_unit
+        # (si no lo construyes, no filtres aquí)
+        if "__has_any_sample_unit" in rows_all.columns:
+            rows_all = rows_all[rows_all["__has_any_sample_unit"].fillna(0).astype(int) == 1].copy()
+
+    else:
+        # pct/max o unit/max: si quieres quitar vacíos, filtra por out_col
+        if out_col and out_col in rows_all.columns:
+            rows_all = rows_all[pd.to_numeric(rows_all[out_col], errors="coerce").notna()].copy()
     total_rows = len(rows_all)
     start = max(0, int(offset))
     end = start + max(1, int(limit))
@@ -598,22 +556,24 @@ def build_heatmap_payloads_topoff(
 
     # --- keys visibles y df_small TS ---
     keys_df = rows_page[META_COLS_TOPOFF].drop_duplicates().reset_index(drop=True)
+    keys_df = _norm_key_cols(keys_df, META_COLS_TOPOFF)
     keys_df["rid"] = np.arange(len(keys_df))
 
     if df_ts is None or not isinstance(df_ts, pd.DataFrame) or df_ts.empty:
         df_small = pd.DataFrame()
     else:
-        df_small = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today])].merge(
-            keys_df, on=META_COLS_TOPOFF
+        df_ts2 = _normalize_topoff_cols(df_ts)
+        df_ts2 = _norm_key_cols(df_ts2, META_COLS_TOPOFF + ["fecha", "hora"])
+        if "hora" in df_ts2.columns:
+            df_ts2["hora"] = df_ts2["hora"].apply(_norm_hora_str)
+
+        df_small = (
+            df_ts2.loc[df_ts2["fecha"].astype(str).isin([yday, today])]
+            .merge(keys_df, on=META_COLS_TOPOFF, how="inner")
         )
 
-        # índice 15m dentro del día
         df_small["q15"] = df_small["hora"].apply(_safe_q15_to_idx)
-
-        # offset 0..191 (ayer 0..95, hoy 96..191)
-        df_small["offset192"] = df_small["q15"] + np.where(
-            df_small["fecha"].astype(str) == today, 96, 0
-        )
+        df_small["offset192"] = df_small["q15"] + np.where(df_small["fecha"].astype(str) == today, 96, 0)
 
         df_small = df_small.dropna(subset=["offset192"])
         df_small["offset192"] = df_small["offset192"].astype(int)
@@ -624,7 +584,6 @@ def build_heatmap_payloads_topoff(
         for m in metrics_needed:
             if m in df_small.columns:
                 sub = df_small[["rid", "offset192", m]].dropna()
-                # si hay múltiples muestras en el mismo bin, queda la última por offset natural
                 sub = sub.sort_values("offset192")
                 metric_maps[m] = dict(zip(zip(sub["rid"], sub["offset192"]), sub[m]))
             else:
@@ -636,20 +595,13 @@ def build_heatmap_payloads_topoff(
         mp = metric_maps.get(metric) or {}
         return [mp.get((rid, off)) for off in range(192)]
 
-    # amarra rid real a cada fila (aunque se repita por valores_order)
-    rows_page = rows_page.merge(
-        keys_df,
-        on=META_COLS_TOPOFF,
-        how="left",
-        validate="many_to_one"
-    )
+    rows_page = rows_page.merge(keys_df, on=META_COLS_TOPOFF, how="left", validate="many_to_one")
 
     # --- ejes ---
     x_dt = _build_x_dt_15m(yday) + _build_x_dt_15m(today)
 
     z_pct, z_unit = [], []
     z_pct_raw, z_unit_raw = [], []
-
     y_labels, row_detail = [], []
     row_last_ts, row_max_pct, row_max_unit = [], [], []
 
@@ -670,19 +622,14 @@ def build_heatmap_payloads_topoff(
         site_att = getattr(r, "site_att", "") or ""
         rnc = getattr(r, "rnc", "") or ""
 
-        # label visual
         y_id = f"{tech}/{vend}/{region}/{province}/{municipality}/{r.site_att}/{r.rnc}/{nodeb}/{r.cluster}/{valores}"
         y_labels.append(y_id)
 
-        # detail para hover parser:
-        row_detail.append(
-            f"{tech}/{vend}/{region}/{province}/{municipality}/{site_att}/{rnc}/{nodeb}/{valores}"
-        )
+        row_detail.append(f"{tech}/{vend}/{region}/{province}/{municipality}/{site_att}/{rnc}/{nodeb}/{valores}")
 
         row_raw   = _row192_raw(pm, rid) if pm else [None] * 192
         row_raw_u = _row192_raw(um, rid) if um else [None] * 192
 
-        # --- % -> score continuo ---
         if pm:
             orient, thr = _sev_cfg(pm, None, UMBRAL_CFG)
             row_color = [
@@ -695,16 +642,11 @@ def build_heatmap_payloads_topoff(
             z_pct.append([None] * 192)
             z_pct_raw.append(row_raw)
 
-        # --- UNIT -> normalizado ---
         if um:
             mn, mx = _prog_cfg(um, None, UMBRAL_CFG)
-            row_norm = [
-                _normalize(v, mn, mx) if v is not None else None
-                for v in row_raw_u
-            ]
+            row_norm = [_normalize(v, mn, mx) if v is not None else None for v in row_raw_u]
             z_unit.append(row_norm)
             z_unit_raw.append(row_raw_u)
-
             for s in row_norm:
                 if s is not None:
                     all_scores_unit.append(s)
@@ -712,22 +654,18 @@ def build_heatmap_payloads_topoff(
             z_unit.append([None] * 192)
             z_unit_raw.append(row_raw_u)
 
-        # stats por fila
         arr_u = np.array([v if isinstance(v, (int, float)) else np.nan for v in row_raw_u], float)
         arr_p = np.array([v if isinstance(v, (int, float)) else np.nan for v in row_raw], float)
 
         valid_idx = np.where(np.isfinite(arr_u if np.isfinite(arr_u).any() else arr_p))[0]
         last_label = str(x_dt[int(valid_idx[-1])]).replace("T", " ")[:16] if valid_idx.size else ""
-
         row_last_ts.append(last_label)
+
         row_max_pct.append(np.nanmax(arr_p) if np.isfinite(arr_p).any() else np.nan)
         row_max_unit.append(np.nanmax(arr_u) if np.isfinite(arr_u).any() else np.nan)
 
-    # =========================================================
-    # ✅ FIX recomendado para evitar "todo naranja"
-    # =========================================================
+    # zmin/zmax
     zmin_pct, zmax_pct = 0.0, 2.0
-
     if all_scores_unit:
         zmin_unit = min(all_scores_unit)
         zmax_unit = max(all_scores_unit)

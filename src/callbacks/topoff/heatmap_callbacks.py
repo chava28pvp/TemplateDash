@@ -1,4 +1,5 @@
 # callbacks/topoff_heatmap_callbacks.py
+import os
 import math
 import time
 import json
@@ -401,7 +402,7 @@ def topoff_heatmap_callbacks(app):
         Input("f-fecha", "date"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
-        Input("f-cluster", "value"),              # 👈 dispara al cambiar cluster
+        Input("f-cluster", "value"),
         Input("topoff-site-filter", "value"),
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
