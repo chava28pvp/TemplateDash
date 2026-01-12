@@ -683,8 +683,6 @@ def register_callbacks(app):
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
-        # Si quieres que el contexto también se refresque periódico:
-        # Input("refresh-timer", "n_intervals"),
         prevent_initial_call=False,
     )
     def build_main_context(fecha, hora, networks, technologies, vendors, clusters):
@@ -693,12 +691,19 @@ def register_callbacks(app):
         vendors = _as_list(vendors)
         clusters = _as_list(clusters)
 
-        # ---- cache rápido ----
+        # -----------------------------
+        # 0) Cache (recomendación)
+        #    - Para evitar el bug de "hora", el baseline NO debe cachearse por hora
+        # -----------------------------
+        # Puedes cachear todo por (fecha, hora, filtros) si quieres,
+        # pero asegúrate de que el baseline se calcule sin usar hora.
         cached = _get_main_context_cached(fecha, hora, networks, technologies, vendors, clusters)
         if cached is not None:
             return cached
 
-        # ---------- baseline semanal de integridad ----------
+        # ============================================================
+        # 1) BASELINE semanal de integridad (NO depende de hora)
+        # ============================================================
         df_baseline = fetch_integrity_baseline_week(
             fecha=fecha,
             vendors=vendors or None,
@@ -706,19 +711,18 @@ def register_callbacks(app):
             networks=networks or None,
             technologies=technologies or None,
         )
-        if df_baseline is None:
-            df_baseline = pd.DataFrame()
+        df_baseline = df_baseline if isinstance(df_baseline, pd.DataFrame) else pd.DataFrame()
 
         integrity_baseline_list = []
 
-        # ✅ 1) Si hay baseline real, úsalo normal
         if not df_baseline.empty:
+            # normaliza floats y strings (evita NaN)
             integrity_baseline_list = [
                 {
-                    "network": r.get("network"),
-                    "vendor": r.get("vendor"),
-                    "noc_cluster": r.get("noc_cluster"),
-                    "technology": r.get("technology"),
+                    "network": (None if pd.isna(r.get("network")) else str(r.get("network")).strip()),
+                    "vendor": (None if pd.isna(r.get("vendor")) else str(r.get("vendor")).strip()),
+                    "noc_cluster": (None if pd.isna(r.get("noc_cluster")) else str(r.get("noc_cluster")).strip()),
+                    "technology": (None if pd.isna(r.get("technology")) else str(r.get("technology")).strip()),
                     "integrity_week_avg": (
                         None if pd.isna(r.get("integrity_week_avg")) else float(r.get("integrity_week_avg"))
                     ),
@@ -726,11 +730,15 @@ def register_callbacks(app):
                 for _, r in df_baseline.iterrows()
             ]
 
-        # ✅ 2) MOCK temporal si NO hay baseline real
+        # ============================================================
+        # 1.1) MOCK opcional (si NO hay baseline real)
+        #      OJO: aquí conviene NO depender de hora, o al menos hacerlo estable
+        # ============================================================
         elif MOCK_INTEGRITY_BASELINE:
+            # sugerencia: usa hora=None para que no dependa del dropdown
             df_now = fetch_kpis(
                 fecha=fecha,
-                hora=hora,  # o None si quieres tomar todo el día
+                hora=None,  # <<<<<< clave: no te acoples a "Todos"
                 vendors=vendors or None,
                 clusters=clusters or None,
                 networks=networks or None,
@@ -740,11 +748,9 @@ def register_callbacks(app):
             df_now = _ensure_df(df_now)
 
             if not df_now.empty and "integrity" in df_now.columns:
-                # filtra solo NET si quieres
                 if "network" in df_now.columns and MOCK_ONLY_NETWORKS:
                     df_now = df_now[df_now["network"].isin(MOCK_ONLY_NETWORKS)]
 
-                # agrupa igual que el baseline real
                 gcols = ["network", "vendor", "noc_cluster", "technology"]
                 if all(c in df_now.columns for c in gcols):
                     df_g = (
@@ -766,11 +772,12 @@ def register_callbacks(app):
                             "vendor": r.get("vendor"),
                             "noc_cluster": r.get("noc_cluster"),
                             "technology": r.get("technology"),
-                            # 🔥 inflamos baseline para forzar ratio <= 0.2
                             "integrity_week_avg": float(cur) * MOCK_BASELINE_MULT,
                         })
 
-        # ---------- máximos progress usando TODOS los datos filtrados ----------
+        # ============================================================
+        # 2) Progress max (puede depender de hora si tu diseño lo requiere)
+        # ============================================================
         progress_max_by_col = _compute_progress_max_for_filters(
             fecha=fecha,
             hora=hora,
@@ -780,10 +787,12 @@ def register_callbacks(app):
             clusters=clusters,
         )
 
-        # ---------- alarm streak día completo (cacheable) ----------
+        # ============================================================
+        # 3) Alarm map para el día completo (NO depende de hora)
+        # ============================================================
         df_day = fetch_kpis(
             fecha=fecha,
-            hora=None,
+            hora=None,  # día completo
             vendors=vendors or None,
             clusters=clusters or None,
             networks=networks or None,
@@ -797,10 +806,10 @@ def register_callbacks(app):
 
         def _norm_h(x):
             return None if x is None else str(x).strip()
+
         alarm_list = []
         if not df_day.empty:
             df_day = add_alarm_streak(df_day)
-
             alarm_list = [
                 {
                     "fecha": _norm_f(r.get("fecha")),
@@ -818,6 +827,8 @@ def register_callbacks(app):
             "integrity_baseline_map": integrity_baseline_list,
             "progress_max_by_col": progress_max_by_col,
             "alarm_map": alarm_list,
+            "ts": time.time(),
         }
+
         _set_main_context_cached(fecha, hora, networks, technologies, vendors, clusters, payload)
         return payload

@@ -2,6 +2,7 @@ from dash import Dash, Input, Output, ALL
 import dash_bootstrap_components as dbc
 from flask_caching import Cache
 from src.callbacks.main.export_callback import export_callback
+from src.callbacks.main.integrity_callbacks import integrity_callbacks
 from src.callbacks.topoff.export_callback import export_topoff_callback
 from src.callbacks.topoff.heatmap_callbacks import topoff_heatmap_callbacks
 from src.layout import serve_layout
@@ -30,6 +31,7 @@ heatmap_callbacks(app)
 register_topoff_callbacks(app)
 topoff_heatmap_callbacks(app)
 export_topoff_callback(app)
+integrity_callbacks(app)
 
 app.clientside_callback(
     """

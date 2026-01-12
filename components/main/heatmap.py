@@ -277,6 +277,56 @@ def _sev_level_safe(v, orient, thr):
         if fv >= exc: return 1
         return 0
 
+def add_integrity_deg_pct(df_ts: pd.DataFrame, integrity_baseline_map: dict) -> pd.DataFrame:
+    """
+    Crea df_ts['integrity_deg_pct'] = (integrity / baseline)*100 (clamp 0..100)
+    baseline viene de integrity_baseline_map con llave:
+      (network, vendor, noc_cluster, technology) -> integrity_week_avg
+    """
+    if df_ts is None or df_ts.empty:
+        return df_ts
+
+    need = {"network","vendor","noc_cluster","technology","integrity"}
+    if not need.issubset(df_ts.columns):
+        df_ts["integrity_deg_pct"] = np.nan
+        return df_ts
+
+    # baseline_df desde el dict (rápido y mergeable)
+    if not integrity_baseline_map:
+        df_ts["integrity_deg_pct"] = np.nan
+        return df_ts
+
+    baseline_df = pd.DataFrame(
+        [(k[0], k[1], k[2], k[3], v) for k, v in integrity_baseline_map.items()],
+        columns=["network","vendor","noc_cluster","technology","baseline_integrity"]
+    )
+    if baseline_df.empty:
+        df_ts["integrity_deg_pct"] = np.nan
+        return df_ts
+
+    out = df_ts.merge(
+        baseline_df,
+        on=["network","vendor","noc_cluster","technology"],
+        how="left"
+    )
+
+    out["integrity"] = pd.to_numeric(out["integrity"], errors="coerce")
+    out["baseline_integrity"] = pd.to_numeric(out["baseline_integrity"], errors="coerce")
+
+    pct = (out["integrity"] / out["baseline_integrity"]) * 100.0
+
+    # reglas de validez
+    pct = pct.where(out["baseline_integrity"] > 0)
+    pct = pct.where(np.isfinite(pct))
+
+    # clamp 0..100 (opcional pero útil)
+    pct = pct.clip(lower=0.0, upper=100.0)
+
+    out["integrity_deg_pct"] = pct
+    out = out.drop(columns=["baseline_integrity"])
+
+    return out
+
 # =========================
 # Payloads de heatmap (48 columnas: Ayer 0–23 | Hoy 24–47) con paginado
 # =========================
@@ -612,20 +662,28 @@ def build_heatmap_payloads_fast(
                 kind="stable",
             )
 
-        else:
-            # fallback: tu orden actual (última alarma / horas alarma / max_value)
-            rows_all["__ord_last_alarm_ts"] = pd.to_datetime(rows_all.get("last_alarm_ts"), errors="coerce").fillna(
-                pd.Timestamp("1970-01-01"))
-            rows_all["__ord_alarm_hours"] = pd.to_numeric(rows_all.get("alarm_hours"), errors="coerce").fillna(0.0)
-            rows_all["__ord_max_value"] = pd.to_numeric(rows_all.get("max_value"), errors="coerce").fillna(
-                float("-inf"))
 
+        else:
+            # --- seguro aunque no exista last_alarm_ts ---
+            if "last_alarm_ts" in rows_all.columns:
+                s_raw = rows_all["last_alarm_ts"]
+            else:
+                s_raw = pd.Series([pd.NaT] * len(rows_all), index=rows_all.index)
+            rows_all["__ord_last_alarm_ts"] = pd.to_datetime(s_raw, errors="coerce")
+            rows_all["__ord_last_alarm_ts"] = rows_all["__ord_last_alarm_ts"].fillna(pd.Timestamp("1970-01-01"))
+            # --- seguro aunque no existan alarm_hours / max_value ---
+            s_alarm = rows_all["alarm_hours"] if "alarm_hours" in rows_all.columns else pd.Series(0,
+                                                                                                  index=rows_all.index)
+            rows_all["__ord_alarm_hours"] = pd.to_numeric(s_alarm, errors="coerce").fillna(0.0)
+
+            s_max = rows_all["max_value"] if "max_value" in rows_all.columns else pd.Series(float("-inf"),
+                                                                                            index=rows_all.index)
+            rows_all["__ord_max_value"] = pd.to_numeric(s_max, errors="coerce").fillna(float("-inf"))
             rows_all = rows_all.sort_values(
                 ["__ord_last_alarm_ts", "__ord_alarm_hours", "__ord_max_value"],
                 ascending=[False, False, False],
                 kind="stable",
             )
-
 
     elif order_by in ("alarm_hours_unit", "alarm_hours_fail", "unit") and stair_sort_cols_unit:
 
@@ -659,7 +717,8 @@ def build_heatmap_payloads_fast(
         out_col = "max_unit" if order_by == "unit" else "max_pct"
         rows_all["__ord_last_alarm_ts"] = pd.Timestamp("1970-01-01")
         rows_all["__ord_alarm_hours"] = 0.0
-        rows_all["__ord_max_value"] = pd.to_numeric(rows_all.get(out_col), errors="coerce").fillna(float("-inf"))
+        s_out = rows_all[out_col] if out_col in rows_all.columns else pd.Series(float("-inf"), index=rows_all.index)
+        rows_all["__ord_max_value"] = pd.to_numeric(s_out, errors="coerce").fillna(float("-inf"))
 
         rows_all = rows_all.sort_values(
             ["__ord_last_alarm_ts", "__ord_alarm_hours", "__ord_max_value"],
@@ -886,6 +945,7 @@ def build_heatmap_figure(
     zmin    = payload["zmin"]
     zmax    = payload["zmax"]
     mode    = payload.get("color_mode", "severity")
+    theme = (payload.get("color_theme") or "").lower()
     detail  = payload.get("row_detail") or y
 
     # ----- Colores según modo -----
@@ -897,11 +957,19 @@ def build_heatmap_figure(
             [0.999, SEV_COLORS["regular"]],  # <- mantiene naranja hasta 0.999
             [1.00, SEV_COLORS["critico"]],  # <- rojo solo en 1.00
         ]
-    else:  # progress
-        colorscale = [
-            [0.0, "#9ec5fe"],
-            [1.0, "#0d6efd"],
-        ]
+    else:
+        # progress (gradiente)
+        if theme == "green":
+            colorscale = [
+                [0.0, "#e9f7ef"],  # verde muy claro
+                [1.0, "#2ecc71"],  # verde
+            ]
+        else:
+            # default azul (tu actual)
+            colorscale = [
+                [0.0, "#9ec5fe"],
+                [1.0, "#0d6efd"],
+            ]
 
     # ----- customdata por celda (DETALLE COMPLETO; sin cambios) -----
     customdata = []
@@ -1119,9 +1187,6 @@ def _build_time_header_children(x_dt):
     return dates, hours
 
 def _build_time_header_children_by_dates(fecha_str: str):
-    from datetime import datetime, timedelta
-    from dash import html
-
     try:
         today_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.utcnow()
     except Exception:
@@ -1151,3 +1216,4 @@ def _build_time_header_children_by_dates(fecha_str: str):
         hours_children.append(html.Div(label, className=" ".join(cls)))
 
     return dates_children, hours_children
+

@@ -14,8 +14,7 @@ from components.main.histograma import \
 import dash_bootstrap_components as dbc
 
 from src.Utils.umbrales.umbrales_manager import UM_MANAGER
-from src.dataAccess.data_access import fetch_kpis,fetch_alarm_meta_for_heatmap
-
+from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap, fetch_integrity_baseline_week
 
 #Cach simple en memoria para df_ts
 _DFTS_CACHE = {}
@@ -257,7 +256,6 @@ def _build_histograma_for_domain(
 
     _LAST_HI_KEY[domain] = state_key
     return fig_pct, fig_unit, page_info, False
-
 
 def heatmap_callbacks(app):
 

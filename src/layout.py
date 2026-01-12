@@ -1,6 +1,6 @@
 from dash import html, dcc
 import dash_bootstrap_components as dbc
-
+import plotly.graph_objs as go
 from components.filters import build_filters, build_topoff_filters
 from src.config import REFRESH_INTERVAL_MS
 from src.Utils.utils_time import default_date_str, default_hour_str
@@ -90,41 +90,89 @@ def serve_layout():
             dbc.Row([
                 dbc.Col(
                     dbc.Card([
+
+                        # =========================
+                        # HEADER: título + botón integridad
+                        # =========================
                         dbc.CardHeader(
-                            dbc.Row([
-                                dbc.Col(html.H4("Degradados", className="m-0"), width="auto"),
-                            ], className="g-2 align-items-center justify-content-center"),
-                            className="bg-transparent border-0"
+                            dbc.Row(
+                                [
+                                    # spacer izquierdo (equilibra el ancho del botón)
+                                    dbc.Col(width="auto"),
+
+                                    # título centrado
+                                    dbc.Col(
+                                        html.H4("Degradados", className="m-0 text-center"),
+                                        className="d-flex justify-content-center",
+                                    ),
+
+                                    # botón a la derecha
+                                    dbc.Col(
+                                        dbc.Button(
+                                            "Integridad",
+                                            id="btn-toggle-hm-int",
+                                            size="sm",
+                                            color="secondary",
+                                            outline=True,
+                                            n_clicks=0,
+                                        ),
+                                        width="auto",
+                                        className="d-flex justify-content-end",
+                                    ),
+                                ],
+                                className="g-2 align-items-center",
+                            ),
+                            className="bg-transparent border-0",
                         ),
+
                         dbc.CardBody([
 
-                            # -- Controles de paginación de heatmap --
+                            # (Opcional) trigger bajo demanda
+                            dcc.Store(id="heatmap-integrity-trigger", data=None),
+
+                            # =========================
+                            # Controles de paginación (PRINCIPAL) - se comparten
+                            # =========================
                             dbc.Row([
                                 dbc.Col(
                                     dbc.ButtonGroup([
                                         dbc.Button("«", id="hm-page-prev", n_clicks=0, size="sm", color="secondary"),
-                                        dbc.Button(id="hm-page-indicator", size="sm", disabled=True,
-                                                   color="secondary", className="px-2"),
+                                        dbc.Button(
+                                            id="hm-page-indicator",
+                                            size="sm",
+                                            disabled=True,
+                                            color="secondary",
+                                            className="px-2"
+                                        ),
                                         dbc.Button("»", id="hm-page-next", n_clicks=0, size="sm", color="secondary"),
                                     ], size="sm"),
-                                    width="auto", className="d-flex justify-content-center"
+                                    width="auto",
+                                    className="d-flex justify-content-center"
                                 ),
 
                                 dbc.Col(
                                     dbc.InputGroup([
                                         dbc.InputGroupText("Tamaño", className="py-0"),
                                         dbc.Input(
-                                            id="hm-page-size", type="number", min=10, step=10, value=50, size="sm",
+                                            id="hm-page-size",
+                                            type="number",
+                                            min=10,
+                                            step=10,
+                                            value=50,
+                                            size="sm",
                                             style={"width": "80px"}
                                         ),
                                     ], size="sm"),
-                                    width="auto", className="d-flex justify-content-center"
+                                    width="auto",
+                                    className="d-flex justify-content-center"
                                 ),
 
                                 dbc.Col(
                                     html.Small(id="hm-total-rows-banner", className="text-muted"),
-                                    width="auto", className="d-flex align-items-center"
+                                    width="auto",
+                                    className="d-flex align-items-center"
                                 ),
+
                                 dbc.Col(
                                     dbc.InputGroup([
                                         dbc.InputGroupText("Orden", className="py-0"),
@@ -140,13 +188,15 @@ def serve_layout():
                                             style={"width": "160px"}
                                         ),
                                     ], size="sm"),
-                                    width="auto", className="d-flex justify-content-center"
+                                    width="auto",
+                                    className="d-flex justify-content-center"
                                 ),
                             ], className="g-3 justify-content-center text-center mb-2"),
 
-                            # -- HEADER FIJO (no scrollea): Tabla + Timeline % + Timeline UNIT --
+                            # =========================
+                            # Header fijo (principal)
+                            # =========================
                             dbc.Row([
-                                # Encabezado de la tabla resumen (md=4)
                                 dbc.Col(
                                     dbc.Card(
                                         dbc.CardBody([
@@ -160,14 +210,17 @@ def serve_layout():
                                                     html.Th("% Fail.", className="w-num ta-right"),
                                                     html.Th("Fail Últ.", className="w-num ta-right"),
                                                 ])),
-                                            ], bordered=False, hover=False, size="sm",
-                                                className="mb-0 table-dark kpi-table kpi-table-summary header-only"),
+                                            ],
+                                                bordered=False,
+                                                hover=False,
+                                                size="sm",
+                                                className="mb-0 table-dark kpi-table kpi-table-summary header-only"
+                                            ),
                                         ], className="p-1"),
                                     ),
                                     md=4, sm=12
                                 ),
 
-                                # Timeline header Heatmap UNIT
                                 dbc.Col(
                                     dbc.Card(
                                         dbc.CardBody([
@@ -179,7 +232,6 @@ def serve_layout():
                                     md=4, sm=12
                                 ),
 
-                                # Header del HEATMAP UNIT (dos filas: días y horas)
                                 dbc.Col(
                                     dbc.Card(
                                         dbc.CardBody([
@@ -192,11 +244,11 @@ def serve_layout():
                                 ),
                             ], className="g-0 align-items-stretch mb-1"),
 
-                            # -- ÚNICO SCROLL: Tabla + Heatmap % + Heatmap UNIT --
+                            # =========================
+                            # ÚNICO SCROLL (principal)
+                            # =========================
                             html.Div(
-
                                 dbc.Row([
-                                    # === Tabla resumen (filas alineadas con heatmaps) ===
                                     dbc.Col(
                                         dbc.Card(
                                             dbc.CardBody([
@@ -207,7 +259,6 @@ def serve_layout():
                                         md=4, sm=12, className="mb-0"
                                     ),
 
-                                    # === Heatmap % ===
                                     dbc.Col(
                                         dbc.Card(
                                             dbc.CardBody([
@@ -225,7 +276,6 @@ def serve_layout():
                                         md=4, sm=12, className="mb-0"
                                     ),
 
-                                    # === Heatmap UNIT ===
                                     dbc.Col(
                                         dbc.Card(
                                             dbc.CardBody([
@@ -243,14 +293,190 @@ def serve_layout():
                                         md=4, sm=12, className="mb-0"
                                     ),
                                 ], className="g-0 align-items-stretch"),
-                                className="hm-board"  # único scroll
+                                className="hm-board"
                             ),
+
+                            # =========================
+                            # INTEGRIDAD (bajo demanda) - con tabla + headers fijos + scroll interno
+                            # =========================
+                            dbc.Collapse(
+                                id="collapse-hm-int",
+                                is_open=False,
+                                className="mt-3",
+                                children=[
+                                    dbc.CardHeader(
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(width="auto"),
+                                                dbc.Col(
+                                                    html.H5("Integridad", className="m-0 text-center"),
+                                                    className="d-flex justify-content-center",
+                                                ),
+                                                dbc.Col(width="auto"),
+                                            ],
+                                            className="g-2 align-items-center",
+                                        ),
+                                        className="bg-transparent border-0 py-1",
+                                    ),
+                                    dbc.Row([
+                                        dbc.Col(
+                                            dbc.ButtonGroup([
+                                                dbc.Button("«", id="hm-int-page-prev", n_clicks=0, size="sm",
+                                                           color="secondary"),
+                                                dbc.Button(
+                                                    id="hm-int-page-indicator",
+                                                    size="sm",
+                                                    disabled=True,
+                                                    color="secondary",
+                                                    className="px-2"
+                                                ),
+                                                dbc.Button("»", id="hm-int-page-next", n_clicks=0, size="sm",
+                                                           color="secondary"),
+                                            ], size="sm"),
+                                            width="auto",
+                                            className="d-flex justify-content-center"
+                                        ),
+
+                                        dbc.Col(
+                                            dbc.InputGroup([
+                                                dbc.InputGroupText("Tamaño", className="py-0"),
+                                                dbc.Input(
+                                                    id="hm-int-page-size",
+                                                    type="number",
+                                                    min=10,
+                                                    step=10,
+                                                    value=50,
+                                                    size="sm",
+                                                    style={"width": "80px"}
+                                                ),
+                                            ], size="sm"),
+                                            width="auto",
+                                            className="d-flex justify-content-center"
+                                        ),
+
+                                        dbc.Col(
+                                            html.Small(id="hm-int-total-rows-banner", className="text-muted"),
+                                            width="auto",
+                                            className="d-flex align-items-center"
+                                        ),
+                                    ], className="g-3 justify-content-center text-center mb-2"),
+                                    # Header fijo de integridad (tabla + timelines)
+                                    dbc.Row([
+                                        dbc.Col(
+                                            dbc.Card(
+                                                dbc.CardBody([
+                                                    dbc.Table([
+                                                        html.Thead(html.Tr([
+                                                            html.Th("Cluster", className="w-cluster"),
+                                                            html.Th("Tech", className="w-tech"),
+                                                            html.Th("Vendor", className="w-vendor"),
+                                                            html.Th("Última", className="w-ultima"),
+                                                            html.Th("%", className="w-num ta-right"),
+                                                            html.Th("UNIT", className="w-num ta-right"),
+                                                        ])),
+                                                    ],
+                                                        bordered=False,
+                                                        hover=False,
+                                                        size="sm",
+                                                        className="mb-0 table-dark kpi-table kpi-table-summary header-only"
+                                                    ),
+                                                ], className="p-1"),
+                                            ),
+                                            md=4, sm=12
+                                        ),
+
+                                        dbc.Col(
+                                            dbc.Card(
+                                                dbc.CardBody([
+                                                    html.Div(id="hm-int-pct-dates",
+                                                             className="hm-time-row hm-time-dates"),
+                                                    html.Div(id="hm-int-pct-hours",
+                                                             className="hm-time-row hm-time-hours"),
+                                                ], className="p-2"),
+                                                className="hm-time-card"
+                                            ),
+                                            md=4, sm=12
+                                        ),
+
+                                        dbc.Col(
+                                            dbc.Card(
+                                                dbc.CardBody([
+                                                    html.Div(id="hm-int-unit-dates",
+                                                             className="hm-time-row hm-time-dates"),
+                                                    html.Div(id="hm-int-unit-hours",
+                                                             className="hm-time-row hm-time-hours"),
+                                                ], className="p-2"),
+                                                className="hm-time-card"
+                                            ),
+                                            md=4, sm=12
+                                        ),
+                                    ], className="g-0 align-items-stretch mb-1"),
+
+                                    # Board con scroll interno (tabla + hm% + hm unit)
+                                    html.Div(
+                                        dbc.Row([
+                                            # Tabla integridad
+                                            dbc.Col(
+                                                dbc.Card(
+                                                    dbc.CardBody([
+                                                        html.Div(id="hm-int-table-container"),
+                                                    ], className="p-0", style={"minHeight": 0}),
+                                                    className="bg-dark text-white border-0 h-100"
+                                                ),
+                                                md=4, sm=12, className="mb-0 hm-int-table-pane"
+                                            ),
+
+                                            # Heatmap % integridad
+                                            dbc.Col(
+                                                dbc.Card(
+                                                    dbc.CardBody([
+                                                        dcc.Loading(
+                                                            dcc.Graph(
+                                                                id="hm-int-pct",
+                                                                figure=go.Figure(),
+                                                                config={"displayModeBar": False},
+                                                                style={"width": "100%", "margin": 0}
+                                                            ),
+                                                            type="default"
+                                                        ),
+                                                    ], className="p-0 hm-nudge-left"),
+                                                    className="bg-dark text-white border-0 h-100"
+                                                ),
+                                                md=4, sm=12, className="mb-0"
+                                            ),
+
+                                            # Heatmap UNIT integridad
+                                            dbc.Col(
+                                                dbc.Card(
+                                                    dbc.CardBody([
+                                                        dcc.Loading(
+                                                            dcc.Graph(
+                                                                id="hm-int-unit",
+                                                                figure=go.Figure(),
+                                                                config={"displayModeBar": False},
+                                                                style={"width": "100%", "margin": 0}
+                                                            ),
+                                                            type="default"
+                                                        ),
+                                                    ], className="p-0 hm-nudge-left"),
+                                                    className="bg-dark text-white border-0 h-100"
+                                                ),
+                                                md=4, sm=12, className="mb-0"
+                                            ),
+                                        ], className="g-0 align-items-stretch"),
+                                        className="hm-board",
+                                        # si tu .hm-board ya controla scroll, borra esto:
+                                        style={"maxHeight": "560px", "overflowY": "auto"},
+                                    ),
+                                ],
+                            ),
+
                         ], className="p-2"),
+
                     ], className="bg-dark text-white border-0 shadow-sm mb-2"),
                     md=12
                 ),
             ]),
-
             # === Histogramas en su propio Card (lado a lado, con títulos y scroll) ===
             html.Div(id="histo-anchor"),
             dbc.Row([
@@ -773,7 +999,8 @@ def serve_layout():
         dcc.Store(id="topoff-cluster-mode", data={"mode": "full"}),
         html.Div(id="topoff-scroll-dummy", style={"display": "none"}),
 
-
+        dcc.Store(id="heatmap-integrity-page-state", data={"page": 1, "page_size": 50}),
+        dcc.Store(id="heatmap-integrity-page-info"),
     ],
         fluid=True,
         style={"backgroundColor": "#121212", "color": "white"}
