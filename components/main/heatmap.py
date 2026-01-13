@@ -650,7 +650,7 @@ def build_heatmap_payloads_fast(
 
             # flag: tiene algo regular/crítico en 48h
             rows_all["__has_interest_pct"] = (rows_all["__last_off_pct"] >= 0).astype(int)
-
+            rows_all = rows_all[rows_all["__has_interest_pct"] == 1].copy()
             # Orden tipo “escalerita”:
             # 1) primero los que tienen algo regular/crítico
             # 2) dentro de esos: última hora con interés (más reciente arriba)
@@ -701,6 +701,7 @@ def build_heatmap_payloads_fast(
         # flag: tiene algo regular/critico en 48h
 
         rows_all["__has_interest_unit"] = (rows_all["__last_off_unit"] >= 0).astype(int)
+        rows_all = rows_all[rows_all["__has_interest_unit"] == 1].copy()
 
         rows_all = rows_all.sort_values(
 

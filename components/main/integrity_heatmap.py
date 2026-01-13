@@ -14,9 +14,11 @@ def _fmt_last_ts(ts):
     if ts is None or pd.isna(ts):
         return ""
     try:
-        return pd.to_datetime(ts).strftime("%Y-%m-%d %H:%M")
+        return pd.to_datetime(ts).strftime("%H:%M")  # <- solo hora
     except Exception:
-        return str(ts)
+        s = str(ts)
+        # fallback: intenta cortar lo último tipo "HH:MM"
+        return s[-5:] if len(s) >= 5 else s
 
 def build_integrity_heatmap_payloads_fast(
     df_meta: pd.DataFrame,
@@ -232,57 +234,49 @@ def build_integrity_heatmap_payloads_fast(
     page_info = {"total_rows": total_rows, "offset": start, "limit": limit, "showing": len(rows_page)}
     return pct_payload, unit_payload, page_info
 
-def render_integrity_summary_table(df_ts: pd.DataFrame, df_meta_page: pd.DataFrame, nets_heat: list):
-    """
-    df_meta_page: filas ya paginadas con columnas:
-      - noc_cluster, technology, vendor
-    """
-    if df_ts is None or df_ts.empty or df_meta_page is None or df_meta_page.empty:
+def render_integrity_summary_table(df_ts: pd.DataFrame, pct_payload: dict, nets_heat: list):
+    if df_ts is None or df_ts.empty or not pct_payload:
         return dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
 
     df = df_ts.copy()
+    for c in ["network", "vendor", "noc_cluster", "technology"]:
+        if c in df.columns:
+            df[c] = df[c].astype(str).str.strip()
 
-    # filtra networks efectivas (si vienen)
-    if nets_heat and "network" in df.columns:
-        df = df[df["network"].isin(nets_heat)]
-
-    # timestamp
     df["_ts"] = _safe_dt_col(df)
 
+    # filas EXACTAS (y orden) del heatmap
+    detail = pct_payload.get("row_detail") or pct_payload.get("y") or []
+
     rows = []
-    for _, r in df_meta_page.iterrows():
-        clus = r.get("noc_cluster")
-        tech = r.get("technology")
-        vend = r.get("vendor")
+    for y_id in detail:
+        # tech/vendor/cluster/network/INTEGRITY
+        parts = str(y_id).split("/", 4)
+        tech = parts[0] if len(parts) > 0 else ""
+        vend = parts[1] if len(parts) > 1 else ""
+        clus = parts[2] if len(parts) > 2 else ""
+        net  = parts[3] if len(parts) > 3 else ""
 
         m = (
             (df.get("noc_cluster") == clus) &
             (df.get("technology") == tech) &
-            (df.get("vendor") == vend)
+            (df.get("vendor") == vend) &
+            (df.get("network") == net)
         )
         sub = df.loc[m]
+
         if sub.empty:
-            last_str = ""
-            last_pct = ""
-            last_unit = ""
+            last_str = last_pct = last_unit = ""
         else:
             last_ts = sub["_ts"].max()
             sub_last = sub[sub["_ts"] == last_ts]
+            last_str = _fmt_last_ts(last_ts)  # ya solo HH:MM
 
-            # últimos valores (promedio sobre networks en esa muestra)
-            last_str = _fmt_last_ts(last_ts)
+            v_pct = pd.to_numeric(sub_last.get("integrity_deg_pct"), errors="coerce").mean()
+            last_pct = "" if pd.isna(v_pct) else f"{v_pct:.2f}"
 
-            if "integrity_deg_pct" in sub_last.columns:
-                v_pct = pd.to_numeric(sub_last["integrity_deg_pct"], errors="coerce").mean()
-                last_pct = "" if pd.isna(v_pct) else f"{v_pct:.2f}"
-            else:
-                last_pct = ""
-
-            if "integrity" in sub_last.columns:
-                v_u = pd.to_numeric(sub_last["integrity"], errors="coerce").mean()
-                last_unit = "" if pd.isna(v_u) else f"{v_u:.0f}"
-            else:
-                last_unit = ""
+            v_u = pd.to_numeric(sub_last.get("integrity"), errors="coerce").mean()
+            last_unit = "" if pd.isna(v_u) else f"{v_u:.0f}"
 
         rows.append(html.Tr([
             html.Td(clus, className="w-cluster"),
@@ -295,8 +289,7 @@ def render_integrity_summary_table(df_ts: pd.DataFrame, df_meta_page: pd.DataFra
 
     return dbc.Table(
         [html.Tbody(rows)],
-        bordered=False,
-        hover=True,
-        size="sm",
+        striped=True, bordered=False, hover=True, size="sm",
         className="mb-0 table table-dark table-hover kpi-table kpi-table-summary compact",
     )
+

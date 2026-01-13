@@ -142,17 +142,17 @@ def integrity_callbacks(app):
 
         # ===== Payloads (aquí usa tu builder) =====
         page_limit = len(df_meta_page)
-        pct_payload, unit_payload, _ = build_integrity_heatmap_payloads_fast(
-            df_meta=df_meta_page,
+        pct_payload, unit_payload, page_info = build_integrity_heatmap_payloads_fast(
+            df_meta=df_meta_all,  # <-- TOTAL, no page
             df_ts=df_ts,
             networks=nets_heat,
             today=today_str, yday=yday_str,
             min_pct_ok=80.0,
-            offset=0,
-            limit=page_limit,
+            offset=offset,  # <-- offset real de paginación
+            limit=limit,  # <-- page_size real (50)
         )
 
-        nrows = len((pct_payload or unit_payload or {}).get("y") or [])  # como tu patrón
+        nrows = len((pct_payload or unit_payload or {}).get("y") or [])
         hm_height = _hm_height(nrows)
 
         # Figuras
@@ -160,7 +160,11 @@ def integrity_callbacks(app):
         fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
 
         # Tabla resumen alineada a la misma página
-        table_component = render_integrity_summary_table(df_ts=df_ts, df_meta_page=df_meta_page, nets_heat=nets_heat)
+        table_component = render_integrity_summary_table(
+            df_ts=df_ts,
+            pct_payload=pct_payload,
+            nets_heat=nets_heat,
+        )
 
         total_pg = max(1, math.ceil(total / max(1, page_sz)))
         indicator = f"Página {page} de {total_pg}"

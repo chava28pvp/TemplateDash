@@ -68,7 +68,7 @@ def create_umbral_config_modal(network_options=None):
                             clearable=False,
                         ),
                         html.Small(
-                            "Selecciona qué tabla vas a configurar (perfiles independientes).",
+                            "Selecciona qué tabla vas a configurar",
                             className="text-muted d-block mt-1",
                         ),
                     ], md=8),
@@ -94,7 +94,7 @@ def create_umbral_config_modal(network_options=None):
                 # Selector de network (ámbito)
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Network (ámbito)"),
+                        html.Label("Network"),
                         dcc.Dropdown(
                             id="umbral-network",
                             options=net_options,
@@ -102,7 +102,7 @@ def create_umbral_config_modal(network_options=None):
                             clearable=False,
                         ),
                         html.Small(
-                            "Selecciona una red (o Global) para aplicar overrides por network.",
+                            "Selecciona una network.",
                             className="text-muted d-block mt-1",
                         ),
                     ], md=8),
@@ -111,7 +111,6 @@ def create_umbral_config_modal(network_options=None):
                 # Panel de Severidad (4 colores)
                 html.Div([
                     dbc.Badge("4 niveles", color="primary", className="me-2"),
-                    html.Span("Use valores de corte apropiados según la orientación."),
                     dbc.Row([
                         dbc.Col(_severity_card("excelente", "#2ecc71"), md=6),
                         dbc.Col(_severity_card("bueno", "#f1c40f"), md=6),
