@@ -103,11 +103,6 @@ def integrity_callbacks(app):
         # columna calculada
         df_ts = add_integrity_deg_pct(df_ts, integrity_baseline_map)
 
-        # filtro >= 80% (regla de negocio)
-        if "integrity_deg_pct" in df_ts.columns:
-            s = pd.to_numeric(df_ts["integrity_deg_pct"], errors="coerce")
-            df_ts = df_ts.loc[s >= 80.0].copy()
-
         if df_ts.empty:
             return dbc.Alert("Sin filas (>=80%) para mostrar.", color="secondary",
                              className="mb-0"), go.Figure(), go.Figure(), "Página 1 de 1", "Sin filas.", {
@@ -147,7 +142,7 @@ def integrity_callbacks(app):
             df_ts=df_ts,
             networks=nets_heat,
             today=today_str, yday=yday_str,
-            min_pct_ok=80.0,
+            min_pct_ok=0.0,
             offset=offset,  # <-- offset real de paginación
             limit=limit,  # <-- page_size real (50)
         )
