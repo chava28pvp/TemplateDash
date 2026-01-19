@@ -20,23 +20,25 @@ from src.Utils.utils_time import now_local
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct
 from dash.exceptions import PreventUpdate
 
-#Cach simple en memoria para df_ts
 _DFTS_CACHE = {}
-_DFTS_TTL = 300  # segundos
+_DFTS_TTL = 300
 
 _MAIN_CTX_CACHE = {}
-_MAIN_CTX_TTL = 120  # segundos
+_MAIN_CTX_TTL = 120
 
 MOCK_INTEGRITY_BASELINE = True
 MOCK_BASELINE_MULT = 1.25
-MOCK_ONLY_NETWORKS = {"NET", "ATT", "TEF"}  # si solo quieres NET
-# Última clave renderizada para evitar re-render idéntico
+MOCK_ONLY_NETWORKS = {"NET", "ATT", "TEF"}
+PREFERRED_NET_ORDER = ["NET", "ATT", "TEF"]
 _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
 
 HOLD_SECONDS = 600  # 10 minutos (ajústalo)
 
-
+def order_networks(nets):
+    first = [n for n in PREFERRED_NET_ORDER if n in nets]
+    rest = sorted([n for n in nets if n not in PREFERRED_NET_ORDER])
+    return first + rest
 def _ensure_df(x):
     return x if isinstance(x, pd.DataFrame) else pd.DataFrame()
 
@@ -173,7 +175,7 @@ def register_callbacks(app):
         df_main = _ensure_df(df_main)
 
         # Catálogos base
-        networks_all = sorted(df_main["network"].dropna().unique().tolist()) \
+        networks_all = order_networks(df_main["network"].dropna().unique().tolist()) \
             if "network" in df_main.columns else []
         techs_all = sorted(df_main["technology"].dropna().unique().tolist()) \
             if "technology" in df_main.columns else []
@@ -464,7 +466,8 @@ def register_callbacks(app):
         if networks:
             nets = networks
         else:
-            nets = sorted(df["network"].dropna().unique().tolist()) if "network" in df.columns else []
+            nets_raw = df["network"].dropna().unique().tolist()
+            nets = order_networks(nets_raw)
 
         # ---------- pivot + orden estable visual ----------
         key_cols = ["fecha", "hora", "vendor", "noc_cluster", "technology"]

@@ -26,17 +26,19 @@ def cell_severity(column: str, value, network: Optional[str] = None,
     r = float(thr.get("regular", b))
     c = float(thr.get("critico", r))
     v = float(value)
+    v = round(v, 1)
+    eps = 1e-9
     if ori == "higher_is_better":
         if v >= e: return "excelente"
         if v >= b: return "bueno"
         if v >= r: return "regular"
         return "critico"
     else:
-        if e >= v < b:
+        if v <= e + eps:
             return "excelente"
-        if b <= v < r:
+        if v <= b + eps:
             return "bueno"
-        if r <= v < c:
+        if v < c - eps:
             return "regular"
         return "critico"
 
