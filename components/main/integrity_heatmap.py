@@ -135,23 +135,33 @@ def build_integrity_heatmap_payloads_fast(
         raw_pct = _row48(pct_col, rid)
         raw_unit = _row48(unit_col, rid)
 
-        # máscara: si pct < 80 -> None en ambos
+        raw_pct = _row48(pct_col, rid)
+        raw_unit = _row48(unit_col, rid)
+
+        # máscara:
+        # - % SIEMPRE visible (si es numérico) y lo clampeamos a 0..100
+        # - UNIT solo visible si % >= min_pct_ok
         pct_masked = []
         unit_masked = []
         for p, u in zip(raw_pct, raw_unit):
             try:
                 fp = float(p)
-                ok = np.isfinite(fp) and fp >= float(min_pct_ok)
+                pct_ok_num = np.isfinite(fp)
             except Exception:
-                ok = False
+                fp = None
+                pct_ok_num = False
 
-            if ok:
-                pct_masked.append(p)
-                unit_masked.append(u)
+            if pct_ok_num:
+                # clamp 0..100
+                fp = max(0.0, min(100.0, fp))
+                pct_masked.append(fp)
             else:
                 pct_masked.append(None)
-                unit_masked.append(None)
 
+            ok = pct_ok_num and fp >= float(min_pct_ok)
+            unit_masked.append(u if ok else None)
+
+        # MUY IMPORTANTE: guardar filas en los temporales
         tmp_pct_raws.append(pct_masked)
         tmp_unit_raws.append(unit_masked)
 
@@ -169,20 +179,8 @@ def build_integrity_heatmap_payloads_fast(
         row_max_pct.append(rmax_p)
         row_max_unit.append(rmax_u)
 
-    # normalización para %: 80..100 => 0..1
-    def _norm_pct(p):
-        try:
-            fp = float(p)
-            if not np.isfinite(fp):
-                return None
-            # clamp 80..100
-            fp = max(float(min_pct_ok), min(100.0, fp))
-            return (fp - float(min_pct_ok)) / (100.0 - float(min_pct_ok))
-        except Exception:
-            return None
-
     z_pct_raw = tmp_pct_raws
-    z_pct = [[_norm_pct(p) if p is not None else None for p in row] for row in z_pct_raw]
+    z_pct = z_pct_raw
 
     # normalización UNIT: min/max dinámico de lo visible
     # recolecta valores
@@ -205,9 +203,9 @@ def build_integrity_heatmap_payloads_fast(
         "x_dt": x_dt,
         "y": y_labels,
         "color_mode": "progress",   # usamos gradiente
-        "color_theme": "green",
         "zmin": 0.0,
-        "zmax": 1.0,
+        "zmax": 100.0,
+        "color_theme": "pct_rg_80",
         "title": "Integridad (%)",
         "row_detail": row_detail,
         "row_last_ts": row_last_ts,

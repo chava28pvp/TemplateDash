@@ -13,7 +13,7 @@ import dash_bootstrap_components as dbc
 
 from src.Utils.alarmados import add_alarm_streak
 from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, \
-    fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week
+    fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week, fetch_kpis_by_keys
 from src.config import REFRESH_INTERVAL_MS
 
 from src.Utils.utils_time import now_local
@@ -25,8 +25,7 @@ _DFTS_TTL = 300
 
 _MAIN_CTX_CACHE = {}
 _MAIN_CTX_TTL = 120
-
-MOCK_INTEGRITY_BASELINE = True
+MOCK_INTEGRITY_BASELINE = False
 MOCK_BASELINE_MULT = 1.25
 MOCK_ONLY_NETWORKS = {"NET", "ATT", "TEF"}
 PREFERRED_NET_ORDER = ["NET", "ATT", "TEF"]
@@ -144,6 +143,88 @@ def _get_main_context_cached(fecha, hora, networks, technologies, vendors, clust
 def _set_main_context_cached(fecha, hora, networks, technologies, vendors, clusters, data):
     key = _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters)
     _MAIN_CTX_CACHE[key] = {"ts": time.time(), "data": data}
+
+def _is_integrity_pct_sort(sort_state: dict | None) -> bool:
+    col = (sort_state or {}).get("column")
+    return bool(col) and (str(col).endswith("__integrity_deg_pct") or col == "integrity_deg_pct")
+
+def _norm_str(x):
+    if x is None:
+        return None
+    s = str(x).strip()
+    return s
+
+def _build_global_order_keys_by_integrity_pct(
+    *,
+    fecha, hora, networks, technologies, vendors, clusters,
+    sort_state, integrity_baseline_map,
+):
+    """
+    Devuelve (ordered_keys, sort_net) donde ordered_keys es list de tuples:
+      (fecha,hora,vendor,noc_cluster,technology)
+    ordenadas globalmente por % integridad (asc/desc) para la red clickeada.
+    """
+    col = (sort_state or {}).get("column")
+    asc = bool((sort_state or {}).get("ascending", True))
+
+    sort_net = None
+    if col and "__" in col:
+        sort_net = col.split("__", 1)[0]  # NET/ATT/TEF
+
+    MIN_COLS = ["fecha", "hora", "vendor", "noc_cluster", "technology", "network", "integrity"]
+
+    df_min = fetch_kpis(
+        fecha=fecha,
+        hora=hora,
+        vendors=vendors or None,
+        clusters=clusters or None,
+        networks=networks or None,
+        technologies=technologies or None,
+        limit=None,
+        columns=MIN_COLS,
+    )
+    df_min = _ensure_df(df_min)
+    if df_min.empty:
+        return [], sort_net
+
+    # normaliza fecha/hora para que el match por keys sea estable
+    for c in ["fecha", "hora", "vendor", "noc_cluster", "technology", "network"]:
+        if c in df_min.columns:
+            df_min[c] = df_min[c].astype(str).str.strip()
+
+    if sort_net and "network" in df_min.columns:
+        df_min = df_min[df_min["network"] == sort_net]
+
+    if df_min.empty or "integrity" not in df_min.columns:
+        return [], sort_net
+
+    def _health_pct_row(r):
+        key = (r.get("network"), r.get("vendor"), r.get("noc_cluster"), r.get("technology"))
+        baseline = integrity_baseline_map.get(key)
+        integ = r.get("integrity")
+        if baseline is None or baseline <= 0:
+            return np.nan
+        try:
+            if integ is None or pd.isna(integ):
+                return np.nan
+            pct = (float(integ) / float(baseline)) * 100.0
+            return max(0.0, min(100.0, pct))
+        except Exception:
+            return np.nan
+
+    df_min = df_min.copy()
+    df_min["health_pct"] = df_min.apply(_health_pct_row, axis=1)
+
+    KEY_COLS = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
+
+    # una fila por key (si hay duplicados, toma el primero)
+    g = df_min.groupby(KEY_COLS, dropna=False)["health_pct"].first().reset_index()
+
+    # orden global (NaN al final)
+    g = g.sort_values("health_pct", ascending=asc, na_position="last", kind="mergesort")
+
+    ordered_keys = list(map(tuple, g[KEY_COLS].to_numpy()))
+    return ordered_keys, sort_net
 
 def register_callbacks(app):
 
@@ -364,12 +445,11 @@ def register_callbacks(app):
             if d is not None
         }
 
-        # ---------- orden explícito para alarmado ----------
+        # ---------- orden explícito para alarmado / global (columna clickeada) ----------
         sort_by = None
         sort_net = None
         ascending = True
 
-        # En alarmado sí permites sort por columna (si tu diseño lo quiere)
         if sort_state and sort_state.get("column"):
             col = sort_state["column"]
             ascending = bool(sort_state.get("ascending", True))
@@ -380,35 +460,79 @@ def register_callbacks(app):
             else:
                 sort_by = col
 
-        # ---------- fuente paginada ----------
-        if sort_mode == "alarmado":
-            safe_sort_state = sort_state  # si quieres permitir reorder visual
-            df, total = fetch_kpis_paginated_severity_sort(
-                fecha=fecha, hora=hora,
-                vendors=vendors or None, clusters=clusters or None,
-                networks=networks or None, technologies=technologies or None,
-                page=page, page_size=page_size,
-            )
-        else:
-            # GLOBAL con sort opcional por columna
-            safe_sort_state = sort_state if (sort_state and sort_state.get("column")) else None
+        # =========================================================
+        # ✅ sort GLOBAL por % integridad (integrity_deg_pct) SIN BD
+        #    - Construye orden global de keys en Python
+        #    - Trae SOLO las keys de la página
+        # =========================================================
+        df = None
+        total = None
+        safe_sort_state = None
+        explicit_page_key_order = None  # para mantener orden al pivotear
 
-            df, total = fetch_kpis_paginated_severity_global_sort(
+        if _is_integrity_pct_sort(sort_state) and (sort_mode != "alarmado"):
+            ordered_keys, _sort_net_clicked = _build_global_order_keys_by_integrity_pct(
                 fecha=fecha, hora=hora,
-                vendors=vendors or None, clusters=clusters or None,
-                networks=networks or None, technologies=technologies or None,
-                page=page, page_size=page_size,
-                sort_by_friendly=sort_by,
-                sort_net=sort_net,
-                ascending=ascending,
+                networks=networks, technologies=technologies,
+                vendors=vendors, clusters=clusters,
+                sort_state=sort_state,
+                integrity_baseline_map=integrity_baseline_map,
             )
+
+            total = len(ordered_keys)
+            total_pages = max(1, math.ceil(total / max(1, page_size)))
+            page_corrected = min(max(1, page), total_pages)
+
+            start = (page_corrected - 1) * page_size
+            end = start + page_size
+            page_keys = ordered_keys[start:end]
+            explicit_page_key_order = page_keys  # ✅ orden estable para el pivot
+
+            df = fetch_kpis_by_keys(
+                fecha=fecha,
+                hora=hora,
+                vendors=vendors or None,
+                clusters=clusters or None,
+                networks=networks or None,
+                technologies=technologies or None,
+                row_keys=page_keys,
+            )
+            df = _ensure_df(df)
+
+            # para que el header muestre la flecha en % integridad
+            safe_sort_state = sort_state
+
+        # ---------- fuente paginada normal (solo si NO venimos del modo especial) ----------
+        if df is None:
+            if sort_mode == "alarmado":
+                safe_sort_state = sort_state  # si quieres permitir reorder visual
+                df, total = fetch_kpis_paginated_severity_sort(
+                    fecha=fecha, hora=hora,
+                    vendors=vendors or None, clusters=clusters or None,
+                    networks=networks or None, technologies=technologies or None,
+                    page=page, page_size=page_size,
+                )
+            else:
+                # GLOBAL con sort opcional por columna
+                safe_sort_state = sort_state if (sort_state and sort_state.get("column")) else None
+                df, total = fetch_kpis_paginated_severity_global_sort(
+                    fecha=fecha, hora=hora,
+                    vendors=vendors or None, clusters=clusters or None,
+                    networks=networks or None, technologies=technologies or None,
+                    page=page, page_size=page_size,
+                    sort_by_friendly=sort_by,
+                    sort_net=sort_net,
+                    ascending=ascending,
+                )
 
         if df is None or df.empty:
             store_payload = {"columns": [], "rows": []}
             empty_alert = dbc.Alert("Sin datos para los filtros seleccionados.", color="warning")
             return empty_alert, "Página 1 de 1", "Sin resultados.", store_payload
-        # ---------- Reordenar GLOBAL por % integridad (solo modo global) ----------
-        if sort_mode != "alarmado":
+
+        # ---------- Reordenar GLOBAL por bucket de completitud (solo modo global) ----------
+        # ⚠️ NO lo apliques cuando el usuario está ordenando por % integridad, porque rompería ese orden.
+        if (sort_mode != "alarmado") and (not _is_integrity_pct_sort(sort_state)):
             def _health_pct_row(row):
                 net = row.get("network")
                 vendor_val = row.get("vendor")
@@ -423,10 +547,10 @@ def register_callbacks(app):
                 baseline = integrity_baseline_map.get(key)
 
                 if (
-                    baseline is None
-                    or baseline <= 0
-                    or not isinstance(integ_val, (int, float))
-                    or pd.isna(integ_val)
+                        baseline is None
+                        or baseline <= 0
+                        or not isinstance(integ_val, (int, float))
+                        or pd.isna(integ_val)
                 ):
                     return None
 
@@ -434,15 +558,12 @@ def register_callbacks(app):
                 health_pct = max(0.0, min(100.0, ratio * 100.0))
                 return health_pct
 
-            # mismo % de integridad que usas para la columna %
             df["integrity_health_pct"] = df.apply(_health_pct_row, axis=1)
 
-            # bucket: 0 = >=80%, 1 = resto (o sin dato)
             df["complete_bucket"] = df["integrity_health_pct"].apply(
                 lambda x: 0 if isinstance(x, (int, float)) and x >= 80.0 else 1
             )
 
-            # sort estable: respeta el orden por severidad que viene de SQL
             df = df.sort_values(
                 by=["complete_bucket"],
                 ascending=[True],
@@ -451,11 +572,11 @@ def register_callbacks(app):
 
         # ---------- alarmas (sin apply) ----------
         if "network" in df.columns:
-            key_cols = ["fecha", "hora", "network", "vendor", "noc_cluster", "technology"]
-            if all(k in df.columns for k in key_cols) and alarm_map:
+            key_cols_alarm = ["fecha", "hora", "network", "vendor", "noc_cluster", "technology"]
+            if all(k in df.columns for k in key_cols_alarm) and alarm_map:
                 df["fecha"] = df["fecha"].astype(str).str.strip()
                 df["hora"] = df["hora"].astype(str).str.strip()
-                keys = list(map(tuple, df[key_cols].to_numpy()))
+                keys = list(map(tuple, df[key_cols_alarm].to_numpy()))
                 df["alarmas"] = [alarm_map.get(k, 0) for k in keys]
             else:
                 df["alarmas"] = 0
@@ -466,7 +587,7 @@ def register_callbacks(app):
         if networks:
             nets = networks
         else:
-            nets_raw = df["network"].dropna().unique().tolist()
+            nets_raw = df["network"].dropna().unique().tolist() if "network" in df.columns else []
             nets = order_networks(nets_raw)
 
         # ---------- pivot + orden estable visual ----------
@@ -474,7 +595,11 @@ def register_callbacks(app):
         use_df = df
 
         if all(k in df.columns for k in key_cols) and nets:
-            tuples_in_order = list(dict.fromkeys(map(tuple, df[key_cols].itertuples(index=False, name=None))))
+            # ✅ si venimos del sort global por % integridad, respeta el orden de la página
+            tuples_in_order = (
+                    explicit_page_key_order
+                    or list(dict.fromkeys(map(tuple, df[key_cols].itertuples(index=False, name=None))))
+            )
             order_map = {t: i for i, t in enumerate(tuples_in_order)}
 
             wide = pivot_by_network(df, networks=nets)

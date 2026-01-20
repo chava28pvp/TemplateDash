@@ -25,6 +25,12 @@ SEV_COLORS = {
     "critico":   "#e74c3c",  # rojo
 }
 SEV_ORDER = ["excelente", "bueno", "regular", "critico"]
+PCT_COLORSCALE_RG_80 = [
+    [0.00, "#d7191c"],      # rojo (0)
+    [0.80, "#fdae61"],      # amarillo (80)
+    [0.800001, "#a6d96a"],  # verde claro apenas >80
+    [1.00, "#1a9641"],      # verde intenso (100)
+]
 # =========================
 # Helpers
 # =========================
@@ -960,11 +966,16 @@ def build_heatmap_figure(
         ]
     else:
         # progress (gradiente)
-        if theme == "green":
+        if theme == "pct_rg_80":
+            # 0..80 rojo->amarillo, 80..100 verde claro->verde fuerte
+            colorscale = PCT_COLORSCALE_RG_80
+
+        elif theme == "green":
             colorscale = [
                 [0.0, "#e9f7ef"],  # verde muy claro
                 [1.0, "#2ecc71"],  # verde
             ]
+
         else:
             # default azul (tu actual)
             colorscale = [
