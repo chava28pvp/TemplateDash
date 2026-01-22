@@ -505,8 +505,9 @@ def build_heatmap_payloads_fast(
             ]
 
             # >>> SOLO regular(3) y critico(4) cuentan para la escalera
-            df_long["score_interest_pct"] = np.where(df_long["lvl_pct"] >= 2.0, df_long["score_pct"], np.nan)
-
+            STAIR_LVL_MIN_PCT = 1
+            df_long["score_interest_pct"] = np.where(df_long["lvl_pct"] >= STAIR_LVL_MIN_PCT, df_long["score_pct"],
+                                                     np.nan)
             # Compacta a 1 score por hora (max) por fila (solo “interesantes”)
             df_score_hour = (
                 df_long.dropna(subset=["valores", "offset48"])

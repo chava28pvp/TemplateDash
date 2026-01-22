@@ -113,7 +113,7 @@ def integrity_callbacks(app):
             sorted(df_ts["network"].dropna().unique().tolist()) if "network" in df_ts.columns else []
         )
 
-        # meta total (tríos) + paginado PROPIO
+        # meta total (TRÍOS) – esto se queda
         df_meta_all = (
             df_ts[["noc_cluster", "technology", "vendor"]]
             .dropna()
@@ -122,51 +122,43 @@ def integrity_callbacks(app):
             .reset_index(drop=True)
         )
 
-        total = int(len(df_meta_all))
-        df_meta_page = df_meta_all.iloc[offset:offset + limit].reset_index(drop=True)
-        showing = int(len(df_meta_page))
+        pct_payload, unit_payload, page_info = build_integrity_heatmap_payloads_fast(
+            df_meta=df_meta_all,  # total de tríos
+            df_ts=df_ts,
+            networks=nets_heat,
+            today=today_str, yday=yday_str,
+            min_pct_ok=0.0,  # si quieres enmascarar UNIT cuando <80
+            offset=offset,
+            limit=limit,
+            sort_by_degrade=True,
+            degrade_thr=80.0,
+            streak_cap=3,
+        )
 
-        page_info = {"total_rows": total, "offset": offset, "limit": limit, "showing": showing}
-
-        if df_meta_page.empty:
+        # Si no hay filas en esa página
+        nrows = len((pct_payload or {}).get("y") or [])
+        if nrows == 0:
+            total = int(page_info.get("total_rows", 0))
             total_pg = max(1, math.ceil(total / max(1, page_sz)))
             indicator = f"Página {page} de {total_pg}"
             banner = "Sin filas."
             return dbc.Alert("Sin filas para esta página.", color="secondary",
                              className="mb-0"), go.Figure(), go.Figure(), indicator, banner, page_info
 
-        # ===== Payloads (aquí usa tu builder) =====
-        page_limit = len(df_meta_page)
-        pct_payload, unit_payload, page_info = build_integrity_heatmap_payloads_fast(
-            df_meta=df_meta_all,  # <-- TOTAL, no page
-            df_ts=df_ts,
-            networks=nets_heat,
-            today=today_str, yday=yday_str,
-            min_pct_ok=0.0,
-            offset=offset,  # <-- offset real de paginación
-            limit=limit,  # <-- page_size real (50)
-        )
-
-        nrows = len((pct_payload or unit_payload or {}).get("y") or [])
         hm_height = _hm_height(nrows)
-
-        # Figuras
         fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
         fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
 
-        # Tabla resumen alineada a la misma página
-        table_component = render_integrity_summary_table(
-            df_ts=df_ts,
-            pct_payload=pct_payload,
-            nets_heat=nets_heat,
-        )
-
+        # indicador/banner usando page_info REAL
+        total = int(page_info.get("total_rows", 0))
         total_pg = max(1, math.ceil(total / max(1, page_sz)))
         indicator = f"Página {page} de {total_pg}"
 
-        start_i = offset + 1 if showing else 0
-        end_i = offset + showing if showing else 0
+        start_i = int(page_info.get("offset", 0)) + 1 if page_info.get("showing") else 0
+        end_i = int(page_info.get("offset", 0)) + int(page_info.get("showing", 0)) if page_info.get("showing") else 0
         banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
+
+        table_component = render_integrity_summary_table(df_ts=df_ts, pct_payload=pct_payload, nets_heat=nets_heat)
 
         return table_component, fig_pct, fig_unit, indicator, banner, page_info
 
@@ -217,18 +209,22 @@ def integrity_callbacks(app):
         Input("hm-int-page-prev", "n_clicks"),
         Input("hm-int-page-next", "n_clicks"),
         State("heatmap-integrity-page-state", "data"),
+        State("heatmap-integrity-page-info", "data"),  # <-- AÑADE ESTO
         prevent_initial_call=True,
     )
-    def hm_int_paginate(n_prev, n_next, state):
+    def hm_int_paginate(n_prev, n_next, state, page_info):
         state = state or {"page": 1, "page_size": 50}
         page = int(state.get("page", 1))
         ps = int(state.get("page_size", 50))
+
+        total_rows = int((page_info or {}).get("total_rows", 0))
+        max_page = max(1, math.ceil(total_rows / max(1, ps))) if total_rows else 1
 
         trig = ctx.triggered_id
         if trig == "hm-int-page-prev":
             page = max(1, page - 1)
         elif trig == "hm-int-page-next":
-            page = page + 1
+            page = min(max_page, page + 1)
 
         return {"page": page, "page_size": ps}
 

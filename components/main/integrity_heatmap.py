@@ -21,15 +21,18 @@ def _fmt_last_ts(ts):
         return s[-5:] if len(s) >= 5 else s
 
 def build_integrity_heatmap_payloads_fast(
-    df_meta: pd.DataFrame,
-    df_ts: pd.DataFrame,
-    *,
-    networks=None,
-    today=None,
-    yday=None,
-    min_pct_ok: float = 80.0,
-    offset=0,
-    limit=50,
+        df_meta: pd.DataFrame,
+        df_ts: pd.DataFrame,
+        *,
+        networks=None,
+        today=None,
+        yday=None,
+        min_pct_ok: float = 80.0,
+        offset=0,
+        limit=50,
+        sort_by_degrade: bool = True,
+        degrade_thr: float = 80.0,
+        streak_cap: int = 3,
 ):
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
@@ -70,14 +73,12 @@ def build_integrity_heatmap_payloads_fast(
         on="_tmp"
     ).drop(columns="_tmp")
 
-    total_rows = len(rows_full)
-    start = max(0, int(offset))
-    end = start + max(1, int(limit))
-    rows_page = rows_full.iloc[start:end].reset_index(drop=True)
+    # RID global por fila (trío x network)
+    rows_full = rows_full.reset_index(drop=True)
+    rows_full["rid"] = np.arange(len(rows_full), dtype=int)
 
-    # arma df_small solo de keys visibles
-    keys_df = rows_page[["technology", "vendor", "noc_cluster", "network"]].drop_duplicates().reset_index(drop=True)
-    keys_df["rid"] = np.arange(len(keys_df))
+    # keys_df global (NO por página)
+    keys_df = rows_full[["technology", "vendor", "noc_cluster", "network", "rid"]].copy()
 
     # filtra TS a ayer/hoy y keys visibles
     base_cols = ["technology", "vendor", "noc_cluster", "network", "fecha", "hora"]
@@ -100,6 +101,91 @@ def build_integrity_heatmap_payloads_fast(
     for m in (pct_col, unit_col):
         sub = df_small[["rid", "offset48", m]].dropna()
         metric_maps[m] = dict(zip(zip(sub["rid"], sub["offset48"]), sub[m]))
+    # ===== ORDENAR POR DEGRADE RECIENTE + RACHA =====
+    if sort_by_degrade:
+        mp_pct = metric_maps.get(pct_col) or {}
+
+        def _last_off(rid: int):
+            # última muestra disponible (offset más reciente con % numérico)
+            for off in range(47, -1, -1):
+                v = mp_pct.get((rid, off))
+                if v is None:
+                    continue
+                try:
+                    fv = float(v)
+                    if np.isfinite(fv):
+                        return off
+                except Exception:
+                    pass
+            return None
+
+        def _sort_key(rid: int):
+            lo = _last_off(rid)
+            if lo is None:
+                # sin datos: al final
+                return (10 ** 9, 0, 10 ** 9)
+
+            # busca el degrade más cercano desde la última muestra hacia atrás
+            found_off = None
+            found_pct = None
+            recency = 10 ** 9
+
+            for d in range(0, lo + 1):
+                off = lo - d
+                v = mp_pct.get((rid, off))
+                if v is None:
+                    continue
+                try:
+                    fv = float(v)
+                    if np.isfinite(fv) and fv < float(degrade_thr):
+                        recency = d  # 0 = última muestra ya degradada
+                        found_off = off
+                        found_pct = fv
+                        break
+                except Exception:
+                    pass
+
+            if found_off is None:
+                # nunca degradó (<thr): al final
+                return (10 ** 9, 0, 10 ** 9)
+
+            # racha consecutiva hacia atrás desde found_off
+            streak = 0
+            off = found_off
+            while off >= 0:
+                v = mp_pct.get((rid, off))
+                if v is None:
+                    break
+                try:
+                    fv = float(v)
+                    if np.isfinite(fv) and fv < float(degrade_thr):
+                        streak += 1
+                        off -= 1
+                    else:
+                        break
+                except Exception:
+                    break
+
+            streak = min(int(streak), int(streak_cap or 3))
+
+            # Orden: recency ASC (0 primero), streak DESC (por eso negativo), pct peor primero (ASC)
+            return (recency, -streak, float(found_pct) if found_pct is not None else 10 ** 9)
+
+        # Calcula claves y ordena estable
+        keys = [_sort_key(rid) for rid in rows_full["rid"].to_list()]
+        rows_full["_recency"] = [k[0] for k in keys]
+        rows_full["_streak"] = [k[1] for k in keys]
+        rows_full["_pctbad"] = [k[2] for k in keys]
+
+        rows_full = rows_full.sort_values(
+            ["_recency", "_streak", "_pctbad", "noc_cluster", "vendor", "technology", "network"],
+            kind="stable"
+        ).reset_index(drop=True)
+        # ===== PAGINACIÓN (DESPUÉS DEL SORT) =====
+        total_rows = len(rows_full)
+        start = max(0, int(offset))
+        end = start + max(1, int(limit))
+        rows_page = rows_full.iloc[start:end].reset_index(drop=True)
 
     def _row48(metric, rid):
         mp = metric_maps.get(metric) or {}
@@ -120,20 +206,11 @@ def build_integrity_heatmap_payloads_fast(
 
     for r in rows_page.itertuples(index=False):
         tech, vend, clus, net = r.technology, r.vendor, r.noc_cluster, r.network
-        rid = keys_df.loc[
-            (keys_df["technology"] == tech) &
-            (keys_df["vendor"] == vend) &
-            (keys_df["noc_cluster"] == clus) &
-            (keys_df["network"] == net),
-            "rid"
-        ].iloc[0]
+        rid = int(r.rid)
 
         y_id = f"{tech}/{vend}/{clus}/{net}/INTEGRITY"
         y_labels.append(y_id)
         row_detail.append(y_id)
-
-        raw_pct = _row48(pct_col, rid)
-        raw_unit = _row48(unit_col, rid)
 
         raw_pct = _row48(pct_col, rid)
         raw_unit = _row48(unit_col, rid)
