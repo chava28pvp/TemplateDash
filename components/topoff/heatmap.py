@@ -397,6 +397,28 @@ def build_heatmap_payloads_topoff(
                     .max()
                     .dropna(subset=["score_interest_pct"])
                 )
+                # ====== ÚLTIMA ALARMA (último bin interesante) ======
+                df_last_interest = (
+                    df_score_bin.sort_values("offset192")
+                    .groupby(grp_cols, as_index=False)
+                    .tail(1)
+                    .rename(columns={
+                        "offset192": "__last_int_off_pct",
+                        "score_interest_pct": "__last_int_score_pct",
+                    })
+                )
+
+                rows_all = rows_all.merge(
+                    df_last_interest[grp_cols + ["__last_int_off_pct", "__last_int_score_pct"]],
+                    on=grp_cols,
+                    how="left",
+                )
+
+                rows_all["__last_int_off_pct"] = pd.to_numeric(rows_all["__last_int_off_pct"], errors="coerce").fillna(
+                    -1).astype(int)
+                rows_all["__last_int_score_pct"] = pd.to_numeric(rows_all["__last_int_score_pct"],
+                                                                 errors="coerce").fillna(float("-inf"))
+                rows_all["__has_interest_pct"] = (rows_all["__last_int_off_pct"] >= 0).astype(int)
 
                 if not df_score_bin.empty:
                     wide = df_score_bin.pivot(index=grp_cols, columns="offset192", values="score_interest_pct").reset_index()
@@ -416,8 +438,8 @@ def build_heatmap_payloads_topoff(
 
                 # ====== SORT MAIN-LIKE (con has_any_sample primero) ======
                 rows_all = rows_all.sort_values(
-                    by=["__has_any_sample_pct", "__last_any_lvl_pct", "__last_any_off_pct", "__last_any_score_pct"] + stair_sort_cols,
-                    ascending=[False, False, False, False] + ([False] * len(stair_sort_cols)),
+                    by=["__has_interest_pct", "__last_int_off_pct", "__last_int_score_pct"] + stair_sort_cols,
+                    ascending=[False, False, False] + ([False] * len(stair_sort_cols)),
                     kind="stable",
                 )
                 rows_all["__row_rank_mainlike"] = np.arange(len(rows_all), dtype=int)
@@ -480,55 +502,65 @@ def build_heatmap_payloads_topoff(
     # =========================================================
     # ORDEN FINAL POR CLUSTER (sin romper main-like)
     # =========================================================
-    for col in ["technology", "vendor", "cluster", "site_att"]:
-        if col in rows_all.columns:
-            rows_all[col] = rows_all[col].astype(str)
+    DISABLE_CLUSTER_SORT = True  # ✅ Opción A: deja SOLO main-like (sin agrupar por cluster)
 
-    mask_empty_cluster = rows_all["cluster"].isin(["", "nan", "None"])
-    if "site_att" in rows_all.columns:
-        rows_all.loc[mask_empty_cluster, "cluster"] = rows_all.loc[mask_empty_cluster, "site_att"].astype(str)
+    if not DISABLE_CLUSTER_SORT:
 
-    cluster_group_cols = ["cluster"]
+        for col in ["technology", "vendor", "cluster", "site_att"]:
+            if col in rows_all.columns:
+                rows_all[col] = rows_all[col].astype(str)
 
-    cluster_stats = (
-        rows_all.groupby(cluster_group_cols, as_index=False)
-        .agg(
-            cluster_has_any=("__has_any_sample_pct", "max"),
-            cluster_best_rank=("__row_rank_mainlike", "min"),
+        mask_empty_cluster = rows_all["cluster"].isin(["", "nan", "None"])
+        if "site_att" in rows_all.columns:
+            rows_all.loc[mask_empty_cluster, "cluster"] = rows_all.loc[mask_empty_cluster, "site_att"].astype(str)
+
+        cluster_group_cols = ["cluster"]
+
+        cluster_stats = (
+            rows_all.groupby(cluster_group_cols, as_index=False)
+            .agg(
+                cluster_has_any=("__has_any_sample_pct", "max"),
+                cluster_best_rank=("__row_rank_mainlike", "min"),
+            )
         )
-    )
 
-    rows_all = rows_all.merge(cluster_stats, on=cluster_group_cols, how="left", validate="many_to_one")
+        rows_all = rows_all.merge(cluster_stats, on=cluster_group_cols, how="left", validate="many_to_one")
 
-    # valores en orden fijo
-    if valores_order:
-        rows_all["valores"] = pd.Categorical(rows_all["valores"], categories=list(valores_order), ordered=True)
+        # valores en orden fijo
+        if valores_order:
+            rows_all["valores"] = pd.Categorical(rows_all["valores"], categories=list(valores_order), ordered=True)
 
-    rows_all = rows_all.sort_values(
-        by=[
-            "cluster_has_any",
-            "cluster_best_rank",
-            "cluster",
-            "site_att",
-            "technology",
-            "vendor",
-            "__has_any_sample_pct",  # <- 1 primero (tiene datos)
-            "__row_rank_mainlike",  # <- orden real main-like dentro del cluster
-            "valores",  # <- ya al final, para que NO suba vacíos
-        ],
-        ascending=[
-            False,  # cluster_has_any
-            True,  # cluster_best_rank
-            True,  # cluster
-            True,  # site_att
-            True,  # technology
-            True,  # vendor
-            False,  # __has_any_sample_pct (1 arriba)
-            True,  # __row_rank_mainlike (menor = mejor)
-            True,  # valores
-        ],
-        kind="stable",
-    )
+        rows_all = rows_all.sort_values(
+            by=[
+                "cluster_has_any",
+                "cluster_best_rank",
+                "cluster",
+                "site_att",
+                "technology",
+                "vendor",
+                "__has_any_sample_pct",  # <- 1 primero (tiene datos)
+                "__row_rank_mainlike",  # <- orden real main-like dentro del cluster
+                "valores",
+            ],
+            ascending=[
+                False,  # cluster_has_any
+                True,  # cluster_best_rank
+                True,  # cluster
+                True,  # site_att
+                True,  # technology
+                True,  # vendor
+                False,  # __has_any_sample_pct
+                True,  # __row_rank_mainlike
+                True,  # valores
+            ],
+            kind="stable",
+        )
+
+    else:
+        # ✅ Opción A: NO reordenar por cluster, conservar exactamente el orden main-like ya calculado.
+        # Solo aplica el orden fijo de "valores" si lo deseas (no altera el rank, solo el tipo).
+        if valores_order:
+            rows_all["valores"] = pd.Categorical(rows_all["valores"], categories=list(valores_order), ordered=True)
 
     # --- paginado ---
     # =========================================================
@@ -808,7 +840,7 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
         dtick=ONE_HOUR_MS,  # ticks cada hora aunque haya bins de 15m
         showticklabels=False,
         ticks="",
-        fixedrange=True,
+        fixedrange=False,
     )
 
     fig.update_yaxes(
@@ -818,7 +850,7 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
         zeroline=False,
         title="",
         automargin=False,
-        fixedrange=True,
+        fixedrange=False,
         categoryorder="array",
         categoryarray=y,
         autorange="reversed",
@@ -835,7 +867,7 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
 
     fig.update_layout(
         autosize=False,
-        height=height,
+        height=max(height, 900),
         margin=dict(l=4, r=4, t=MARG_TOP, b=MARG_BOTTOM),
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#eaeaea"),

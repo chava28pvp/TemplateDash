@@ -835,7 +835,7 @@ def serve_layout():
                                                         dcc.Loading(
                                                             dcc.Graph(
                                                                 id="topoff-hm-pct",
-                                                                config={"displayModeBar": False},
+                                                                config={"displayModeBar": True, "scrollZoom": True},
                                                                 style={"width": "100%", "margin": 0}
                                                             ),
                                                             type="default"
