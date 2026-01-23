@@ -740,7 +740,6 @@ def serve_layout():
                                             value="alarm_bins_pct",
                                             options=[
                                                 {"label": "Alarmas %", "value": "alarm_bins_pct"},
-                                                {"label": "Alarmas UNIT", "value": "alarm_bins_unit"},
                                             ],
                                             className="bg-white text-dark",
                                             style={"minWidth": "160px"},
@@ -835,7 +834,8 @@ def serve_layout():
                                                         dcc.Loading(
                                                             dcc.Graph(
                                                                 id="topoff-hm-pct",
-                                                                config={"displayModeBar": True, "scrollZoom": True},
+                                                                responsive=False,
+                                                                config={"displayModeBar": False, "scrollZoom": True},
                                                                 style={"width": "100%", "margin": 0}
                                                             ),
                                                             type="default"
@@ -853,6 +853,7 @@ def serve_layout():
                                                         dcc.Loading(
                                                             dcc.Graph(
                                                                 id="topoff-hm-unit",
+                                                                responsive=False,
                                                                 config={"displayModeBar": False},
                                                                 style={"width": "100%", "margin": 0}
                                                             ),
@@ -866,7 +867,7 @@ def serve_layout():
 
                                         ], className="g-0 align-items-stretch"),
 
-                                        className="topoff-pane"  # 👈 solo aquí scrollea el body
+                                        className="topoff-pane"
                                     ),
 
                                 ],

@@ -5,6 +5,10 @@ from dash import html
 import dash_bootstrap_components as dbc
 from components.main.heatmap import _infer_networks, _max_date_str, _day_str, _normalize
 
+def vendor_disp(v):
+    s = "" if v is None or pd.isna(v) else str(v).strip()
+    return (s[0].upper()) if s else ""
+
 def _safe_dt_col(df: pd.DataFrame) -> pd.Series:
     if "fecha" not in df.columns or "hora" not in df.columns:
         return pd.to_datetime(pd.NaT)
@@ -356,7 +360,7 @@ def render_integrity_summary_table(df_ts: pd.DataFrame, pct_payload: dict, nets_
         rows.append(html.Tr([
             html.Td(clus, className="w-cluster"),
             html.Td(tech, className="w-tech"),
-            html.Td(vend, className="w-vendor"),
+            html.Td(vendor_disp(vend), title=vend, className="w-vendor"),
             html.Td(last_str, className="w-ultima"),
             html.Td(last_pct, className="w-num ta-right"),
             html.Td(last_unit, className="w-num ta-right"),

@@ -363,9 +363,10 @@ def topoff_heatmap_callbacks(app):
 
         hm_height = int(page_info.get("height") or 300)
 
-        fig_pct = build_heatmap_figure_topoff(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
+        fig_pct = build_heatmap_figure_topoff(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure(
+            layout={"height": hm_height})
         fig_unit = build_heatmap_figure_topoff(unit_payload, height=hm_height,
-                                               decimals=0) if unit_payload else go.Figure()
+                                               decimals=0) if unit_payload else go.Figure(layout={"height": hm_height})
 
         if pct_payload or unit_payload:
             table_component = render_heatmap_summary_table_topoff(

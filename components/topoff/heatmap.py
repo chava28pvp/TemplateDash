@@ -47,12 +47,17 @@ META_COLS_TOPOFF = [
 # Alturas para alinear fila-a-fila (idéntico a main)
 ROW_H = 26
 MARG_TOP = 0
-MARG_BOTTOM = 124
+MARG_BOTTOM = 170
 EXTRA = 0
 
 # =========================================================
 # Helpers
 # =========================================================
+def _hm_height_topoff(n_rows: int) -> int:
+    if n_rows <= 0:
+        return 300
+    return int(n_rows * ROW_H + MARG_TOP + MARG_BOTTOM + EXTRA)
+
 def _build_x_dt_15m(day_str):
     # 96 bins por día (24*4)
     return [
@@ -739,7 +744,7 @@ def build_heatmap_payloads_topoff(
         "offset": start,
         "limit": limit,
         "showing": len(rows_page),
-        "height": _hm_height(len(rows_page)),
+        "height": _hm_height_topoff(len(rows_page)),
     }
 
     return pct_payload, unit_payload, page_info
@@ -867,7 +872,7 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
 
     fig.update_layout(
         autosize=False,
-        height=max(height, 900),
+        height=max(int(height or 300), 300),
         margin=dict(l=4, r=4, t=MARG_TOP, b=MARG_BOTTOM),
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#eaeaea"),

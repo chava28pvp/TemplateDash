@@ -121,4 +121,17 @@
 
   text-align: center;
 }
+/* ✅ Deja que mande figure.layout.height */
+.topoff-pane .dash-graph,
+.topoff-pane .dash-graph > div,
+.topoff-pane .js-plotly-plot,
+.topoff-pane .plot-container,
+.topoff-pane .svg-container {
+  height: auto !important;
+}
+/* Evita que las cards/cols estiren el graph */
+.topoff-pane .card,
+.topoff-pane .card-body {
+  height: auto !important;
+}
 

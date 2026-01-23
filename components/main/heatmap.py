@@ -26,10 +26,12 @@ SEV_COLORS = {
 }
 SEV_ORDER = ["excelente", "bueno", "regular", "critico"]
 PCT_COLORSCALE_RG_80 = [
-    [0.00, "#d7191c"],      # rojo (0)
-    [0.80, "#fdae61"],      # amarillo (80)
+    [0.00, "#d7191c"],  # rojo (peor)
+    [0.35, "#f46d43"],  # rojo-naranja
+    [0.60, "#e67e22"],  # naranja
+    [0.80, "#f1c40f"],  # amarillo (cerca de 80)
     [0.800001, "#a6d96a"],  # verde claro apenas >80
-    [1.00, "#1a9641"],      # verde intenso (100)
+    [1.00, "#2ecc71"],  # verde intenso
 ]
 # =========================
 # Helpers
@@ -191,10 +193,10 @@ def _last_numeric(seq):
             pass
     return None
 # === Alturas para alinear fila-a-fila ===
-ROW_H = 26           # 👈 Debe coincidir con tu CSS
+ROW_H = 26
 MARG_TOP = 0
-MARG_BOTTOM = 124    # Igual a 'b' en fig.update_layout(margin=...)
-EXTRA = 0      # Ajuste fino opcional
+MARG_BOTTOM = 124
+EXTRA = 0
 
 def _hm_height(nrows: int) -> int:
     content = nrows * ROW_H                 # alto EXACTO de filas
