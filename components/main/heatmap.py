@@ -1037,8 +1037,27 @@ def build_heatmap_figure(
         customdata=customdata,
         hovertemplate=hover_tmpl,
         hoverongaps=False,
-        xgap=0.5, ygap=0.5,          # divisiones remarcadas
+        xgap=0.5, ygap=0.5,
     ))
+    missing = payload.get("missing_mask")
+    if missing:
+        fig.add_trace(go.Heatmap(
+            z=missing,
+            x=x, y=y,
+            zmin=0, zmax=1,
+            colorscale=[
+                [0.0, "rgba(0,0,0,0)"],
+                [1.0, SEV_COLORS["critico"]],
+            ],
+            showscale=False,
+            hoverongaps=False,
+            hovertemplate=(
+                "<span style='font-size:120%; font-weight:700'>NULL</span><br>"
+                "<span style='opacity:0.85'>%{x|%Y-%m-%d %H:%M}</span><br>"
+                "<extra></extra>"
+            ),
+            xgap=0.5, ygap=0.5,
+        ))
 
     # Eje X: SIN labels/ticks para no “robar” altura
     THREE_H_MS = 3 * 3600 * 1000

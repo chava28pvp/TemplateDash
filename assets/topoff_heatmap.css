@@ -34,7 +34,7 @@
 
 /* widths TopOff */
 .topoff-board .topoff-table .w-cluster  { width: 32px; max-width: 32px; }
-.topoff-board .topoff-table .w-sitio  { width: 32px; max-width: 32px; }
+.topoff-board .topoff-table .w-sitio  { width: 60px; max-width: 60px; }
 .topoff-board .topoff-table .w-tech   { width: 32px; max-width: 32px; text-align:center; }
 .topoff-board .topoff-table .w-vendor { width: 22px; max-width: 22px; min-width: 22px; text-align:center; } /* blindaje */
 .topoff-board .topoff-table .w-valor  { width: 30px; max-width: 30px; text-align:center; }
@@ -50,7 +50,6 @@
   border-spacing: 0;
 }
 
-/* 👇 aquí lo importante: el thead del body NO se muestra */
 .topoff-board .topoff-table.compact thead{
   display: none !important;
 }

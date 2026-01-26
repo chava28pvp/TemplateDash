@@ -413,7 +413,7 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
         [thead, html.Tbody(body_rows)],
         bordered=False,
         hover=True,
-        responsive=True,
+        responsive=False,
         striped=True,
         size="sm",
         className="kpi-table compact",

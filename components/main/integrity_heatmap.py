@@ -207,6 +207,7 @@ def build_integrity_heatmap_payloads_fast(
     # primero construimos raws + máscara por pct>=80
     tmp_unit_raws = []
     tmp_pct_raws = []
+    missing_mask = []
 
     for r in rows_page.itertuples(index=False):
         tech, vend, clus, net = r.technology, r.vendor, r.noc_cluster, r.network
@@ -224,6 +225,9 @@ def build_integrity_heatmap_payloads_fast(
         # - UNIT solo visible si % >= min_pct_ok
         pct_masked = []
         unit_masked = []
+        miss_row = []
+        allow_unit_when_pct_missing = True  # o parámetro
+
         for p, u in zip(raw_pct, raw_unit):
             try:
                 fp = float(p)
@@ -233,18 +237,23 @@ def build_integrity_heatmap_payloads_fast(
                 pct_ok_num = False
 
             if pct_ok_num:
-                # clamp 0..100
                 fp = max(0.0, min(100.0, fp))
                 pct_masked.append(fp)
+                miss_row.append(None)  # <-- NO faltante
             else:
-                pct_masked.append(None)
+                pct_masked.append(None)  # <-- tu null real
+                miss_row.append(1)  # <-- faltante => pintar rojo
 
-            ok = pct_ok_num and fp >= float(min_pct_ok)
-            unit_masked.append(u if ok else None)
+            if pct_ok_num and fp is not None:
+                ok_unit = fp >= float(min_pct_ok)
+            else:
+                ok_unit = True  # <-- clave: permitir UNIT cuando % es NaN (no hay baseline)
 
-        # MUY IMPORTANTE: guardar filas en los temporales
+            unit_masked.append(u if ok_unit else None)
+
         tmp_pct_raws.append(pct_masked)
         tmp_unit_raws.append(unit_masked)
+        missing_mask.append(miss_row)
 
         # stats por fila
         arr_u = np.array([v if isinstance(v, (int, float)) else np.nan for v in unit_masked], float)
@@ -292,6 +301,7 @@ def build_integrity_heatmap_payloads_fast(
         "row_last_ts": row_last_ts,
         "row_max_pct": row_max_pct,
         "row_max_unit": row_max_unit,
+        "missing_mask": missing_mask,
     }
 
     unit_payload = {

@@ -14,7 +14,7 @@ from components.main.histograma import \
 import dash_bootstrap_components as dbc
 
 from src.Utils.umbrales.umbrales_manager import UM_MANAGER
-from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap, fetch_integrity_baseline_week
+from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap
 
 #Cach simple en memoria para df_ts
 _DFTS_CACHE = {}

@@ -643,7 +643,7 @@ def render_kpi_table_multinet(
         [header, body],
         bordered=False,
         hover=True,
-        responsive=True,
+        responsive=False,
         striped=True,
         size="sm",
         className="kpi-table compact",

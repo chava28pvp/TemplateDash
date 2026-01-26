@@ -301,7 +301,7 @@ def serve_layout():
                             # =========================
                             dbc.Collapse(
                                 id="collapse-hm-int",
-                                is_open=False,
+                                is_open=True,
                                 className="mt-3",
                                 children=[
                                     dbc.CardHeader(
@@ -834,7 +834,6 @@ def serve_layout():
                                                         dcc.Loading(
                                                             dcc.Graph(
                                                                 id="topoff-hm-pct",
-                                                                responsive=False,
                                                                 config={"displayModeBar": False, "scrollZoom": True},
                                                                 style={"width": "100%", "margin": 0}
                                                             ),
@@ -853,7 +852,6 @@ def serve_layout():
                                                         dcc.Loading(
                                                             dcc.Graph(
                                                                 id="topoff-hm-unit",
-                                                                responsive=False,
                                                                 config={"displayModeBar": False},
                                                                 style={"width": "100%", "margin": 0}
                                                             ),
@@ -867,7 +865,7 @@ def serve_layout():
 
                                         ], className="g-0 align-items-stretch"),
 
-                                        className="topoff-pane"
+                                        className="topoff-pane"  # 👈 solo aquí scrollea el body
                                     ),
 
                                 ],
