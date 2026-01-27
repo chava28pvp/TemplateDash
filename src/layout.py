@@ -372,6 +372,7 @@ def serve_layout():
                                                             html.Th("Vendor", className="w-vendor"),
                                                             html.Th("Última", className="w-ultima"),
                                                             html.Th("%", className="w-num ta-right"),
+                                                            html.Th("Trend", className="w-num ta-center"),
                                                             html.Th("UNIT", className="w-num ta-right"),
                                                         ])),
                                                     ],

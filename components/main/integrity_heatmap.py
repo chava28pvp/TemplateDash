@@ -323,7 +323,7 @@ def build_integrity_heatmap_payloads_fast(
     page_info = {"total_rows": total_rows, "offset": start, "limit": limit, "showing": len(rows_page)}
     return pct_payload, unit_payload, page_info
 
-def render_integrity_summary_table(df_ts: pd.DataFrame, pct_payload: dict, nets_heat: list):
+def render_integrity_summary_table(df_ts: pd.DataFrame, pct_payload: dict, nets_heat: list, integrity_baseline_map: dict | None = None,):
     if df_ts is None or df_ts.empty or not pct_payload:
         return dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
 
@@ -367,14 +367,22 @@ def render_integrity_summary_table(df_ts: pd.DataFrame, pct_payload: dict, nets_
             v_u = pd.to_numeric(sub_last.get("integrity"), errors="coerce").mean()
             last_unit = "" if pd.isna(v_u) else f"{v_u:.0f}"
 
+        integrity_baseline_map = integrity_baseline_map or {}
+        base_val = integrity_baseline_map.get(
+            (str(net).strip(), str(vend).strip(), str(clus).strip(), str(tech).strip())
+        )
+        trend = "" if base_val is None or pd.isna(base_val) else f"{float(base_val):.0f}"
+
         rows.append(html.Tr([
             html.Td(clus, className="w-cluster"),
             html.Td(tech, className="w-tech"),
             html.Td(vendor_disp(vend), title=vend, className="w-vendor"),
             html.Td(last_str, className="w-ultima"),
             html.Td(last_pct, className="w-num ta-right"),
+            html.Td(trend, className="w-num ta-right"),  # <-- Trend (baseline)
             html.Td(last_unit, className="w-num ta-right"),
         ]))
+
 
     return dbc.Table(
         [html.Tbody(rows)],

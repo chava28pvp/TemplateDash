@@ -420,14 +420,19 @@
 }
 
 /* Site ATT */
+.kpi-table.compact td.td-site_att .cell-key--compact{
+  max-width: none !important;
+  white-space: normal !important;   /* o nowrap si prefieres 1 línea */
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .kpi-table.compact th.th-site_att,
-.kpi-table.compact td.td-site_att {
-  width: 90px;
+.kpi-table.compact td.td-site_att{
   min-width: 90px;
+  width: 90px;
   max-width: 90px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* RNC */

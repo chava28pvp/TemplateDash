@@ -158,8 +158,12 @@ def integrity_callbacks(app):
         end_i = int(page_info.get("offset", 0)) + int(page_info.get("showing", 0)) if page_info.get("showing") else 0
         banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
 
-        table_component = render_integrity_summary_table(df_ts=df_ts, pct_payload=pct_payload, nets_heat=nets_heat)
-
+        table_component = render_integrity_summary_table(
+            df_ts=df_ts,
+            pct_payload=pct_payload,
+            nets_heat=nets_heat,
+            integrity_baseline_map=integrity_baseline_map,
+        )
         return table_component, fig_pct, fig_unit, indicator, banner, page_info
 
     @app.callback(
