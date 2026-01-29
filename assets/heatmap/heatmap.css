@@ -194,3 +194,18 @@
   }
   .hm-time-card .hm-time-hours .lbl { font-size: 10px; }
 
+/* Ajusta aquí el desplazamiento */
+:root{
+  --hm-unit-shift-x: -10px;  /* negativo = izquierda, positivo = derecha */
+}
+
+/* Mueve SOLO el heatmap UNIT */
+.hm-int-unit-shift #hm-int-unit .svg-container{
+  transform: translateX(var(--hm-unit-shift-x)) !important;
+}
+
+/* Para que no se “corte” el svg al moverlo a la izquierda */
+.hm-int-unit-shift #hm-int-unit .svg-container,
+.hm-int-unit-shift #hm-int-unit .main-svg{
+  width: calc(100% + 12px) !important;   /* súbele un poco si lo mueves más */
+}

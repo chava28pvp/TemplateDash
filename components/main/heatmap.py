@@ -1047,7 +1047,7 @@ def build_heatmap_figure(
             zmin=0, zmax=1,
             colorscale=[
                 [0.0, "rgba(0,0,0,0)"],
-                [1.0, SEV_COLORS["critico"]],
+                [1.0, "rgba(140,140,140,0.60)"],  # <-- GRIS
             ],
             showscale=False,
             hoverongaps=False,

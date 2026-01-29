@@ -216,7 +216,8 @@
               "excelente": 1.5,
               "bueno": 2.0,
               "regular": 3.0,
-              "critico": 5.0
+              "critico": 5.0,
+              "muy_critico": 10
             }
           },
           "per_network": {
@@ -225,7 +226,8 @@
                 "excelente": 1.5,
                 "bueno": 2.0,
                 "regular": 3.0,
-                "critico": 5.0
+                "critico": 5.0,
+                "muy_critico": 10
               }
             }
           }
@@ -236,7 +238,8 @@
             "excelente": 1.5,
             "bueno": 2.0,
             "regular": 3,
-            "critico": 5
+            "critico": 5,
+            "muy_critico": 10
           }
         },
         "ps_s1_ia_percent": {
@@ -245,7 +248,8 @@
             "excelente": 1.5,
             "bueno": 2.0,
             "regular": 3,
-            "critico": 5
+            "critico": 5,
+            "muy_critico": 10
           }
         },
         "ps_drop_dc_percent": {
@@ -255,7 +259,8 @@
               "excelente": 1.5,
               "bueno": 2.0,
               "regular": 3.0,
-              "critico": 5.0
+              "critico": 5.0,
+              "muy_critico": 10
             }
           },
           "per_network": {}
@@ -267,7 +272,8 @@
               "excelente": 1.5,
               "bueno": 2.0,
               "regular": 3,
-              "critico": 5
+              "critico": 5,
+              "muy_critico": 10
             }
           },
           "per_network": {
@@ -276,7 +282,8 @@
                 "excelente": 1.5,
                 "bueno": 2.0,
                 "regular": 3,
-                "critico": 5
+                "critico": 5,
+                "muy_critico": 10
               }
             },
             "NET": {
@@ -284,7 +291,8 @@
                 "excelente": 1.5,
                 "bueno": 2.0,
                 "regular": 3,
-                "critico": 5
+                "critico": 5,
+                "muy_critico": 10
               }
             }
           }
@@ -295,7 +303,8 @@
             "excelente": 1.5,
             "bueno": 2.0,
             "regular": 3,
-            "critico": 5
+            "critico": 5,
+            "muy_critico": 10
           }
         },
         "cs_drop_dc_percent": {
@@ -304,7 +313,8 @@
             "excelente": 1.5,
             "bueno": 2.0,
             "regular": 3,
-            "critico": 5
+            "critico": 5,
+            "muy_critico": 10
           }
         }
       },
@@ -418,6 +428,7 @@
     "excelente": "#2ecc71",
     "bueno": "#f1c40f",
     "regular": "#e67e22",
-    "critico": "#e74c3c"
+    "critico": "#e74c3c",
+    "muy_critico": "#bd2130"
   }
 }

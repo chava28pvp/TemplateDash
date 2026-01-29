@@ -266,7 +266,10 @@ def serve_layout():
                                                     dcc.Graph(
                                                         id="hm-pct",
                                                         config={"displayModeBar": False},
-                                                        style={"width": "100%", "margin": 0}
+                                                        style={
+                                                            "width": "100%",
+                                                            "transform": "translateX(4px)"
+                                                        }
                                                     ),
                                                     type="default"
                                                 ),
@@ -283,7 +286,10 @@ def serve_layout():
                                                     dcc.Graph(
                                                         id="hm-unit",
                                                         config={"displayModeBar": False},
-                                                        style={"width": "100%", "margin": 0}
+                                                        style={
+                                                            "width": "100%",
+                                                            "transform": "translateX(10px)"
+                                                        }
                                                     ),
                                                     type="default"
                                                 ),
@@ -436,7 +442,10 @@ def serve_layout():
                                                                 id="hm-int-pct",
                                                                 figure=go.Figure(),
                                                                 config={"displayModeBar": False},
-                                                                style={"width": "100%", "margin": 0}
+                                                                style={
+                                                                    "width": "100%",
+                                                                    "transform": "translateX(4px)"
+                                                                }
                                                             ),
                                                             type="default"
                                                         ),
@@ -455,7 +464,10 @@ def serve_layout():
                                                                 id="hm-int-unit",
                                                                 figure=go.Figure(),
                                                                 config={"displayModeBar": False},
-                                                                style={"width": "100%", "margin": 0}
+                                                                style={
+                                                                    "width": "100%",
+                                                                    "transform": "translateX(10px)"
+                                                                }
                                                             ),
                                                             type="default"
                                                         ),
@@ -836,11 +848,14 @@ def serve_layout():
                                                             dcc.Graph(
                                                                 id="topoff-hm-pct",
                                                                 config={"displayModeBar": False, "scrollZoom": True},
-                                                                style={"width": "100%", "margin": 0}
+                                                                style={
+                                                                    "width": "100%",
+                                                                    "transform": "translateX(4px)"
+                                                                }
                                                             ),
                                                             type="default"
                                                         ),
-                                                    ], className="p-0 hm-nudge-left"),
+                                                    ], className="p-0"),
                                                     className="bg-dark text-white border-0 h-100"
                                                 ),
                                                 md=4, sm=12, className="mb-0"
@@ -854,11 +869,14 @@ def serve_layout():
                                                             dcc.Graph(
                                                                 id="topoff-hm-unit",
                                                                 config={"displayModeBar": False},
-                                                                style={"width": "100%", "margin": 0}
+                                                                style={
+                                                                    "width": "100%",
+                                                                    "transform": "translateX(10px)"
+                                                                }
                                                             ),
                                                             type="default"
                                                         ),
-                                                    ], className="p-0 hm-nudge-left"),
+                                                    ], className="p-0"),
                                                     className="bg-dark text-white border-0 h-100"
                                                 ),
                                                 md=4, sm=12, className="mb-0"
@@ -866,7 +884,7 @@ def serve_layout():
 
                                         ], className="g-0 align-items-stretch"),
 
-                                        className="topoff-pane"  # 👈 solo aquí scrollea el body
+                                        className="topoff-pane"
                                     ),
 
                                 ],

@@ -161,6 +161,7 @@
 .cell-bueno     { background-color: #ffc107; color: black; }
 .cell-regular   { background-color: #fd7e14; color: white; }
 .cell-critico   { background-color: #dc3545; color: white; }
+.cell-muy_critico   { background-color: #7c161f; color: white; }
 .cell-neutral   { background-color: #2a2a2a; color: #f1f1f1; }
 
 .cell-good      { background-color: var(--umbral-color-good, #28a745); color:white; }

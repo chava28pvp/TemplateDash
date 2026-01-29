@@ -209,6 +209,13 @@ def build_integrity_heatmap_payloads_fast(
     tmp_pct_raws = []
     missing_mask = []
 
+    def _is_num(x):
+        try:
+            fx = float(x)
+            return np.isfinite(fx)
+        except Exception:
+            return False
+
     for r in rows_page.itertuples(index=False):
         tech, vend, clus, net = r.technology, r.vendor, r.noc_cluster, r.network
         rid = int(r.rid)
@@ -220,15 +227,21 @@ def build_integrity_heatmap_payloads_fast(
         raw_pct = _row48(pct_col, rid)
         raw_unit = _row48(unit_col, rid)
 
+        # último offset con alguna muestra observada (pct o unit)
+        last_obs_off = -1
+        for off, (p, u) in enumerate(zip(raw_pct, raw_unit)):
+            if _is_num(p) or _is_num(u):
+                last_obs_off = off
+
         # máscara:
-        # - % SIEMPRE visible (si es numérico) y lo clampeamos a 0..100
-        # - UNIT solo visible si % >= min_pct_ok
+        # - % siempre visible si es numérico
+        # - missing_mask SOLO antes (o en) last_obs_off
+        # - UNIT visible si % >= min_pct_ok, y si % es NaN permitimos UNIT (tu lógica actual)
         pct_masked = []
         unit_masked = []
         miss_row = []
-        allow_unit_when_pct_missing = True  # o parámetro
 
-        for p, u in zip(raw_pct, raw_unit):
+        for off, (p, u) in enumerate(zip(raw_pct, raw_unit)):
             try:
                 fp = float(p)
                 pct_ok_num = np.isfinite(fp)
@@ -239,15 +252,18 @@ def build_integrity_heatmap_payloads_fast(
             if pct_ok_num:
                 fp = max(0.0, min(100.0, fp))
                 pct_masked.append(fp)
-                miss_row.append(None)  # <-- NO faltante
+                miss_row.append(None)
             else:
-                pct_masked.append(None)  # <-- tu null real
-                miss_row.append(1)  # <-- faltante => pintar rojo
+                pct_masked.append(None)
+
+                # SOLO marca “faltante” si está ANTES de la última muestra
+                # (después ya no lo marcamos porque “todavía no hay integridad”)
+                miss_row.append(1 if (last_obs_off >= 0 and off <= last_obs_off) else None)
 
             if pct_ok_num and fp is not None:
                 ok_unit = fp >= float(min_pct_ok)
             else:
-                ok_unit = True  # <-- clave: permitir UNIT cuando % es NaN (no hay baseline)
+                ok_unit = True  # permitir UNIT cuando % es NaN (sin baseline)
 
             unit_masked.append(u if ok_unit else None)
 
