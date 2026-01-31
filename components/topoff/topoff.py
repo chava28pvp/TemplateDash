@@ -417,7 +417,5 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
         size="sm",
         className="kpi-table compact",
     )
-    return dbc.Card(
-        dbc.CardBody(table),
-        className="shadow-sm",
-    )
+    return table
+

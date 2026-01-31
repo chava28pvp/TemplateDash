@@ -648,6 +648,6 @@ def render_kpi_table_multinet(
         size="sm",
         className="kpi-table compact",
     )
-    return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
+    return html.Div([html.H4("Tabla principal", className="mb-3"), table])
 
 
