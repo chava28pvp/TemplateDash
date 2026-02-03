@@ -22,7 +22,7 @@ PROGRESS_BASES: List[str] = [
     "tnl_fail", "tnl_abn",
 ]
 SEVERITY_COLORS = {
-    "excelente": "#2ecc71", "bueno": "#f1c40f", "regular": "#e67e22", "critico": "#e74c3c",
+    "excelente": "#2ecc71", "bueno": "#f1c40f", "regular": "#e67e22", "critico": "#e74c3c", "muy_critico": "#bd2130",
 }
 
 def _orientation_for(metric: str) -> str:

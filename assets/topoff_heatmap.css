@@ -34,7 +34,7 @@
 
 /* widths TopOff */
 .topoff-board .topoff-table .w-cluster  { width: 32px; max-width: 32px; }
-.topoff-board .topoff-table .w-sitio  { width: 32px; max-width: 32px; }
+.topoff-board .topoff-table .w-sitio  { width: 60px; max-width: 60px; }
 .topoff-board .topoff-table .w-tech   { width: 32px; max-width: 32px; text-align:center; }
 .topoff-board .topoff-table .w-vendor { width: 22px; max-width: 22px; min-width: 22px; text-align:center; } /* blindaje */
 .topoff-board .topoff-table .w-valor  { width: 30px; max-width: 30px; text-align:center; }
@@ -50,7 +50,6 @@
   border-spacing: 0;
 }
 
-/* 👇 aquí lo importante: el thead del body NO se muestra */
 .topoff-board .topoff-table.compact thead{
   display: none !important;
 }
@@ -71,7 +70,7 @@
   border-bottom: 0;
 }
 
-/* ===== Header-only TopOff (el del layout) ===== */
+/* ===== Header-only TopOff ===== */
 .topoff-board .topoff-table.header-only thead{
   display: table-header-group !important;
 }
@@ -84,7 +83,7 @@
   border-bottom: 0 !important;
 }
 
-/* Header Vendor visual más estrecho (sin cambiar ancho real) */
+/* Header Vendor visual más estrecho */
 .topoff-board .topoff-table.header-only th.w-vendor{
   padding-left: 0.1rem !important;
   padding-right: 0.1rem !important;
@@ -120,5 +119,18 @@
   padding-right: 0.1rem !important;
 
   text-align: center;
+}
+/* ✅ Deja que mande figure.layout.height */
+.topoff-pane .dash-graph,
+.topoff-pane .dash-graph > div,
+.topoff-pane .js-plotly-plot,
+.topoff-pane .plot-container,
+.topoff-pane .svg-container {
+  height: auto !important;
+}
+/* Evita que las cards/cols estiren el graph */
+.topoff-pane .card,
+.topoff-pane .card-body {
+  height: auto !important;
 }
 

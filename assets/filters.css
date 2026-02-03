@@ -7,20 +7,20 @@
   border-radius: 8px;
 }
 
-/* Texto (valor seleccionado y placeholder) */
+/* Texto */
 .filtros-card .Select-placeholder,
 .filtros-card .Select-value-label,
 .filtros-card .Select--single .Select-control .Select-value .Select-value-label {
   color: #eaeaea !important;
 }
 
-/* Single-select a veces mete un fondo raro en el value: lo limpiamos */
+/* Single-select a veces mete un fondo raro, por eso se limpia */
 .filtros-card .Select--single .Select-control .Select-value {
   background: transparent !important;
   border: 0 !important;
 }
 
-/* Input interno (cuando tecleas para filtrar) */
+/* Input interno */
 .filtros-card .Select-input > input {
   color: #fff !important;
 }
@@ -111,7 +111,7 @@
   padding-bottom: 4px;
 }
 
-/* Opcional: pequeña sombra cuando está pegado para separarlo visualmente */
+/* pequeña sombra cuando está pegado para separarlo visualmente */
 .filters-sticky-wrapper {
   box-shadow: 0 2px 4px rgba(0,0,0,0.4);
 }

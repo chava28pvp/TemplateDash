@@ -39,7 +39,7 @@ body {
 .modal         { z-index: 2000; }
 .modal-backdrop{ z-index: 1900; }
 
-/* Baja un poco el modal (cuando está centrado) */
+/* Baja un poco el modal */
 .umbral-dialog.modal-dialog-centered {
   transform: translateY(24px);  /* mueve 24px hacia abajo; ajusta a gusto */
 }
@@ -49,15 +49,11 @@ body {
   max-width: 720px;             /* hazlo más chico; ajusta 600–760px según necesites */
 }
 
-/* Si prefieres no centrarlo, quita centered=True y usa margin-top: */
-/*
-.umbral-dialog { margin-top: 56px; }
-*/
 
-/* Truco: cuando el modal está abierto, apaga el blur del card de filtros
+/* cuando el modal está abierto, apaga el blur del card de filtros
    para que nada se vea “borroso” detrás del modal */
 .modal-open .filtros-card::before {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  background: rgba(255,255,255,0.03) !important; /* deja una capita muy leve */
+  background: rgba(255,255,255,0.03) !important;
 }

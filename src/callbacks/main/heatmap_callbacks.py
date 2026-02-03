@@ -1,3 +1,4 @@
+import os
 import math
 import pandas as pd
 from dash import Input, Output, State, no_update, ctx
@@ -7,14 +8,13 @@ import time
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
 from components.main.heatmap import build_heatmap_figure, render_heatmap_summary_table, build_heatmap_payloads_fast, \
-    _hm_height, _build_time_header_children, _build_time_header_children_by_dates
+    _hm_height, _build_time_header_children_by_dates
 from components.main.histograma import \
     build_histo_payloads_fast, build_overlay_waves_figure
 import dash_bootstrap_components as dbc
 
 from src.Utils.umbrales.umbrales_manager import UM_MANAGER
-from src.dataAccess.data_access import fetch_kpis,fetch_alarm_meta_for_heatmap
-
+from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap
 
 #Cach simple en memoria para df_ts
 _DFTS_CACHE = {}
@@ -257,7 +257,6 @@ def _build_histograma_for_domain(
     _LAST_HI_KEY[domain] = state_key
     return fig_pct, fig_unit, page_info, False
 
-
 def heatmap_callbacks(app):
 
     # -------------------------------------------------
@@ -295,8 +294,10 @@ def heatmap_callbacks(app):
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
+        hm_order_by_norm = (hm_order_by or "alarm_hours")
+        hm_order_by_norm = str(hm_order_by_norm).strip().lower()
         # --- Key de estado (incluye orden) ---
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|ord={hm_order_by}"
+        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|ord={hm_order_by_norm}"
         if _LAST_HEATMAP_KEY == state_key:
             return (
                 no_update,
@@ -317,7 +318,7 @@ def heatmap_callbacks(app):
         today_str = today_dt.strftime("%Y-%m-%d")
         yday_str = yday_dt.strftime("%Y-%m-%d")
 
-        # --- df_ts cacheado por filtros (no depende de hora) ---
+        # --- df_ts cacheado por filtros ---
         df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
 
         # --- Redes para heatmap ---
@@ -328,7 +329,6 @@ def heatmap_callbacks(app):
                 if not df_ts.empty and "network" in df_ts.columns else []
 
         # --- Meta de alarmados (cache) ---
-        # REQUIERE que tengas definido _fetch_alarm_meta_cached(...)
         df_meta_heat, alarm_keys_set = _fetch_alarm_meta_cached(
             today_str,
             vendors,
@@ -338,7 +338,6 @@ def heatmap_callbacks(app):
         )
 
         # --- Payloads con cache por state_key ---
-        # REQUIERE que tengas definidos _HM_PAYLOAD_CACHE, _HM_PAYLOAD_TTL, _cache_get, _cache_set
         cached = _cache_get(_HM_PAYLOAD_CACHE, state_key, _HM_PAYLOAD_TTL)
         if cached is not None:
             pct_payload, unit_payload, page_info = cached
@@ -355,7 +354,7 @@ def heatmap_callbacks(app):
                     alarm_only=False,
                     offset=offset,
                     limit=limit,
-                    order_by=hm_order_by or "alarm_hours"
+                    order_by=hm_order_by_norm
                 )
             else:
                 pct_payload = unit_payload = None
@@ -384,12 +383,11 @@ def heatmap_callbacks(app):
         showing = int(page_info.get("showing", 0))
         start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
         end_i = start_i + showing - 1 if showing else 0
-        total_pg = max(1, math.ceil(total / max(1, int((hm_page_state or {}).get("page_size", 5)))))
-        hm_indicator = f"Página {int((hm_page_state or {}).get('page', 1))} de {total_pg}"
+        total_pg = max(1, math.ceil(total / max(1, page_sz)))
+        hm_indicator = f"Página {page} de {total_pg}"
         hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
 
         _LAST_HEATMAP_KEY = state_key
-
         return (
             table_component,
             fig_pct,

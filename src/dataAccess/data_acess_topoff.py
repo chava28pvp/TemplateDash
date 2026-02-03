@@ -203,14 +203,30 @@ def _resolve_columns(requested_friendly_cols: List[str]) -> List[str]:
 def _select_list_with_aliases(friendly_cols: List[str]) -> List[str]:
     if not friendly_cols:
         return ["*"]
+
     parts = []
     for friendly in friendly_cols:
         real = COLMAP[friendly]
+
         if friendly == "hora":
             parts.append(f"DATE_FORMAT({_quote(real)}, '%H:%i:%s') AS {friendly}")
+
+        # ✅ CLAVE: cluster siempre “limpio” y nunca vacío
+        elif friendly == "cluster":
+            # cluster := NOC_CLUSTER si tiene algo, si no := SITE_ATT
+            parts.append(
+                f"COALESCE(NULLIF(TRIM({_quote(real)}), ''), TRIM({_quote(COLMAP['site_att'])})) AS {friendly}"
+            )
+
+        # ✅ opcional: limpiar llaves de texto para evitar merges rotos por espacios
+        elif friendly in ("technology", "vendor", "region", "province", "municipality", "site_att", "rnc", "nodeb"):
+            parts.append(f"NULLIF(TRIM({_quote(real)}), '') AS {friendly}")
+
         else:
             parts.append(f"{_quote(real)} AS {friendly}")
+
     return parts
+
 
 
 def _filters_where_and_params(
@@ -936,15 +952,21 @@ def fetch_alarm_meta_for_topoff(
 
     # -------- Nombres SQL --------
     tbl    = _quote_table(_TABLE_NAME)
-    f_tech = _quote(COLMAP["technology"])
-    f_vend = _quote(COLMAP["vendor"])
-    f_reg  = _quote(COLMAP["region"])
-    f_prov = _quote(COLMAP["province"])
-    f_mun  = _quote(COLMAP["municipality"])
-    f_clu  = _quote(COLMAP["cluster"])
-    f_site = _quote(COLMAP["site_att"])
-    f_rnc  = _quote(COLMAP["rnc"])
-    f_nb   = _quote(COLMAP["nodeb"])
+    f_clu_raw = _quote(COLMAP["cluster"])
+    f_site_raw = _quote(COLMAP["site_att"])
+
+    # ✅ cluster “canon”: coalesce(trim(cluster), trim(site))
+    f_clu = f"COALESCE(NULLIF(TRIM({f_clu_raw}), ''), TRIM({f_site_raw}))"
+
+    # ✅ llaves limpias (opcional pero recomendado)
+    f_site = f"NULLIF(TRIM({f_site_raw}), '')"
+    f_rnc = f"NULLIF(TRIM({_quote(COLMAP['rnc'])}), '')"
+    f_nb = f"NULLIF(TRIM({_quote(COLMAP['nodeb'])}), '')"
+    f_tech = f"NULLIF(TRIM({_quote(COLMAP['technology'])}), '')"
+    f_vend = f"NULLIF(TRIM({_quote(COLMAP['vendor'])}), '')"
+    f_reg = f"NULLIF(TRIM({_quote(COLMAP['region'])}), '')"
+    f_prov = f"NULLIF(TRIM({_quote(COLMAP['province'])}), '')"
+    f_mun = f"NULLIF(TRIM({_quote(COLMAP['municipality'])}), '')"
 
     # -------- SQL (CTEs) --------
     sql = f"""

@@ -6,7 +6,6 @@ import pandas as pd
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
 
 # =============== Configuración visual ===============
-
 ROW_KEYS = [
     "fecha",
     "hora",
@@ -191,7 +190,7 @@ def _progress_cell(
         label = f"{real:.{decimals}f}"
 
     # ============================
-    # Caso especial: pct == 0  → valor 0 (o igual a min)
+    # Caso especial: pct == 0 → valor 0 (o igual a min)
     # ============================
     if pct <= 0.0:
         # Pista gris, SIN barra de color, pero con el texto centrado y más oscuro
@@ -206,7 +205,7 @@ def _progress_cell(
                 "justifyContent": "center",
                 "fontSize": "0.70rem",
                 "fontWeight": "700",
-                "color": "#343a40",  # texto más oscuro para que no se pierda
+                "color": "#343a40",
                 "lineHeight": "1",
             },
         )
@@ -413,12 +412,10 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
         [thead, html.Tbody(body_rows)],
         bordered=False,
         hover=True,
-        responsive=True,
+        responsive=False,
         striped=True,
         size="sm",
         className="kpi-table compact",
     )
-    return dbc.Card(
-        dbc.CardBody(table),
-        className="shadow-sm",
-    )
+    return table
+

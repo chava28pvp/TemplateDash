@@ -1,4 +1,4 @@
-/* === Progress bar custom (independiente de Bootstrap) === */
+/* === Progress bar custom  === */
 .kb {
   /* Variables personalizables */
   --kb-height: 16px;
@@ -8,10 +8,10 @@
   --kb-text: #fff;
   --kb-font-size: 0.70rem;
   --kb-font-weight: 700;
-  --kb-width: 140px;          /* << nuevo: ancho por defecto fijo */
+  --kb-width: 140px;          /* ancho por defecto fijo */
 
   position: relative;
-  width: var(--kb-width);     /* << antes: 100% */
+  width: var(--kb-width);
   height: var(--kb-height);
   background: var(--kb-track);
   border-radius: var(--kb-radius);
@@ -32,11 +32,11 @@
   line-height: 1;
   white-space: nowrap;
   text-shadow: 0 1px 0 rgba(0,0,0,.2);
-  min-width: 2.4rem;          /* que el número no desaparezca */
+  min-width: 2.4rem;
   border-radius: var(--kb-radius) 0 0 var(--kb-radius);
 }
 
-/* Opcional: envoltorio para mostrar el valor a la derecha */
+/* envoltorio para mostrar el valor a la derecha */
 .kb-wrap {
   display: inline-flex;
   align-items: center;
@@ -49,12 +49,12 @@
   opacity: .85;
 }
 
-/* Opcional: centrado dentro de celdas de la tabla */
+/* centrado dentro de celdas de la tabla */
 .td-cell .kb, .td-cell .kb-wrap {
   margin: 0 auto;
 }
 
-/* (Opcional) Versión a ancho completo en pantallas chicas */
+/* Versión a ancho completo en pantallas chicas */
 @media (max-width: 768px) {
   .kb { --kb-width: 100%; width: 100%; }
 }

@@ -70,7 +70,7 @@ DISPLAY_NAME_BASE = {
     "cs_drop_abnrel": "ABNREL",
     "alarmas": "Ocurr",
 }
-
+order_networks = {"NET", "ATT", "TEF"}
 # Derivados
 INDEX_KEYS = ROW_KEYS
 VALUE_COLS = sorted({c for _, cols in BASE_GROUPS for c in cols} | {"integrity"})
@@ -283,7 +283,7 @@ def prefixed_severity_cols(networks: list[str]):
 
 def pivot_by_network(df_long: pd.DataFrame, networks=None, order_map=None) -> pd.DataFrame:
     if networks is None:
-        networks = sorted(df_long["network"].dropna().unique().tolist())
+        networks = order_networks(df_long["network"].dropna().unique().tolist())
 
     df = df_long[df_long["network"].isin(networks)].copy()
     if df.empty:
@@ -643,11 +643,11 @@ def render_kpi_table_multinet(
         [header, body],
         bordered=False,
         hover=True,
-        responsive=True,
+        responsive=False,
         striped=True,
         size="sm",
         className="kpi-table compact",
     )
-    return dbc.Card(dbc.CardBody([html.H4("Tabla principal", className="mb-3"), table]), className="shadow-sm")
+    return html.Div([html.H4("Tabla principal", className="mb-3"), table])
 
 

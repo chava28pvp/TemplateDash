@@ -161,6 +161,7 @@
 .cell-bueno     { background-color: #ffc107; color: black; }
 .cell-regular   { background-color: #fd7e14; color: white; }
 .cell-critico   { background-color: #dc3545; color: white; }
+.cell-muy_critico   { background-color: #7c161f; color: white; }
 .cell-neutral   { background-color: #2a2a2a; color: #f1f1f1; }
 
 .cell-good      { background-color: var(--umbral-color-good, #28a745); color:white; }
@@ -420,14 +421,19 @@
 }
 
 /* Site ATT */
+.kpi-table.compact td.td-site_att .cell-key--compact{
+  max-width: none !important;
+  white-space: normal !important;   /* o nowrap si prefieres 1 línea */
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .kpi-table.compact th.th-site_att,
-.kpi-table.compact td.td-site_att {
-  width: 60px;
-  min-width: 60px;
-  max-width: 60px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.kpi-table.compact td.td-site_att{
+  min-width: 90px;
+  width: 90px;
+  max-width: 90px;
 }
 
 /* RNC */
@@ -444,9 +450,9 @@
 /* NodeB */
 .kpi-table.compact th.th-nodeb,
 .kpi-table.compact td.td-nodeb {
-  width: 100px;
-  min-width: 90px;
-  max-width: 130px;
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

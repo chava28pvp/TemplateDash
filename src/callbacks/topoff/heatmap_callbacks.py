@@ -1,4 +1,5 @@
 # callbacks/topoff_heatmap_callbacks.py
+import os
 import math
 import time
 import json
@@ -362,9 +363,10 @@ def topoff_heatmap_callbacks(app):
 
         hm_height = int(page_info.get("height") or 300)
 
-        fig_pct = build_heatmap_figure_topoff(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
+        fig_pct = build_heatmap_figure_topoff(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure(
+            layout={"height": hm_height})
         fig_unit = build_heatmap_figure_topoff(unit_payload, height=hm_height,
-                                               decimals=0) if unit_payload else go.Figure()
+                                               decimals=0) if unit_payload else go.Figure(layout={"height": hm_height})
 
         if pct_payload or unit_payload:
             table_component = render_heatmap_summary_table_topoff(
@@ -401,7 +403,7 @@ def topoff_heatmap_callbacks(app):
         Input("f-fecha", "date"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
-        Input("f-cluster", "value"),              # 👈 dispara al cambiar cluster
+        Input("f-cluster", "value"),
         Input("topoff-site-filter", "value"),
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),

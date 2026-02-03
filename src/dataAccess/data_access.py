@@ -449,13 +449,14 @@ def fetch_kpis(
     technologies=None,
     limit=None,
     na_as_empty=False,
-
+    columns=None,
 ):
     """
     Consulta no paginada (útil para casos pequeños o descargas).
     Usa filtros y devuelve DataFrame con alias amigables y orden base.
     """
     # 1) columnas amigables válidas
+    requested_cols = columns or BASE_COLUMNS
     friendly_cols = _resolve_columns(BASE_COLUMNS)
     select_cols = _select_list_with_aliases(friendly_cols)
 
@@ -1061,4 +1062,69 @@ def fetch_integrity_baseline_week(
 
     return df
 
+def fetch_kpis_by_keys(
+    *,
+    fecha=None,
+    hora=None,
+    vendors=None,
+    clusters=None,
+    networks=None,
+    technologies=None,
+    row_keys=None,  # list[tuple]: (fecha,hora,vendor,noc_cluster,technology)
+    na_as_empty=False,
+):
+    """
+    Trae filas long completas SOLO para un set de keys (página),
+    sin paginar por OFFSET/LIMIT (la paginación la haces por keys).
+    """
+    row_keys = row_keys or []
+    if not row_keys:
+        return pd.DataFrame()
+
+    # columnas amigables
+    friendly_cols = _resolve_columns(BASE_COLUMNS)
+    select_cols = _select_list_with_aliases(friendly_cols)
+
+    # WHERE base + params
+    where_sql, params, uv, uc, un, ut = _filters_where_and_params(
+        fecha, hora, vendors, clusters, networks, technologies
+    )
+
+    # OR por cada key (page_size ~ 50/100 funciona bien)
+    or_parts = []
+    for i, (f, h, v, c, t) in enumerate(row_keys):
+        or_parts.append(
+            f"({ _quote(COLMAP['fecha']) } = :k{i}_f AND "
+            f"{ _quote(COLMAP['hora']) } = :k{i}_h AND "
+            f"{ _quote(COLMAP['vendor']) } = :k{i}_v AND "
+            f"{ _quote(COLMAP['noc_cluster']) } = :k{i}_c AND "
+            f"{ _quote(COLMAP['technology']) } = :k{i}_t)"
+        )
+        params.update({
+            f"k{i}_f": f,
+            f"k{i}_h": h,
+            f"k{i}_v": v,
+            f"k{i}_c": c,
+            f"k{i}_t": t,
+        })
+
+    where_keys = " OR ".join(or_parts) if or_parts else "1=0"
+
+    sql = f"""
+        SELECT {", ".join(select_cols)}
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE ({where_sql}) AND ({where_keys})
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(sql, uv, uc, un, ut)
+        df = pd.read_sql(stmt, conn, params=params)
+
+    df = df.reindex(columns=[c for c in friendly_cols if c in df.columns])
+
+    if na_as_empty and not df.empty:
+        df = df.where(pd.notna(df), "")
+
+    return df
 
