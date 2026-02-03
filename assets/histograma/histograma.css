@@ -36,7 +36,7 @@
   max-width: 70px;       /* ajusta según qué tan agresivo quieras */
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;   /* ... cuando se corta */
+  text-overflow: ellipsis;
 }
 
 /* Keys "anchas" (fecha, hora, nodeb) - dejan ver todo el texto */

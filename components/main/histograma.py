@@ -25,7 +25,7 @@ def _sev_bucket(value: float | None, orient: str, thr: dict) -> int | None:
     if value is None:
         return None
     v = float(value)
-    # Solo implementamos lower_is_better (tu JSON usa eso). Para higher_is_better invierte.
+    # Solo implementamos lower_is_better (El JSON ya lo usa).
     if orient == "higher_is_better":
         # Invertimos los cortes (mejor alto)
         if v >= thr["excelente"]: return 0

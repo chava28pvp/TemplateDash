@@ -45,7 +45,7 @@
   border-top: 0;               /* evita que 1px sume en cada fila */
   border-bottom: 0;            /* ídem */
 }
-/* Opcional: reduce cualquier margen extra entre columnas */
+/* reduce cualquier margen extra entre columnas */
 .hm-board .col, .hm-board .card, .hm-board .card-body { margin: 0 !important; }
 
 /* Encabezado separado, sin scroll y sin márgenes */
@@ -57,7 +57,7 @@
   border-bottom: 0 !important;
 }
 
-/* Asegura que la fila header no agregue espacios */
+/* fila header no agregue espacios */
 .hm-board + .hm-header-filler { height: 0; margin: 0; padding: 0; }
 
 
