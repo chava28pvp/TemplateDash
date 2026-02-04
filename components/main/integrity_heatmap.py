@@ -197,12 +197,9 @@ def build_integrity_heatmap_payloads_fast(
 
     x_dt = [f"{yday}T{h:02d}:00:00" for h in range(24)] + [f"{today}T{h:02d}:00:00" for h in range(24)]
 
-    z_pct, z_unit = [], []
-    z_pct_raw, z_unit_raw = [], []
+
     y_labels, row_detail = [], []
     row_last_ts, row_max_pct, row_max_unit = [], [], []
-
-    all_unit_norm = []
 
     # primero construimos raws + máscara por pct>=80
     tmp_unit_raws = []
@@ -215,6 +212,22 @@ def build_integrity_heatmap_payloads_fast(
             return np.isfinite(fx)
         except Exception:
             return False
+
+    def _is_finite_num(x):
+        try:
+            fx = float(x)
+            return np.isfinite(fx)
+        except Exception:
+            return False
+
+    present_off = set()
+    if not df_small.empty and "offset48" in df_small.columns:
+        # "muestra" = tener pct o unit numérico en ese offset
+        m_present = df_small[pct_col].map(_is_finite_num) | df_small[unit_col].map(_is_finite_num)
+        if m_present.any():
+            present_off = set(df_small.loc[m_present, "offset48"].astype(int).tolist())
+
+    global_last_off = max(present_off) if present_off else -1
 
     for r in rows_page.itertuples(index=False):
         tech, vend, clus, net = r.technology, r.vendor, r.noc_cluster, r.network
@@ -255,10 +268,8 @@ def build_integrity_heatmap_payloads_fast(
                 miss_row.append(None)
             else:
                 pct_masked.append(None)
-
-                # SOLO marca “faltante” si está ANTES de la última muestra
-                # (después ya no lo marcamos porque “todavía no hay integridad”)
-                miss_row.append(1 if (last_obs_off >= 0 and off <= last_obs_off) else None)
+                # Marca missing si esa columna/hora existe globalmente (alguien reportó) y no es futuro
+                miss_row.append(1 if (off in present_off and (global_last_off < 0 or off <= global_last_off)) else None)
 
             if pct_ok_num and fp is not None:
                 ok_unit = fp >= float(min_pct_ok)
