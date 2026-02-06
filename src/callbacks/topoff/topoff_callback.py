@@ -1,4 +1,3 @@
-# callbacks/topoff_callbacks.py
 import math
 from dash import Input, Output, State, ctx, ALL
 import dash_bootstrap_components as dbc
@@ -210,12 +209,12 @@ def register_topoff_callbacks(app):
                 clusters_effective = [clus]
 
             if mode == "cluster_only":
-                # 🔹 Modo "solo cluster": ignoramos vendor/tech para ver
+                # Modo "solo cluster": ignoramos vendor/tech para ver
                 # todas las variantes de ese cluster
                 vendors_effective = None
                 technologies_effective = None
             else:
-                # 🔹 Modo "full": respeta vendor y tech del click en main
+                # Modo "full": respeta vendor y tech del click en main
                 if ven:
                     vendors_effective = [ven]
                 if tech:

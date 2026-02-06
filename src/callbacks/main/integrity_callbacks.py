@@ -1,4 +1,3 @@
-
 import pandas as pd
 from dash import Input, Output, State, no_update, ctx
 import time
@@ -6,22 +5,64 @@ import plotly.graph_objs as go
 import math
 import dash_bootstrap_components as dbc
 from datetime import datetime, timedelta
-from components.main.heatmap import build_heatmap_figure,\
-    _hm_height, add_integrity_deg_pct, _build_time_header_children_by_dates
-from components.main.integrity_heatmap import build_integrity_heatmap_payloads_fast, render_integrity_summary_table
+
+# Utilidades de heatmap (figuras, altura, y headers de tiempo)
+from components.main.heatmap import (
+    build_heatmap_figure,
+    _hm_height,
+    add_integrity_deg_pct,
+    _build_time_header_children_by_dates
+)
+
+# Helpers específicos del heatmap de integridad
+from components.main.integrity_heatmap import (
+    build_integrity_heatmap_payloads_fast,
+    render_integrity_summary_table
+)
+
+# Re-uso de helpers del heatmap principal (normalización y cache de TS)
 from src.callbacks.main.heatmap_callbacks import _as_list, _fetch_df_ts_cached
+
+# Baseline semanal (fallback si no viene en store)
 from src.dataAccess.data_access import fetch_integrity_baseline_week
-##HELPERS##
+
+
+# =========================================================
+# HELPERS
+# =========================================================
 def _baseline_map_from_df(df_bl: pd.DataFrame) -> dict:
+    """
+    Convierte el DF de baseline semanal a un diccionario fácil de consultar.
+
+    Espera columnas como:
+      network, vendor, noc_cluster, technology, integrity_week_avg
+
+    Retorna:
+      {(network, vendor, noc_cluster, technology): integrity_week_avg, ...}
+    """
     if df_bl is None or df_bl.empty:
         return {}
-    # columnas esperadas: network, vendor, noc_cluster, technology, integrity_week_avg
+
     return {
-        (str(r.network).strip(), str(r.vendor).strip(), str(r.noc_cluster).strip(), str(r.technology).strip()): r.integrity_week_avg
+        (
+            str(r.network).strip(),
+            str(r.vendor).strip(),
+            str(r.noc_cluster).strip(),
+            str(r.technology).strip()
+        ): r.integrity_week_avg
         for r in df_bl.itertuples(index=False)
     }
-##Integrity heatmap##
+
+
+# =========================================================
+# CALLBACKS: INTEGRITY HEATMAP
+# =========================================================
 def integrity_callbacks(app):
+
+    # -------------------------------------------------
+    # Render principal del heatmap de integridad
+    # (tabla + figura pct + figura unit + paginado)
+    # -------------------------------------------------
     @app.callback(
         Output("hm-int-table-container", "children"),
         Output("hm-int-pct", "figure"),
@@ -40,56 +81,71 @@ def integrity_callbacks(app):
         State("main-context-store", "data"),
         prevent_initial_call=True,
     )
-    def refresh_integrity_heatmap(_trigger, is_open, fecha, networks, technologies, vendors, clusters, page_state,
-                                  main_ctx):
+    def refresh_integrity_heatmap(_trigger, is_open, fecha, networks, technologies, vendors, clusters, page_state, main_ctx):
+        # Si el panel está cerrado, no gastes CPU ni queries
         if not is_open:
             return no_update, no_update, no_update, no_update, no_update, no_update
 
+        # Normaliza filtros a listas
         networks = _as_list(networks)
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
         clusters = _as_list(clusters)
 
+        # ---------- Paginación ----------
         page = int((page_state or {}).get("page", 1))
         page_sz = int((page_state or {}).get("page_size", 50))
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
 
-        # fechas hoy/ayer
+        # ---------- Fechas HOY/AYER ----------
         try:
             today_dt = datetime.strptime(fecha, "%Y-%m-%d") if fecha else datetime.utcnow()
         except Exception:
             today_dt = datetime.utcnow()
+
         yday_dt = today_dt - timedelta(days=1)
         today_str = today_dt.strftime("%Y-%m-%d")
         yday_str = yday_dt.strftime("%Y-%m-%d")
 
-        # df_ts (ayer+hoy) SIN hora (como tus heatmaps)
+        # ---------- df_ts (ayer+hoy) SIN hora ----------
+        # Reutiliza cache para no volver a consultar cada vez
         df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
         df_ts = df_ts if isinstance(df_ts, pd.DataFrame) else pd.DataFrame()
-        if df_ts.empty:
-            return dbc.Alert("Sin filas para mostrar.", color="secondary",
-                             className="mb-0"), go.Figure(), go.Figure(), "Página 1 de 1", "Sin filas.", {
-                "total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-        # normaliza llaves
+        # Si no hay datos, devuelve UI vacía
+        if df_ts.empty:
+            return (
+                dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0"),
+                go.Figure(),
+                go.Figure(),
+                "Página 1 de 1",
+                "Sin filas.",
+                {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0},
+            )
+
+        # ---------- Normaliza llaves para joins/lookup estables ----------
         for c in ["network", "vendor", "noc_cluster", "technology"]:
             if c in df_ts.columns:
                 df_ts[c] = df_ts[c].astype(str).str.strip()
 
-        # baseline map desde store (y fallback a BD si viene vacío)
+        # ---------- Baseline desde store (preferido) ----------
         main_ctx = main_ctx or {}
         integrity_baseline_list = main_ctx.get("integrity_baseline_map") or []
+
+        # Lo convertimos a dict con llaves normalizadas
         integrity_baseline_map = {
-            (str(d.get("network", "")).strip(),
-             str(d.get("vendor", "")).strip(),
-             str(d.get("noc_cluster", "")).strip(),
-             str(d.get("technology", "")).strip()
-             ): d.get("integrity_week_avg")
+            (
+                str(d.get("network", "")).strip(),
+                str(d.get("vendor", "")).strip(),
+                str(d.get("noc_cluster", "")).strip(),
+                str(d.get("technology", "")).strip(),
+            ): d.get("integrity_week_avg")
             for d in integrity_baseline_list
             if d is not None
         }
 
+        # ---------- Fallback a BD si no vino baseline en store ----------
         if not integrity_baseline_map:
             df_bl = fetch_integrity_baseline_week(
                 fecha=today_str,
@@ -98,22 +154,30 @@ def integrity_callbacks(app):
                 networks=networks or None,
                 technologies=technologies or None,
             )
-            integrity_baseline_map = _baseline_map_from_df(df_bl)  # <-- define este helper como tú lo traías
+            integrity_baseline_map = _baseline_map_from_df(df_bl)
 
-        # columna calculada
+        # ---------- Columna calculada: % integridad degradada ----------
+        # Aquí se agrega algo como "integrity_deg_pct" usando baseline_map
         df_ts = add_integrity_deg_pct(df_ts, integrity_baseline_map)
 
         if df_ts.empty:
-            return dbc.Alert("Sin filas (>=80%) para mostrar.", color="secondary",
-                             className="mb-0"), go.Figure(), go.Figure(), "Página 1 de 1", "Sin filas.", {
-                "total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+            return (
+                dbc.Alert("Sin filas (>=80%) para mostrar.", color="secondary", className="mb-0"),
+                go.Figure(),
+                go.Figure(),
+                "Página 1 de 1",
+                "Sin filas.",
+                {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0},
+            )
 
-        # networks efectivas (si no eligieron, usa las presentes)
+        # ---------- Networks efectivas ----------
+        # Si no eligieron, usa las presentes en df_ts
         nets_heat = networks or (
             sorted(df_ts["network"].dropna().unique().tolist()) if "network" in df_ts.columns else []
         )
 
-        # meta total (TRÍOS) – esto se queda
+        # ---------- Meta “total” (tríos cluster/tech/vendor) ----------
+        # Esto sirve para construir el universo de filas y paginar sobre ellas
         df_meta_all = (
             df_ts[["noc_cluster", "technology", "vendor"]]
             .dropna()
@@ -122,34 +186,45 @@ def integrity_callbacks(app):
             .reset_index(drop=True)
         )
 
+        # ---------- Construcción de payloads (z/x/y) para heatmap ----------
         pct_payload, unit_payload, page_info = build_integrity_heatmap_payloads_fast(
-            df_meta=df_meta_all,  # total de tríos
-            df_ts=df_ts,
+            df_meta=df_meta_all,   # universo completo (para total_rows)
+            df_ts=df_ts,           # datos TS (ayer+hoy)
             networks=nets_heat,
-            today=today_str, yday=yday_str,
-            min_pct_ok=0.0,  # si quieres enmascarar UNIT cuando <80
+            today=today_str,
+            yday=yday_str,
+            min_pct_ok=0.0,        # (si quieres) umbral para enmascarar UNIT
             offset=offset,
             limit=limit,
-            sort_by_degrade=True,
-            degrade_thr=80.0,
-            streak_cap=3,
+            sort_by_degrade=True,  # ordena por degradación
+            degrade_thr=80.0,      # threshold (ej. 80%)
+            streak_cap=3,          # limita streak (para UI/ruido)
         )
 
-        # Si no hay filas en esa página
+        # Si esa página no trae filas (pero hay total), muestra mensaje
         nrows = len((pct_payload or {}).get("y") or [])
         if nrows == 0:
             total = int(page_info.get("total_rows", 0))
             total_pg = max(1, math.ceil(total / max(1, page_sz)))
             indicator = f"Página {page} de {total_pg}"
             banner = "Sin filas."
-            return dbc.Alert("Sin filas para esta página.", color="secondary",
-                             className="mb-0"), go.Figure(), go.Figure(), indicator, banner, page_info
+            return (
+                dbc.Alert("Sin filas para esta página.", color="secondary", className="mb-0"),
+                go.Figure(),
+                go.Figure(),
+                indicator,
+                banner,
+                page_info,
+            )
 
+        # ---------- Altura del heatmap según número de filas ----------
         hm_height = _hm_height(nrows)
+
+        # ---------- Figuras ----------
         fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
         fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
 
-        # indicador/banner usando page_info REAL
+        # ---------- Indicador y banner usando page_info ----------
         total = int(page_info.get("total_rows", 0))
         total_pg = max(1, math.ceil(total / max(1, page_sz)))
         indicator = f"Página {page} de {total_pg}"
@@ -158,14 +233,20 @@ def integrity_callbacks(app):
         end_i = int(page_info.get("offset", 0)) + int(page_info.get("showing", 0)) if page_info.get("showing") else 0
         banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
 
+        # ---------- Tabla resumen (degradación / baseline / etc.) ----------
         table_component = render_integrity_summary_table(
             df_ts=df_ts,
             pct_payload=pct_payload,
             nets_heat=nets_heat,
             integrity_baseline_map=integrity_baseline_map,
         )
+
         return table_component, fig_pct, fig_unit, indicator, banner, page_info
 
+    # -------------------------------------------------
+    # Trigger controller: actualiza "heatmap-integrity-trigger"
+    # solo cuando el panel está abierto y cambian inputs
+    # -------------------------------------------------
     @app.callback(
         Output("heatmap-integrity-trigger", "data"),
         Input("collapse-hm-int", "is_open"),
@@ -179,10 +260,14 @@ def integrity_callbacks(app):
         prevent_initial_call=False,
     )
     def integrity_trigger_controller(is_open, *_):
+        # Si el panel está cerrado, no dispares el render pesado
         if not is_open:
             return no_update
         return {"ts": time.time()}
 
+    # -------------------------------------------------
+    # Toggle del panel de integridad (abre/cierra collapse)
+    # -------------------------------------------------
     @app.callback(
         Output("collapse-hm-int", "is_open"),
         Input("btn-toggle-hm-int", "n_clicks"),
@@ -190,10 +275,14 @@ def integrity_callbacks(app):
         prevent_initial_call=True,
     )
     def toggle_integrity_panel(n, is_open):
-            if not n:
-                return is_open
-            return not is_open
+        # Si no hubo click válido, no cambies estado
+        if not n:
+            return is_open
+        return not is_open
 
+    # -------------------------------------------------
+    # Reset de paginación cuando cambian filtros / page size
+    # -------------------------------------------------
     @app.callback(
         Output("heatmap-integrity-page-state", "data"),
         Input("f-fecha", "date"),
@@ -205,15 +294,19 @@ def integrity_callbacks(app):
         prevent_initial_call=False,
     )
     def hm_int_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, page_size):
+        # Nota: aquí fuerzas mínimo 10
         ps = max(10, int(page_size or 50))
         return {"page": 1, "page_size": ps}
 
+    # -------------------------------------------------
+    # Paginación prev/next (con límite por total_rows)
+    # -------------------------------------------------
     @app.callback(
         Output("heatmap-integrity-page-state", "data", allow_duplicate=True),
         Input("hm-int-page-prev", "n_clicks"),
         Input("hm-int-page-next", "n_clicks"),
         State("heatmap-integrity-page-state", "data"),
-        State("heatmap-integrity-page-info", "data"),  # <-- AÑADE ESTO
+        State("heatmap-integrity-page-info", "data"),  # total_rows para no pasar max_page
         prevent_initial_call=True,
     )
     def hm_int_paginate(n_prev, n_next, state, page_info):
@@ -221,6 +314,7 @@ def integrity_callbacks(app):
         page = int(state.get("page", 1))
         ps = int(state.get("page_size", 50))
 
+        # Total de filas (para calcular página máxima)
         total_rows = int((page_info or {}).get("total_rows", 0))
         max_page = max(1, math.ceil(total_rows / max(1, ps))) if total_rows else 1
 
@@ -232,6 +326,9 @@ def integrity_callbacks(app):
 
         return {"page": page, "page_size": ps}
 
+    # -------------------------------------------------
+    # Encabezados de tiempo (dates/hours) para integridad
+    # -------------------------------------------------
     @app.callback(
         Output("hm-int-pct-dates", "children"),
         Output("hm-int-pct-hours", "children"),
@@ -242,4 +339,5 @@ def integrity_callbacks(app):
     )
     def update_time_headers_integrity(selected_date):
         dates_children, hours_children = _build_time_header_children_by_dates(selected_date)
+        # % y UNIT comparten la misma línea temporal
         return dates_children, hours_children, dates_children, hours_children

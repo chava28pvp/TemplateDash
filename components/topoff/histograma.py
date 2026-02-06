@@ -1,4 +1,3 @@
-# components/Heatmaps/topoff_histograma.py
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
@@ -12,11 +11,12 @@ from components.topoff.heatmap import (
     _max_date_str, _day_str, _sev_cfg, _prog_cfg, _normalize, SEV_COLORS
 )
 
-# Reutilizamos helpers del histograma main
+# Reutilizamos helpers del histograma main (interpolación / smoothing / color utils)
 from components.main.histograma import (
     _interp_nan, _smooth_1d, _bucket_for_value, _hex_to_rgba
 )
 
+# Color fijo por “familia” (PS_RRC, CS_RRC, etc.) para las waves
 METRIC_COLOR_MAP_TOPOFF = {
     "PS_RRC":  "#0d6efd",  # azul
     "CS_RRC":  "#0d6efd",
@@ -26,8 +26,9 @@ METRIC_COLOR_MAP_TOPOFF = {
     "PS_DROP": "#6f42c1",  # morado
     "CS_DROP": "#6f42c1",
 }
+
 # =========================================================
-# PAYLOADS HISTO TOPOFF (AYER/Hoy, 48 columnas)
+# PAYLOADS HISTO TOPOFF (AYER/Hoy, 192 bins de 15m)
 # =========================================================
 
 def build_histo_payloads_topoff(
@@ -35,40 +36,51 @@ def build_histo_payloads_topoff(
     df_ts: pd.DataFrame,
     *,
     UMBRAL_CFG: dict,
-    valores_order=("PS_RRC","CS_RRC","PS_DROP","CS_DROP","PS_RAB","CS_RAB"),
+    valores_order=("PS_RRC", "CS_RRC", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
     today: Optional[str] = None,
     yday: Optional[str] = None,
     alarm_keys: Optional[set] = None,
     alarm_only: bool = False,
     offset: int = 0,
     limit: int = 20,
-    domain: str = "PS",  # 👈 NUEVO
+    domain: str = "PS",
 ) -> Tuple[Optional[dict], Optional[dict], dict]:
     """
-    TopOff histo con muestras cada 15 min:
-      - waves a 15m (ayer 96 + hoy 96 = 192)
-      - eje X solo tickea por hora (se controla en la figura)
+    Arma payloads para el “histograma” TopOff (overlay waves):
+    - 2 días (ayer/hoy) en bins de 15 min => 192 puntos
+    - pct_payload: buckets de severidad (0..3) + raw
+    - unit_payload: valores normalizados 0..1 + raw
+    - Opcional: tráfico (GB o ERL) para fondo
     """
 
+    # Guardas básicas
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
-    # fechas
+    # -----------------------
+    # 1) Fechas hoy / ayer
+    # -----------------------
     if today is None:
         if df_ts is not None and not df_ts.empty and "fecha" in df_ts.columns:
             today = _max_date_str(df_ts["fecha"]) or _day_str(datetime.now())
         else:
             today = _day_str(datetime.now())
+
     if yday is None:
         yday = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # métricas necesarias
+    # -----------------------
+    # 2) Qué métricas necesito
+    # -----------------------
     metrics_needed = set()
     for v in valores_order:
         pm, um = VALORES_MAP_TOPOFF.get(v, (None, None))
-        if pm: metrics_needed.add(pm)
-        if um: metrics_needed.add(um)
+        if pm:
+            metrics_needed.add(pm)
+        if um:
+            metrics_needed.add(um)
 
+    # Tráfico de fondo: depende del dominio y de si existe columna
     domain = (domain or "PS").upper()
     traffic_metric = None
     if df_ts is not None and not df_ts.empty:
@@ -79,18 +91,20 @@ def build_histo_payloads_topoff(
             traffic_metric = "cs_traff_erl"
             metrics_needed.add("cs_traff_erl")
 
-    # base meta (ahora incluye cluster vía META_COLS_TOPOFF)
+    # -----------------------
+    # 3) Base meta + expand por “valores”
+    # -----------------------
+    # base ahora incluye cluster (META_COLS_TOPOFF)
     base = df_meta.drop_duplicates(subset=META_COLS_TOPOFF)[META_COLS_TOPOFF].reset_index(drop=True)
 
-    # expand por métricas
     rows_all_list = []
     for v in valores_order:
         rf = base.copy()
         rf["valores"] = v
 
+        # Si piden “solo alarmas”, filtramos por llaves permitidas (incluye cluster)
         if alarm_only and alarm_keys is not None:
             keys_ok = set(alarm_keys)
-            # key completa con cluster
             mask = list(zip(
                 rf["technology"], rf["vendor"], rf["region"], rf["province"],
                 rf["municipality"], rf["cluster"], rf["site_att"], rf["rnc"], rf["nodeb"]
@@ -104,7 +118,10 @@ def build_histo_payloads_topoff(
 
     rows_all = pd.concat(rows_all_list, ignore_index=True)
 
-    # ---- Max UNIT en ayer/hoy (para ordenar filas) ----
+    # ----------------------------------------------------
+    # 4) Orden: “igual” que heatmap TopOff (por max_unit)
+    # ----------------------------------------------------
+    # Idea: en ayer/hoy calculamos el máximo UNIT para ordenar filas (más “cargadas” arriba)
     if df_ts is not None and not df_ts.empty:
         um_cols = [um for _, um in VALORES_MAP_TOPOFF.values() if um and um in df_ts.columns]
         if um_cols:
@@ -114,41 +131,47 @@ def build_histo_payloads_topoff(
             ].melt(
                 id_vars=META_COLS_TOPOFF,
                 value_vars=um_cols,
-                var_name="metric", value_name="value"
+                var_name="metric",
+                value_name="value"
             )
 
+            # mapea: columna UNIT -> “valores”
             UM_TO_VAL = {um: name for name, (_, um) in VALORES_MAP_TOPOFF.items() if um}
             df_long["valores"] = df_long["metric"].map(UM_TO_VAL)
 
+            # max por (meta + valores)
             df_maxu = (
                 df_long.dropna(subset=["valores"])
                 .groupby(META_COLS_TOPOFF + ["valores"], as_index=False)["value"]
                 .max()
                 .rename(columns={"value": "max_unit"})
             )
-            rows_all = rows_all.merge(
-                df_maxu, on=META_COLS_TOPOFF + ["valores"], how="left"
-            )
+
+            rows_all = rows_all.merge(df_maxu, on=META_COLS_TOPOFF + ["valores"], how="left")
         else:
             rows_all["max_unit"] = np.nan
     else:
         rows_all["max_unit"] = np.nan
 
-    # ordenar igual que heatmap topoff
+    # Orden estable: max_unit descendente; NaN al final (via -inf)
     rows_all["__ord_max_unit__"] = rows_all["max_unit"].astype(float).fillna(float("-inf"))
     rows_all = rows_all.sort_values("__ord_max_unit__", ascending=False, kind="stable").reset_index(drop=True)
 
-    # paginado
+    # -----------------------
+    # 5) Paginación
+    # -----------------------
     total_rows = len(rows_all)
     start = max(0, int(offset))
     end = start + max(1, int(limit))
     rows_page = rows_all.iloc[start:end].reset_index(drop=True)
 
-    # keys visibles (incluye cluster)
+    # keys visibles + rid (para mapear series)
     keys_df = rows_page[META_COLS_TOPOFF].drop_duplicates().reset_index(drop=True)
     keys_df["rid"] = np.arange(len(keys_df), dtype=int)
 
-    # ---------- helpers 15 min ----------
+    # ======================================================
+    # Helpers: bins de 15 min (0..95) y eje X (96 por día)
+    # ======================================================
     def _safe_q15_to_idx(hhmmss):
         """'10:15:00' -> 10*4 + 1 = 41. Devuelve 0..95 o None."""
         try:
@@ -170,14 +193,18 @@ def build_histo_payloads_topoff(
             for m in (0, 15, 30, 45)
         ]
 
-    # TS reducido a visibles
+    # -----------------------
+    # 6) Reducir TS a visibles
+    # -----------------------
     if df_ts is None or df_ts.empty:
         df_small = pd.DataFrame()
     else:
+        # Filtra a ayer/hoy + join contra keys visibles para acelerar
         df_small = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today])].merge(
             keys_df, on=META_COLS_TOPOFF, how="inner", validate="many_to_one"
         )
 
+        # Offset192 = q15 + (96 si es hoy)
         df_small["q15"] = df_small["hora"].apply(_safe_q15_to_idx)
         df_small["offset192"] = df_small["q15"] + np.where(
             df_small["fecha"].astype(str) == today, 96, 0
@@ -185,7 +212,9 @@ def build_histo_payloads_topoff(
         df_small = df_small.dropna(subset=["offset192"])
         df_small["offset192"] = df_small["offset192"].astype(int)
 
-    # maps (rid, offset192)->value
+    # -----------------------
+    # 7) Mapa (rid, offset) -> valor por métrica
+    # -----------------------
     metric_maps: Dict[str, dict] = {}
     if not df_small.empty:
         for m in metrics_needed:
@@ -198,13 +227,18 @@ def build_histo_payloads_topoff(
         metric_maps = {m: {} for m in metrics_needed}
 
     def _row192_raw(metric, rid, zero_after_last: bool = True):
+        """
+        Devuelve 192 valores crudos.
+        Si zero_after_last=True:
+        - rellena a 0.0 antes de la primera muestra y después de la última muestra,
+          para que la wave “no quede colgada” y el smoothing/interpolación se vea limpia.
+        """
         mp = metric_maps.get(metric) or {}
         row = [mp.get((rid, off)) for off in range(192)]
 
         if not zero_after_last:
             return row
 
-        # Índice del PRIMER valor real
         first_idx = -1
         last_idx = -1
         for i, v in enumerate(row):
@@ -213,34 +247,36 @@ def build_histo_payloads_topoff(
                     first_idx = i
                 last_idx = i
 
-        # Si no hubo ningún valor real, deja que _interp_nan lo maneje
+        # Si no hay valores, dejamos que _interp_nan lo resuelva
         if first_idx == -1:
             return row
 
-        # 👉 Antes del primer valor, pon 0.0
+        # 0 antes del primer valor real
         if first_idx > 0:
             for j in range(0, first_idx):
                 row[j] = 0.0
 
-        # 👉 Después del último valor, pon 0.0 (como ya hacías)
+        # 0 después del último valor real
         if last_idx < len(row) - 1:
             for j in range(last_idx + 1, len(row)):
                 row[j] = 0.0
 
         return row
 
-    # amarrar rid real por fila expandida
-    rows_page = rows_page.merge(
-        keys_df, on=META_COLS_TOPOFF, how="left", validate="many_to_one"
-    )
+    # amarrar rid real a la fila expandida (cada “valores” mantiene el mismo rid)
+    rows_page = rows_page.merge(keys_df, on=META_COLS_TOPOFF, how="left", validate="many_to_one")
 
-    # ejes 15m (192 pts)
+    # eje X (192 pts)
     x_dt = _build_x_dt_15m(yday) + _build_x_dt_15m(today)
 
+    # matrices (para mantener formato similar al heatmap, aunque aquí las waves usan z_raw)
     z_pct, z_unit = [], []
     z_pct_raw, z_unit_raw = [], []
 
+    # etiquetas y metadatos por fila
     y_labels, row_detail = [], []
+
+    # tráfico de fondo (raw) por serie y mapeo rápido por key
     traffic_rows_raw = []
     traffic_by_key = {}
 
@@ -260,14 +296,16 @@ def build_histo_payloads_topoff(
 
         pm, um = VALORES_MAP_TOPOFF.get(valores, (None, None))
 
+        # Y label para la figura: aquí se usa solo nodeb (más compacto)
         y_labels.append(str(nodeb))
 
-        # detail ahora: tech/vendor/region/prov/mun/cluster/site/rnc/nodeb/valores
+        # row_detail: clave completa que luego sirve como “series_key” (incluye cluster)
         row_detail.append(
             f"{tech}/{vend}/{region}/{province}/{municipality}/{cluster}/{site_att}/{rnc}/{nodeb}/{valores}"
         )
         series_key = row_detail[-1]
-        # --- Tráfico raw por serie ---
+
+        # ------------- tráfico raw por serie -------------
         if traffic_metric:
             row_traffic = _row192_raw(traffic_metric, rid, zero_after_last=True)
         else:
@@ -275,10 +313,15 @@ def build_histo_payloads_topoff(
 
         traffic_rows_raw.append(row_traffic)
         traffic_by_key[series_key] = row_traffic
-        # % raw + buckets
+
+        # ------------- % (severity buckets 0..3) -------------
         if pm:
             row_raw = _row192_raw(pm, rid)
+
+            # thresholds para bucket (excelente/bueno/regular/critico)
             orient, thr = _sev_cfg(pm, None, UMBRAL_CFG)
+
+            # Nota: aquí bucket es “escalón” discreto, no score continuo
             row_color = [
                 (0 if v is None else
                  0 if v <= thr["excelente"] else
@@ -290,10 +333,10 @@ def build_histo_payloads_topoff(
             z_pct.append(row_color)
             z_pct_raw.append(row_raw)
         else:
-            z_pct.append([None]*192)
-            z_pct_raw.append([None]*192)
+            z_pct.append([None] * 192)
+            z_pct_raw.append([None] * 192)
 
-        # UNIT raw + normalizado
+        # ------------- UNIT (normalizado 0..1) -------------
         if um:
             row_raw_u = _row192_raw(um, rid)
             mn, mx = _prog_cfg(um, None, UMBRAL_CFG)
@@ -301,28 +344,40 @@ def build_histo_payloads_topoff(
             z_unit.append(row_norm)
             z_unit_raw.append(row_raw_u)
         else:
-            z_unit.append([None]*192)
-            z_unit_raw.append([None]*192)
+            z_unit.append([None] * 192)
+            z_unit_raw.append([None] * 192)
 
+    # Payloads (compatibles con tu builder de figura de overlay)
     pct_payload = {
-        "z": z_pct, "z_raw": z_pct_raw, "x_dt": x_dt, "y": y_labels,
+        "z": z_pct,
+        "z_raw": z_pct_raw,
+        "x_dt": x_dt,
+        "y": y_labels,
         "color_mode": "severity",
-        "zmin": -0.5, "zmax": 3.5,
+        "zmin": -0.5,
+        "zmax": 3.5,
         "title": "% IA / % DC (TopOff)",
         "row_detail": row_detail,
-        # 👇 NUEVO
+
+        # tráfico (para barras de fondo)
         "traffic_raw": traffic_rows_raw,
         "traffic_by_key": traffic_by_key,
         "traffic_metric": traffic_metric,
         "domain": domain,
     }
+
     unit_payload = {
-        "z": z_unit, "z_raw": z_unit_raw, "x_dt": x_dt, "y": y_labels,
+        "z": z_unit,
+        "z_raw": z_unit_raw,
+        "x_dt": x_dt,
+        "y": y_labels,
         "color_mode": "progress",
-        "zmin": 0.0, "zmax": 1.0,
+        "zmin": 0.0,
+        "zmax": 1.0,
         "title": "Unidades (TopOff)",
         "row_detail": row_detail,
-        # 👇 opcional pero útil que también lo lleve
+
+        # también tráfico (opcional, pero útil)
         "traffic_raw": traffic_rows_raw,
         "traffic_by_key": traffic_by_key,
         "traffic_metric": traffic_metric,
@@ -335,7 +390,9 @@ def build_histo_payloads_topoff(
         "limit": limit,
         "showing": len(rows_page),
     }
+
     return pct_payload, unit_payload, page_info
+
 
 # =========================================================
 # FIGURA HISTO TOPOFF (overlay waves)
@@ -345,10 +402,10 @@ def build_overlay_waves_figure_topoff(
     payload,
     *,
     UMBRAL_CFG: dict,
-    mode: str = "severity",    # "severity" (% crudos) | "progress" (units crudos)
+    mode: str = "severity",
     height: int = 420,
     smooth_win: int = 3,
-    opacity: float = 0.9,      # ya no hay fill, solo líneas
+    opacity: float = 0.9,
     line_width: float = 1.2,
     decimals: int = 2,
     title_text: str | None = None,
@@ -356,26 +413,26 @@ def build_overlay_waves_figure_topoff(
     selected_wave: str | None = None,
     selected_x: str | None = None,
 
-    # NUEVO: tráfico de fondo
+    # tráfico de fondo
     show_traffic_bars: bool = False,
-    traffic_agg: str = "mean",     # "mean" | "sum"
+    traffic_agg: str = "mean",   # "mean" | "sum"
     traffic_decimals: int = 1,
 ):
     """
-    Overlay TopOff:
-      - waves crudas en 15m (192 puntos)
-      - sin fill (solo línea)
-      - colores fijos por valores (RRC, RAB, S1, DROP)
-      - barras grises de tráfico en y2 si show_traffic_bars=True
+    Dibuja una figura tipo “overlay waves”:
+    - cada fila (series_key) es una línea
+    - se puede seleccionar una wave para destacar (selected_wave)
+    - se puede marcar una x concreta (selected_x)
+    - opcionalmente dibuja barras de tráfico en un eje Y2
     """
-
     if not payload:
         return go.Figure()
 
-    x        = payload.get("x_dt") or payload.get("x") or []
+    x = payload.get("x_dt") or payload.get("x") or []
     y_labels = payload.get("y") or []
-    detail   = payload.get("row_detail") or y_labels
-    z_raw    = payload.get("z_raw") or payload.get("z") or []
+    detail = payload.get("row_detail") or y_labels
+    z_raw = payload.get("z_raw") or payload.get("z") or []
+
     n = len(y_labels)
     if n == 0:
         return go.Figure()
@@ -385,30 +442,31 @@ def build_overlay_waves_figure_topoff(
     traffic_raw = payload.get("traffic_raw") or []
     traffic_by_key = payload.get("traffic_by_key") or {}
 
+    # normaliza selected_x (por si viene con espacio)
     if isinstance(selected_x, str):
         selected_x = selected_x.replace(" ", "T")[:19]
 
-    # ---------- 1) Rango Y global ----------
+    # ======================================================
+    # 1) Rango Y global (para que todas las líneas “caben”)
+    # ======================================================
     sev_min = np.inf
     sev_max = -np.inf
     unit_data_min = np.inf
     unit_data_max = -np.inf
-    unit_cfg_min  = np.inf
-    unit_cfg_max  = -np.inf
+    unit_cfg_min = np.inf
+    unit_cfg_max = -np.inf
 
     for i in range(n):
         row_vals = z_raw[i] if i < len(z_raw) else []
         raw = _interp_nan(row_vals)
-        parts   = (detail[i] if i < len(detail) else "").split("/", 9)
-        tech    = parts[0] if len(parts) > 0 else ""
-        vendor  = parts[1] if len(parts) > 1 else ""
-        region  = parts[2] if len(parts) > 2 else ""
-        prov    = parts[3] if len(parts) > 3 else ""
-        mun     = parts[4] if len(parts) > 4 else ""
+
+        parts = (detail[i] if i < len(detail) else "").split("/", 9)
+        tech = parts[0] if len(parts) > 0 else ""
+        vendor = parts[1] if len(parts) > 1 else ""
         cluster = parts[5] if len(parts) > 5 else ""
-        site    = parts[6] if len(parts) > 6 else ""
-        rnc     = parts[7] if len(parts) > 7 else ""
-        nodeb   = parts[8] if len(parts) > 8 else ""
+        site = parts[6] if len(parts) > 6 else ""
+        rnc = parts[7] if len(parts) > 7 else ""
+        nodeb = parts[8] if len(parts) > 8 else ""
         valores = parts[9] if len(parts) > 9 else ""
 
         if raw.size and np.isfinite(raw).any():
@@ -420,6 +478,8 @@ def build_overlay_waves_figure_topoff(
             else:
                 unit_data_min = min(unit_data_min, vmin)
                 unit_data_max = max(unit_data_max, vmax)
+
+                # también considera límites del cfg (para no cortar líneas)
                 _pm, um = VALORES_MAP_TOPOFF.get(valores, (None, None))
                 if um:
                     mn, mx = _prog_cfg(um, None, UMBRAL_CFG)
@@ -432,38 +492,40 @@ def build_overlay_waves_figure_topoff(
         if hi <= lo:
             return lo, lo + 1.0
         span = hi - lo
-        return lo - span*frac, hi + span*frac
+        return lo - span * frac, hi + span * frac
 
     if mode == "severity":
         ylo, yhi = _pad(
             sev_min if np.isfinite(sev_min) else 0.0,
-            sev_max if np.isfinite(sev_max) else 1.0,
+            sev_max if np.isfinite(sev_max) else 1.0
         )
     else:
-        lo_cand = min(
-            c for c in [unit_data_min, unit_cfg_min] if np.isfinite(c)
-        ) if (np.isfinite(unit_data_min) or np.isfinite(unit_cfg_min)) else 0.0
-        hi_cand = max(
-            c for c in [unit_data_max, unit_cfg_max] if np.isfinite(c)
-        ) if (np.isfinite(unit_data_max) or np.isfinite(unit_cfg_max)) else 1.0
+        lo_cand = min(c for c in [unit_data_min, unit_cfg_min] if np.isfinite(c)) \
+            if (np.isfinite(unit_data_min) or np.isfinite(unit_cfg_min)) else 0.0
+        hi_cand = max(c for c in [unit_data_max, unit_cfg_max] if np.isfinite(c)) \
+            if (np.isfinite(unit_data_max) or np.isfinite(unit_cfg_max)) else 1.0
         ylo, yhi = _pad(lo_cand, hi_cand)
 
-    # ---------- 2) Figure base ----------
+    # ======================================================
+    # 2) Figura base
+    # ======================================================
     fig = go.Figure()
     val_fmt = f",.{decimals}f" if decimals > 0 else ",.0f"
 
     seen_legend = set()
     is_any_selected = bool(selected_wave)
 
-    # ---------- 2.A) Barras de tráfico en Y2 ----------
+    # ------------------------------------------------------
+    # 2.A) Barras de tráfico (opcional) en y2
+    # ------------------------------------------------------
     if show_traffic_bars and x and (traffic_raw or traffic_by_key):
         traffic_series = None
 
-        # Si hay selección -> solo esa serie
+        # si hay selección, solo esa serie
         if selected_wave and selected_wave in traffic_by_key:
             traffic_series = traffic_by_key[selected_wave]
 
-        # Si no, agregamos todas las visibles
+        # si no hay selección, agregamos todas las visibles
         elif traffic_raw:
             traffic_series = []
             for j in range(len(x)):
@@ -471,28 +533,22 @@ def build_overlay_waves_figure_topoff(
                 for row in traffic_raw:
                     if row and j < len(row):
                         v = row[j]
-                        if isinstance(v, (int,float,np.floating)) and np.isfinite(v):
+                        if isinstance(v, (int, float, np.floating)) and np.isfinite(v):
                             vals.append(float(v))
                 if not vals:
                     traffic_series.append(None)
                 else:
-                    traffic_series.append(
-                        sum(vals) if traffic_agg == "sum" else (sum(vals)/len(vals))
-                    )
+                    traffic_series.append(sum(vals) if traffic_agg == "sum" else (sum(vals) / len(vals)))
 
-        # asegurar longitud consistente
+        # asegurar longitud
         if traffic_series and len(traffic_series) != len(x):
-            traffic_series = (
-                traffic_series[:len(x)]
-                + [None] * max(0, len(x) - len(traffic_series))
-            )
+            traffic_series = traffic_series[:len(x)] + [None] * max(0, len(x) - len(traffic_series))
 
         if traffic_series:
             hovertemplate_traf = (
                 "%{x|%Y-%m-%d %H:%M}<br>"
                 f"Tráfico: %{{y:,.{traffic_decimals}f}}<extra></extra>"
             )
-
             fig.add_trace(go.Bar(
                 x=x,
                 y=traffic_series,
@@ -502,72 +558,65 @@ def build_overlay_waves_figure_topoff(
                 hovertemplate=hovertemplate_traf,
             ))
 
-    # ---------- 2.B) Waves ----------
+    # ------------------------------------------------------
+    # 2.B) Waves (líneas)
+    # ------------------------------------------------------
     for i in range(n):
         row_vals = z_raw[i] if i < len(z_raw) else []
         raw = _interp_nan(row_vals)
 
         parts = (detail[i] if i < len(detail) else "").split("/", 9)
-        tech    = parts[0] if len(parts) > 0 else ""
-        vendor  = parts[1] if len(parts) > 1 else ""
-        region  = parts[2] if len(parts) > 2 else ""
-        prov    = parts[3] if len(parts) > 3 else ""
-        mun     = parts[4] if len(parts) > 4 else ""
+        tech = parts[0] if len(parts) > 0 else ""
+        vendor = parts[1] if len(parts) > 1 else ""
+        region = parts[2] if len(parts) > 2 else ""
+        prov = parts[3] if len(parts) > 3 else ""
+        mun = parts[4] if len(parts) > 4 else ""
         cluster = parts[5] if len(parts) > 5 else ""
-        site    = parts[6] if len(parts) > 6 else ""
-        rnc     = parts[7] if len(parts) > 7 else ""
-        nodeb   = parts[8] if len(parts) > 8 else ""
+        site = parts[6] if len(parts) > 6 else ""
+        rnc = parts[7] if len(parts) > 7 else ""
+        nodeb = parts[8] if len(parts) > 8 else ""
         valores = parts[9] if len(parts) > 9 else ""
 
         series_key = detail[i]
 
+        # smoothing para que las lines se vean más “suaves”
         raw_plot = _smooth_1d(raw, win=smooth_win) if (smooth_win and smooth_win > 1 and raw.size) else raw
 
-        # pico (si lo quieres usar luego)
-        if raw.size and np.isfinite(raw).any():
-            pk = int(np.nanargmax(raw))
-            val_pk = float(raw[pk])
-        else:
-            pk = 0
-            val_pk = 0.0
-
-        # Color base por "valores"
+        # Color por familia (valores)
         base_hex = METRIC_COLOR_MAP_TOPOFF.get(valores, "#999999")
 
-        # Selección
+        # Si hay selección: resalta una y apaga el resto
         is_sel = bool(selected_wave and series_key == selected_wave)
-
         if is_any_selected:
-            line_w        = (line_width * 2.4) if is_sel else (line_width * 0.9)
+            line_w = (line_width * 2.4) if is_sel else (line_width * 0.9)
             overall_alpha = 1.0 if is_sel else 0.22
-            line_color    = base_hex if is_sel else "rgba(150,150,150,0.55)"
+            line_color = base_hex if is_sel else "rgba(150,150,150,0.55)"
         else:
-            line_w        = line_width * 1.3
+            line_w = line_width * 1.3
             overall_alpha = 1.0
-            line_color    = base_hex
+            line_color = base_hex
 
-        # Leyenda: una por NodeB · Cluster
+        # Leyenda: una por combinación (tech/vendor/cluster/site/valores)
         display_name = f"{tech} · {vendor} · {cluster} · {site} · {valores}"
         legend_key = f"{tech}__{vendor}__{cluster}__{site}__{valores}"
-
         showlegend = legend_key not in seen_legend
         seen_legend.add(legend_key)
 
-        # Marcadores para selected_x
-        sel_sizes = [0]*len(x)
-        sel_colors = [base_hex]*len(x)
+        # Marcador en selected_x (si coincide en el eje x)
+        sel_sizes = [0] * len(x)
+        sel_colors = [base_hex] * len(x)
         mode_line = "lines"
         if selected_x and selected_x in x:
             j = x.index(selected_x)
             if 0 <= j < len(sel_sizes):
-                sel_sizes[j]  = 9
+                sel_sizes[j] = 9
                 sel_colors[j] = "#ffffff"
             mode_line = "lines+markers"
 
-        # Hover limpio, en cascada y sin región/prov/mun ni concatenado largo
+        # Hover (compacto): evita concatenar todo en un string largo
         hovertemplate = (
             "%{x|%Y-%m-%d %H:%M}<br>"
-            + ("Valor: " if mode=="severity" else "Unidad: ")
+            + ("Valor: " if mode == "severity" else "Unidad: ")
             + f"%{{customdata[1]:{val_fmt}}}"
             + "<br><span style='opacity:0.85'>Tech:</span> %{customdata[2]}"
             + "<br><span style='opacity:0.85'>Vendor:</span> %{customdata[3]}"
@@ -584,34 +633,31 @@ def build_overlay_waves_figure_topoff(
             y=raw_plot,
             mode=mode_line,
             line=dict(width=line_w, color=line_color),
-            marker=dict(
-                size=sel_sizes,
-                color=sel_colors,
-                symbol="diamond"
-            ),
+            marker=dict(size=sel_sizes, color=sel_colors, symbol="diamond"),
             name=display_name,
             legendgroup=legend_key,
             showlegend=showlegend,
             opacity=overall_alpha,
-            fill=None,  # sin área, solo línea
             customdata=np.column_stack([
-                np.full(len(x), series_key, dtype=object),   # 0 (ya no lo usamos en hover)
-                raw if raw.size else np.zeros(len(x)),       # 1
-                np.full(len(x), tech, dtype=object),         # 2
-                np.full(len(x), vendor, dtype=object),       # 3
-                np.full(len(x), region, dtype=object),       # 4
-                np.full(len(x), prov, dtype=object),         # 5
-                np.full(len(x), mun, dtype=object),          # 6
-                np.full(len(x), cluster, dtype=object),      # 7
-                np.full(len(x), site, dtype=object),         # 8
-                np.full(len(x), rnc, dtype=object),          # 9
-                np.full(len(x), nodeb, dtype=object),        # 10
-                np.full(len(x), valores, dtype=object),      # 11
+                np.full(len(x), series_key, dtype=object),      # 0 series_key
+                raw if raw.size else np.zeros(len(x)),          # 1 raw value
+                np.full(len(x), tech, dtype=object),            # 2
+                np.full(len(x), vendor, dtype=object),          # 3
+                np.full(len(x), region, dtype=object),          # 4
+                np.full(len(x), prov, dtype=object),            # 5
+                np.full(len(x), mun, dtype=object),             # 6
+                np.full(len(x), cluster, dtype=object),         # 7
+                np.full(len(x), site, dtype=object),            # 8
+                np.full(len(x), rnc, dtype=object),             # 9
+                np.full(len(x), nodeb, dtype=object),           # 10
+                np.full(len(x), valores, dtype=object),         # 11
             ]),
             hovertemplate=hovertemplate,
         ))
 
-    # ---------- 3) Ejes ----------
+    # ======================================================
+    # 3) Ejes y layout
+    # ======================================================
     ONE_HOUR_MS = 3600 * 1000
     fig.update_xaxes(
         type="date",
@@ -623,6 +669,7 @@ def build_overlay_waves_figure_topoff(
         fixedrange=True,
         showgrid=False,
     )
+
     fig.update_yaxes(
         visible=show_yaxis_ticks,
         showgrid=True,
@@ -634,7 +681,7 @@ def build_overlay_waves_figure_topoff(
         range=[ylo, yhi],
     )
 
-    # Y2 para tráfico
+    # Y2 para tráfico (si aplica)
     traffic_title = None
     if show_traffic_bars and traffic_metric:
         if "gb" in traffic_metric.lower():
@@ -651,11 +698,7 @@ def build_overlay_waves_figure_topoff(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#eaeaea"),
-        hoverlabel=dict(
-            bgcolor="#222",
-            bordercolor="#444",
-            font=dict(color="#fff")
-        ),
+        hoverlabel=dict(bgcolor="#222", bordercolor="#444", font=dict(color="#fff")),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -675,7 +718,7 @@ def build_overlay_waves_figure_topoff(
         ) if show_traffic_bars and traffic_metric else None,
     )
 
-    # Línea divisoria ayer/hoy (96 puntos = 1 día)
+    # Línea divisoria ayer|hoy (96 bins = 1 día)
     if isinstance(x, (list, tuple)) and len(x) >= 97:
         try:
             fig.add_vline(
@@ -687,6 +730,7 @@ def build_overlay_waves_figure_topoff(
         except Exception:
             pass
 
+    # Línea “seleccionada” por click
     if selected_x:
         try:
             fig.add_vline(x=selected_x, line_width=2, line_color="rgba(255,255,255,0.85)")
@@ -694,6 +738,3 @@ def build_overlay_waves_figure_topoff(
             pass
 
     return fig
-
-
-
