@@ -32,16 +32,27 @@ PREFERRED_NET_ORDER = ["NET", "ATT", "TEF"]
 _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
 
-HOLD_SECONDS = 600  # 10 minutos (ajústalo)
+HOLD_SECONDS = 600  # 10 minutos
 
 def order_networks(nets):
     first = [n for n in PREFERRED_NET_ORDER if n in nets]
     rest = sorted([n for n in nets if n not in PREFERRED_NET_ORDER])
     return first + rest
 def _ensure_df(x):
+    """
+       Asegura que el resultado sea un DataFrame.
+       - Si ya es DataFrame, lo regresa.
+       - Si no, regresa un DataFrame vacío (evita errores aguas abajo).
+       """
     return x if isinstance(x, pd.DataFrame) else pd.DataFrame()
 
 def _as_list(x):
+    """
+     Normaliza cualquier input a lista:
+     - None -> None (se usa como "sin filtro")
+     - lista/tupla -> lista
+     - valor simple -> [valor]
+     """
     if x is None:
         return None
     if isinstance(x, (list, tuple)):
@@ -49,9 +60,17 @@ def _as_list(x):
     return [x]
 
 def round_down_to_hour(dt):
+    """
+        Redondea un datetime hacia abajo al inicio de la hora.
+        """
     return dt.replace(minute=0, second=0, microsecond=0)
 
 def _keep_valid(selected, valid_values):
+    """
+        Mantiene solo los valores seleccionados que aún existen en el catálogo válido.
+        Útil cuando actualizas opciones de un dropdown y quieres conservar la selección
+        sin dejar valores "fantasma".
+        """
     if not valid_values:
         return []
     if selected is None:
@@ -64,9 +83,12 @@ def _keep_valid(selected, valid_values):
 
 def _compute_progress_max_for_filters(fecha, hora, networks, technologies, vendors, clusters):
     """
-    Calcula el máximo de cada columna de progress usando TODAS las filas
-    filtradas (sin paginar) para que las barras no dependan de la página actual.
-    """
+        Calcula el máximo por columna "progress" para los filtros actuales.
+
+        ¿Para qué sirve?
+        - Para que las barras (progress bars) se escalen al máximo real del dataset filtrado.
+        - Se calcula con el dataset COMPLETO (sin paginación) para que el máximo sea correcto.
+        """
     networks = _as_list(networks)
     technologies = _as_list(technologies)
     vendors = _as_list(vendors)
@@ -120,6 +142,10 @@ def _compute_progress_max_for_filters(fecha, hora, networks, technologies, vendo
     return max_dict
 
 def _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters):
+    """
+       Crea una llave hashable para cachear el 'contexto' del main.
+       Normaliza listas para que el orden no afecte (['NET','ATT'] == ['ATT','NET']).
+       """
     def _norm(x):
         x = _as_list(x) or []
         return tuple(sorted(x))
@@ -133,6 +159,11 @@ def _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters):
     )
 
 def _get_main_context_cached(fecha, hora, networks, technologies, vendors, clusters):
+    """
+        Lee del cache el contexto si:
+        - existe
+        - y no ha expirado (TTL).
+        """
     key = _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters)
     now = time.time()
     hit = _MAIN_CTX_CACHE.get(key)
@@ -141,18 +172,21 @@ def _get_main_context_cached(fecha, hora, networks, technologies, vendors, clust
     return None
 
 def _set_main_context_cached(fecha, hora, networks, technologies, vendors, clusters, data):
+    """
+        Guarda el contexto en cache con timestamp para expiración por TTL.
+        """
     key = _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters)
     _MAIN_CTX_CACHE[key] = {"ts": time.time(), "data": data}
 
 def _is_integrity_pct_sort(sort_state: dict | None) -> bool:
+    """
+        Detecta si el usuario está ordenando por la columna de % integridad.
+        Puede venir:
+        - "integrity_deg_pct" (sin prefijo)
+        - "NET__integrity_deg_pct" (con prefijo de network)
+        """
     col = (sort_state or {}).get("column")
     return bool(col) and (str(col).endswith("__integrity_deg_pct") or col == "integrity_deg_pct")
-
-def _norm_str(x):
-    if x is None:
-        return None
-    s = str(x).strip()
-    return s
 
 def _build_global_order_keys_by_integrity_pct(
     *,
@@ -251,6 +285,12 @@ def register_callbacks(app):
     def update_all_filters(_tick, fecha, hora,
                            net_val_current, tech_val_current,
                            ven_val_current, clu_val_current):
+        """
+            Objetivo:
+            - Refrescar catálogos de filtros (networks/tech/vendor/cluster)
+            - Conservar selecciones previas si siguen existiendo
+            - Mezclar catálogo principal con catálogo TopOff (tech/vendors)
+            """
         # -------- 1) Traer DF principal para esa fecha/hora --------
         df_main = fetch_kpis(fecha=fecha, hora=None, limit=None)
         df_main = _ensure_df(df_main)
@@ -317,6 +357,14 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def on_click_sort(n_clicks_list, sort_state):
+        """
+           Guarda el estado de orden:
+           - column: la columna clickeada (puede venir prefijada NET__...)
+           - ascending: True/False
+           Reglas:
+           - Si vuelves a clickear la misma, invierte asc/desc
+           - Si clickeas otra, cambia columna y arranca ascendente
+           """
         sort_state = sort_state or {"column": None, "ascending": True}
 
         # ✅ Bloquea disparos “fantasma” por re-render
@@ -357,6 +405,10 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def reset_page_on_filters(_fecha, _hora, _net, _tech, _ven, _clu, page_size):
+        """
+            Cada vez que cambian filtros o tamaño de página:
+            - resetea la paginación a página 1
+            """
         ps = max(1, int(page_size or 50))
         return {"page": 1, "page_size": ps}
 
@@ -371,6 +423,10 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def paginate(n_prev, n_next, state):
+        """
+            Botones anterior / siguiente:
+            - Solo modifica 'page'
+            """
         state = state or {"page": 1, "page_size": 50}
         page = int(state.get("page", 1))
         ps = int(state.get("page_size", 50))
@@ -461,7 +517,7 @@ def register_callbacks(app):
                 sort_by = col
 
         # =========================================================
-        # ✅ sort GLOBAL por % integridad (integrity_deg_pct) SIN BD
+        # sort GLOBAL por % integridad (integrity_deg_pct) SIN BD
         #    - Construye orden global de keys en Python
         #    - Trae SOLO las keys de la página
         # =========================================================
@@ -486,7 +542,7 @@ def register_callbacks(app):
             start = (page_corrected - 1) * page_size
             end = start + page_size
             page_keys = ordered_keys[start:end]
-            explicit_page_key_order = page_keys  # ✅ orden estable para el pivot
+            explicit_page_key_order = page_keys  # orden estable para el pivot
 
             df = fetch_kpis_by_keys(
                 fecha=fecha,
@@ -531,7 +587,6 @@ def register_callbacks(app):
             return empty_alert, "Página 1 de 1", "Sin resultados.", store_payload
 
         # ---------- Reordenar GLOBAL por bucket de completitud (solo modo global) ----------
-        # ⚠️ NO lo apliques cuando el usuario está ordenando por % integridad, porque rompería ese orden.
         if (sort_mode != "alarmado") and (not _is_integrity_pct_sort(sort_state)):
             def _health_pct_row(row):
                 net = row.get("network")
@@ -595,7 +650,7 @@ def register_callbacks(app):
         use_df = df
 
         if all(k in df.columns for k in key_cols) and nets:
-            # ✅ si venimos del sort global por % integridad, respeta el orden de la página
+            # si venimos del sort global por % integridad, respeta el orden de la página
             tuples_in_order = (
                     explicit_page_key_order
                     or list(dict.fromkeys(map(tuple, df[key_cols].itertuples(index=False, name=None))))
@@ -677,6 +732,11 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def tick(n, current_hour, current_date, hour_options, manual_store):
+        """
+           Auto-actualiza fecha/hora a la hora actual, pero con "hold" inteligente:
+           - Si el usuario cambió manualmente hace poco, NO lo pisamos
+           - El hold dura HOLD_SECONDS o hasta el siguiente cambio de hora (lo que ocurra primero)
+           """
         now = now_local()
         floored = round_down_to_hour(now)
         hh = floored.strftime("%H:00:00")
@@ -687,11 +747,11 @@ def register_callbacks(app):
         if opt_values and hh not in opt_values:
             return no_update, no_update
 
-        # ✅ 1) Primer arranque: fuerza "ahora"
+        # 1) Primer arranque: fuerza "ahora"
         if n in (None, 0):
             return hh, today
 
-        # ✅ 2) Hold inteligente
+        # 2) Hold inteligente
         last_manual_ts = float((manual_store or {}).get("last_manual_ts") or 0)
 
         # Calcula el timestamp del siguiente cambio de hora local
@@ -708,7 +768,7 @@ def register_callbacks(app):
         if last_manual_ts > 0 and now_ts < hold_until:
             return no_update, no_update
 
-        # ✅ 3) Si ya pasó el hold, actualiza a "ahora"
+        # 3) Si ya pasó el hold, actualiza a "ahora"
         return hh, today
 
     @app.callback(
@@ -720,10 +780,14 @@ def register_callbacks(app):
         Input("f-vendor", "value"),
         Input("f-cluster", "value"),
         Input("page-size", "value"),
-        Input("f-sort-mode", "value"),  # 👈 nuevo
+        Input("f-sort-mode", "value"),
         prevent_initial_call=True,
     )
     def reset_page_on_filters(_fecha, _hora, _net, _tech, _ven, _clu, page_size, _mode):
+        """
+            Si cambian filtros o el modo de orden, limpiamos el sort manual
+            (para evitar flechas viejas o columnas inválidas).
+            """
         ps = max(1, int(page_size or 50))
         return {"page": 1, "page_size": ps}
 
@@ -759,16 +823,24 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def sync_topoff_from_main(n_clicks_list, ids_list, current_state):
+        """
+            Cuando el usuario da click en el botón del cluster (en la tabla main),
+            guardamos la selección para que TopOff se filtre por:
+            - cluster
+            - vendor
+            - technology
 
+            Si el usuario vuelve a clickear el mismo, lo des-seleccionamos (toggle).
+            """
         if not ids_list:
             raise PreventUpdate
 
         safe_clicks = [(c or 0) for c in (n_clicks_list or [])]
         if max(safe_clicks, default=0) == 0:
-            # ✅ evita falsos disparos por re-render
+            # evita falsos disparos por re-render
             raise PreventUpdate
-        if max([(c or 0) for c in n_clicks_list]) == 0: PreventUpdate
-
+        if max([(c or 0) for c in (n_clicks_list or [])]) == 0:
+            raise PreventUpdate
         current_state = current_state or {"selected": None}
         current_sel = current_state.get("selected")
 
@@ -814,17 +886,23 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def build_main_context(fecha, hora, networks, technologies, vendors, clusters):
+        """
+           Construye un 'contexto' pesado para evitar repetir cálculos en refresh_table:
+           - Baseline semanal de integridad (por network/vendor/cluster/tech)
+           - Máximos para progress bars (por KPI prefijado: NET__ps_rrc_fail, etc.)
+           - Alarm map del día completo (incluye racha)
+
+           Se guarda en dcc.Store (main-context-store).
+           """
         networks = _as_list(networks)
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
         clusters = _as_list(clusters)
 
         # -----------------------------
-        # 0) Cache (recomendación)
+        # 0) Cache
         #    - Para evitar el bug de "hora", el baseline NO debe cachearse por hora
         # -----------------------------
-        # Puedes cachear todo por (fecha, hora, filtros) si quieres,
-        # pero asegúrate de que el baseline se calcule sin usar hora.
         cached = _get_main_context_cached(fecha, hora, networks, technologies, vendors, clusters)
         if cached is not None:
             return cached
@@ -859,14 +937,12 @@ def register_callbacks(app):
             ]
 
         # ============================================================
-        # 1.1) MOCK opcional (si NO hay baseline real)
-        #      OJO: aquí conviene NO depender de hora, o al menos hacerlo estable
+        # 1.1) MOCK (si NO hay baseline real)
         # ============================================================
         elif MOCK_INTEGRITY_BASELINE:
-            # sugerencia: usa hora=None para que no dependa del dropdown
             df_now = fetch_kpis(
                 fecha=fecha,
-                hora=None,  # <<<<<< clave: no te acoples a "Todos"
+                hora=None,
                 vendors=vendors or None,
                 clusters=clusters or None,
                 networks=networks or None,
@@ -904,7 +980,7 @@ def register_callbacks(app):
                         })
 
         # ============================================================
-        # 2) Progress max (puede depender de hora si tu diseño lo requiere)
+        # 2) Progress max
         # ============================================================
         progress_max_by_col = _compute_progress_max_for_filters(
             fecha=fecha,
@@ -916,7 +992,7 @@ def register_callbacks(app):
         )
 
         # ============================================================
-        # 3) Alarm map para el día completo (NO depende de hora)
+        # 3) Alarm map para el día completo
         # ============================================================
         df_day = fetch_kpis(
             fecha=fecha,

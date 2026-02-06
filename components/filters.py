@@ -8,11 +8,8 @@ def build_filters(
     vendor_options=None,
     cluster_options=None
 ):
-    """
-    Panel de filtros para: Network, Technology, Vendor, Noc_Cluster, Date, Time.
-    *_options: listas de strings (puedes pasarlas desde callbacks o al inicializar).
-    """
-    network_options   = network_options   or ["ATT", "TEF", "NET"]  # <-- default útil
+
+    network_options   = network_options   or ["ATT", "TEF", "NET"]
     technology_options= technology_options or []
     vendor_options    = vendor_options     or []
     cluster_options   = cluster_options    or []
@@ -48,13 +45,13 @@ def build_filters(
                     )
                 ], md=3),
 
-                # >>> NUEVO/CLAVE: Network multi-selección (ID consistente con tus callbacks)
+                # >>> NUEVO/CLAVE: Network multi-selección
                 dbc.Col([
                     dbc.Label("Network"),
                     dcc.Dropdown(
                         id="f-network",
                         options=[{"label": n, "value": n} for n in network_options],
-                        value=[],          # << todas por defecto
+                        value=[],
                         multi=True,
                         clearable=False,
                         placeholder="Selecciona network",
@@ -67,7 +64,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-technology",
                         options=[{"label": t, "value": t} for t in technology_options],
-                        value=[],       # << todas por defecto si vienen
+                        value=[],
                         multi=True,
                         placeholder="Selecciona technology",
                         persistence=True, persistence_type="session"
@@ -82,7 +79,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-vendor",
                         options=[{"label": v, "value": v} for v in vendor_options],
-                        value=[],            # << todas por defecto si vienen
+                        value=[],
                         multi=True,
                         placeholder="Selecciona vendor",
                         persistence=True, persistence_type="session"
@@ -94,7 +91,7 @@ def build_filters(
                     dcc.Dropdown(
                         id="f-cluster",
                         options=[{"label": c, "value": c} for c in cluster_options],
-                        value=[],           # << todas por defecto si vienen
+                        value=[],
                         multi=True,
                         placeholder="Selecciona cluster",
                         persistence=True, persistence_type="session"
@@ -102,10 +99,7 @@ def build_filters(
                 ], md=6),
             ], className="g-3"),
 
-            # (Opcional) Intervalo de refresco local
-            # dcc.Interval(id="refresh-interval"),
             # Fila 3: Modo de orden
-            # Fila 3: Modo de orden (como dropdown)
             dbc.Row([
                 dbc.Col([
                     dbc.Label("Orden"),

@@ -17,6 +17,7 @@ from components.main.heatmap import (
 # CONFIG TOPOFF
 # =========================================================
 
+# Mapa “familia” -> (métrica % , métrica unidades)
 VALORES_MAP_TOPOFF = {
     "PS_RRC":  ("ps_rrc_ia_percent", "ps_rrc_fail"),
     "CS_RRC":  ("cs_rrc_ia_percent", "cs_rrc_fail"),
@@ -28,6 +29,7 @@ VALORES_MAP_TOPOFF = {
     "RTX_TNL": ("rtx_tnl_tx_percent", "tnl_abn"),
 }
 
+# Paleta para severidad (excelente -> crítico)
 SEV_COLORS = {
     "excelente": "#2ecc71",
     "bueno":     "#f1c40f",
@@ -36,30 +38,34 @@ SEV_COLORS = {
 }
 SEV_ORDER = ["excelente", "bueno", "regular", "critico"]
 
-# Meta que define UNA FILA única en TopOff (ahora con cluster)
+# Columnas meta que identifican una fila “TopOff” (incluye cluster)
 META_COLS_TOPOFF = [
     "technology", "vendor",
     "region", "province", "municipality",
-    "cluster",          # 👈 NOC_CLUSTER
+    "cluster",
     "site_att", "rnc", "nodeb",
 ]
 
-# Alturas para alinear fila-a-fila (idéntico a main)
+# Alturas (para que el heatmap “cale” igual que el main)
 ROW_H = 26
 MARG_TOP = 0
 MARG_BOTTOM = 170
 EXTRA = 0
 
+
 # =========================================================
 # Helpers
 # =========================================================
+
 def _hm_height_topoff(n_rows: int) -> int:
+    """Calcula altura del heatmap TopOff según #filas (misma lógica visual del main)."""
     if n_rows <= 0:
         return 300
     return int(n_rows * ROW_H + MARG_TOP + MARG_BOTTOM + EXTRA)
 
+
 def _build_x_dt_15m(day_str):
-    # 96 bins por día (24*4)
+    """Construye el eje X con bins de 15 min (24h * 4 = 96 puntos)."""
     return [
         f"{day_str}T{h:02d}:{m:02d}:00"
         for h in range(24)
@@ -68,10 +74,7 @@ def _build_x_dt_15m(day_str):
 
 
 def _safe_q15_to_idx(hhmmss):
-    """
-    hhmmss: '10:15:00' -> 10*4 + 1 = 41
-    Devuelve 0..95 o None.
-    """
+    """Convierte 'HH:MM[:SS]' a índice 0..95 (bins de 15 min)."""
     try:
         s = str(hhmmss)
         parts = s.split(":")
@@ -84,33 +87,33 @@ def _safe_q15_to_idx(hhmmss):
         pass
     return None
 
+
 def _normalize_topoff_cols(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Normaliza nombres de columnas comunes para evitar KeyError
-    cuando df_ts viene con alias distintos.
+    Normaliza nombres de columnas típicos:
+    - tech -> technology
+    - vend -> vendor
+    - noc_cluster -> cluster
+    y asegura que existan nombres estándar para los meta cols.
     """
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
     df = df.copy()
     cols_lower = {c.lower(): c for c in df.columns}
-
     ren = {}
 
     # technology
-    if "technology" not in df.columns:
-        if "tech" in cols_lower:
-            ren[cols_lower["tech"]] = "technology"
+    if "technology" not in df.columns and "tech" in cols_lower:
+        ren[cols_lower["tech"]] = "technology"
 
     # vendor
-    if "vendor" not in df.columns:
-        if "vend" in cols_lower:
-            ren[cols_lower["vend"]] = "vendor"
+    if "vendor" not in df.columns and "vend" in cols_lower:
+        ren[cols_lower["vend"]] = "vendor"
 
     # cluster (acepta noc_cluster -> cluster)
-    if "cluster" not in df.columns:
-        if "noc_cluster" in cols_lower:
-            ren[cols_lower["noc_cluster"]] = "cluster"
+    if "cluster" not in df.columns and "noc_cluster" in cols_lower:
+        ren[cols_lower["noc_cluster"]] = "cluster"
 
     # otros meta comunes
     for k in ["region", "province", "municipality", "site_att", "rnc", "nodeb"]:
@@ -122,8 +125,9 @@ def _normalize_topoff_cols(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+
 def _norm_key_cols(df: pd.DataFrame, cols):
-    """Hace que llaves de merge/groupby no pierdan filas por NaN/espacios."""
+    """Normaliza columnas “llave” (string, strip, y NaN->'') para evitar mismatches en merges."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return df
     df = df.copy()
@@ -131,20 +135,22 @@ def _norm_key_cols(df: pd.DataFrame, cols):
         if c in df.columns:
             df[c] = (
                 df[c]
-                .fillna("")              # <- CLAVE: evita NaN en llaves
+                .fillna("")       # clave: evita NaN en llaves
                 .astype(str)
                 .str.strip()
             )
     return df
 
+
 def _norm_hora_str(x) -> str:
     """
-    Normaliza hora a HH:MM:SS.
-    Acepta: 22, '22', '22:00', '22:00:00', '22:00:00.000', 2200, '2200'
+    Normaliza 'hora' a 'HH:MM:SS' soportando:
+    - NaN/None
+    - números tipo 22, 2200, 2359
+    - strings tipo 'HH:MM[:SS]'
     """
     if x is None:
         return ""
-    # pandas/np nan
     try:
         if isinstance(x, float) and np.isnan(x):
             return ""
@@ -152,10 +158,10 @@ def _norm_hora_str(x) -> str:
         pass
 
     s = str(x).strip()
-    if s == "" or s.lower() == "nan" or s.lower() == "none":
+    if s == "" or s.lower() in ("nan", "none"):
         return ""
 
-    # si viene como número "2200" (HHMM) o "22"
+    # Caso numérico: '22' o '2200' (HHMM)
     try:
         n = int(float(s))
         if 0 <= n <= 23:
@@ -168,21 +174,22 @@ def _norm_hora_str(x) -> str:
     except Exception:
         pass
 
-    # si viene con ":" (HH:MM[:SS[.ms]])
+    # Caso con ':' (HH:MM[:SS[.ms]])
     parts = s.split(":")
     try:
         hh = int(parts[0])
         mm = int(parts[1]) if len(parts) > 1 else 0
         ss = parts[2] if len(parts) > 2 else "0"
-        # ss puede venir "00.000"
-        ss = int(float(ss))
+        ss = int(float(ss))  # permite "00.000"
         return f"{hh:02d}:{mm:02d}:{ss:02d}"
     except Exception:
-        # deja original (último recurso)
-        return s
+        return s  # último recurso
+
+
 # =========================================================
-# PAYLOADS TOPOFF (AYER/Hoy, 48 columnas)
+# PAYLOADS TOPOFF (AYER/Hoy, 192 columnas = 96+96 bins 15m)
 # =========================================================
+
 def build_heatmap_payloads_topoff(
     df_meta: pd.DataFrame,
     df_ts: pd.DataFrame,
@@ -197,13 +204,18 @@ def build_heatmap_payloads_topoff(
     limit: int = 20,
     order_by: str = "alarm_bins_pct",
 ) -> Tuple[Optional[dict], Optional[dict], dict]:
-
-    DEBUG = True  # <- pon False para quitar prints
+    """
+    Builder principal TopOff:
+    - arma payloads para heatmap de % (severity) y UNIT (progress) en bins de 15 min.
+    - genera orden “main-like” para priorizar degradaciones recientes/interesantes.
+    - pagina filas (offset/limit) y devuelve height sugerida.
+    """
+    DEBUG = True
 
     if df_meta is None or df_meta.empty:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0, "height": 300}
 
-    # --- fechas hoy/ayer ---
+    # Fechas hoy/ayer
     if today is None:
         if df_ts is not None and isinstance(df_ts, pd.DataFrame) and not df_ts.empty and "fecha" in df_ts.columns:
             today = _max_date_str(df_ts["fecha"]) or _day_str(datetime.now())
@@ -213,16 +225,16 @@ def build_heatmap_payloads_topoff(
     if yday is None:
         yday = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # --- métricas requeridas ---
+    # Métricas requeridas a partir de valores_order
     metrics_needed = {m for v in valores_order for m in VALORES_MAP_TOPOFF.get(v, (None, None)) if m}
     if not metrics_needed:
         return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0, "height": 300}
 
-    # --- base meta ---
+    # Base meta: filas únicas y llaves normalizadas
     base = df_meta.drop_duplicates(subset=META_COLS_TOPOFF)[META_COLS_TOPOFF].reset_index(drop=True)
     base = _norm_key_cols(base, META_COLS_TOPOFF)
 
-    # --- expand por valores_order ---
+    # Expande filas por cada “valores” (familia PS_RRC, CS_RRC, etc.)
     rows_all_list = []
     keys_ok = set(alarm_keys) if (alarm_only and alarm_keys is not None) else None
 
@@ -230,6 +242,7 @@ def build_heatmap_payloads_topoff(
         rf = base.copy()
         rf["valores"] = v
 
+        # Si se pide alarm_only, filtra por llaves ya “alarmadas”
         if keys_ok is not None:
             mask = list(zip(
                 rf["technology"], rf["vendor"], rf["region"], rf["province"],
@@ -248,6 +261,7 @@ def build_heatmap_payloads_topoff(
     # =========================================================
     # ORDENAMIENTO
     # =========================================================
+    # Normaliza modos equivalentes
     order_by = (order_by or "unit").lower()
     if order_by in ("alarm_hours", "alarm", "hours", "alarm_hours_pct"):
         order_by = "alarm_bins_pct"
@@ -256,10 +270,10 @@ def build_heatmap_payloads_topoff(
 
     out_col = None
 
-    # normaliza df_ts columnas
+    # Normaliza columnas de TS para que “case” con meta
     df_ts = _normalize_topoff_cols(df_ts)
 
-    # --- debug: llaves meta vs TS ---
+    # Debug: compara llaves df_meta vs df_ts (solo para inspección)
     if DEBUG and df_ts is not None and isinstance(df_ts, pd.DataFrame) and not df_ts.empty and all(c in df_ts.columns for c in META_COLS_TOPOFF + ["fecha"]):
         ts_keys = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), META_COLS_TOPOFF].copy()
         ts_keys = _norm_key_cols(ts_keys, META_COLS_TOPOFF).drop_duplicates()
@@ -267,10 +281,13 @@ def build_heatmap_payloads_topoff(
 
     if df_ts is not None and isinstance(df_ts, pd.DataFrame) and not df_ts.empty:
 
+        # Detecta métricas % y unit disponibles en el TS
         pct_metrics  = [pm for pm, _ in VALORES_MAP_TOPOFF.values() if pm and pm in df_ts.columns]
         unit_metrics = [um for _, um in VALORES_MAP_TOPOFF.values() if um and um in df_ts.columns]
 
         meta_present = [c for c in META_COLS_TOPOFF if c in df_ts.columns]
+
+        # Guardas: sin meta crítica no se puede cruzar
         critical = {"technology", "vendor", "cluster", "nodeb"}
         if not critical.issubset(set(meta_present)):
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0, "height": 300}
@@ -279,14 +296,14 @@ def build_heatmap_payloads_topoff(
         base_cols = meta_present + ["fecha", "hora"]
         used_cols = base_cols + [c for c in (pct_metrics + unit_metrics) if c in df_ts.columns]
 
+        # Filtra a ayer/hoy y normaliza llaves/hora
         df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
         df2 = _norm_key_cols(df2, base_cols)
 
-        # Normaliza hora
         if "hora" in df2.columns:
             df2["hora"] = df2["hora"].apply(_norm_hora_str)
 
-        # offset192
+        # Convierte hora a bin q15 (0..95) y luego offset192 (ayer 0..95, hoy 96..191)
         df2["q15"] = df2["hora"].apply(_safe_q15_to_idx)
         df2 = df2.dropna(subset=["q15"]).copy()
         df2["q15"] = df2["q15"].astype(int)
@@ -296,13 +313,15 @@ def build_heatmap_payloads_topoff(
         df2 = df2[(df2["offset192"] >= 0) & (df2["offset192"] <= 191)].copy()
 
         # ======================================================
-        # MAIN-LIKE para % (el que te interesa)
+        # Orden MAIN-LIKE para % (prioriza “alarmas” recientes)
         # ======================================================
         if order_by in ("alarm_bins_pct", "alarm_pct"):
 
             if pct_metrics:
+                # Mapa: columna % -> familia (PS_RRC, CS_RRC, etc.)
                 COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP_TOPOFF.items() if pm}
 
+                # Long: una fila por muestra y por métrica
                 df_long = df2.melt(
                     id_vars=base_cols + ["offset192"],
                     value_vars=pct_metrics,
@@ -314,7 +333,7 @@ def build_heatmap_payloads_topoff(
 
                 grp_cols = meta_present + ["valores"]
 
-                # cache thresholds
+                # Cachea thresholds para cada métrica (evita recalcular en bucles)
                 thr_cache = {}
                 for pm in pct_metrics:
                     try:
@@ -323,6 +342,7 @@ def build_heatmap_payloads_topoff(
                         orient, thr = ("lower_is_better", {"excelente": 0.0, "bueno": 0.0, "regular": 0.0, "critico": 1.0})
                     thr_cache[pm] = (orient, thr)
 
+                # Score continuo (0..~2) y nivel discreto (0..3) por muestra
                 def _score_pct(metric, v):
                     if v is None or (isinstance(v, float) and np.isnan(v)):
                         return np.nan
@@ -338,7 +358,7 @@ def build_heatmap_payloads_topoff(
                 df_long["score_pct"] = [_score_pct(m, v) for m, v in zip(df_long["metric"], df_long["value"])]
                 df_long["lvl_pct"]   = [_level_pct(m, v) for m, v in zip(df_long["metric"], df_long["value"])]
 
-                # ====== ÚLTIMA MUESTRA REAL (aunque no sea regular/critico) ======
+                # Última muestra REAL por grupo (sirve para filtrar “sin datos”)
                 df_last_any = (
                     df_long.dropna(subset=["value", "offset192"])
                     .sort_values("offset192")
@@ -357,15 +377,15 @@ def build_heatmap_payloads_topoff(
                     how="left",
                 )
 
-                # flags numéricos
+                # Normaliza columnas numéricas auxiliares y banderas
                 rows_all["__last_any_off_pct"]   = pd.to_numeric(rows_all["__last_any_off_pct"], errors="coerce").fillna(-1).astype(int)
                 rows_all["__last_any_score_pct"] = pd.to_numeric(rows_all["__last_any_score_pct"], errors="coerce").fillna(float("-inf"))
                 rows_all["__last_any_lvl_pct"]   = pd.to_numeric(rows_all["__last_any_lvl_pct"], errors="coerce").fillna(-1).astype(int)
 
-                # <- CLAVE: filas sin muestra deben ir al final SIEMPRE
+                # Bandera: tiene por lo menos 1 muestra (%)
                 rows_all["__has_any_sample_pct"] = (rows_all["__last_any_off_pct"] >= 0).astype(int)
 
-                # ====== ESCALERITA por bins "interesantes" (tu lógica) ======
+                # “Interés”: define qué muestras cuentan como “casi regular o peor”
                 REG_DELTA = 0.5
 
                 def _is_interest(metric, v):
@@ -389,6 +409,7 @@ def build_heatmap_payloads_topoff(
                     except Exception:
                         return False
 
+                    # Cerca del umbral regular (tolerancia REG_DELTA)
                     if orient == "lower_is_better":
                         return fv >= (reg - REG_DELTA)
                     else:
@@ -397,12 +418,14 @@ def build_heatmap_payloads_topoff(
                 mask_interest = [_is_interest(m, v) for m, v in zip(df_long["metric"], df_long["value"])]
                 df_long["score_interest_pct"] = np.where(mask_interest, df_long["score_pct"], np.nan)
 
+                # Por cada grupo y offset, toma el peor score de interés
                 df_score_bin = (
                     df_long.groupby(grp_cols + ["offset192"], as_index=False)["score_interest_pct"]
                     .max()
                     .dropna(subset=["score_interest_pct"])
                 )
-                # ====== ÚLTIMA ALARMA (último bin interesante) ======
+
+                # Última “alarma” (último offset con interés)
                 df_last_interest = (
                     df_score_bin.sort_values("offset192")
                     .groupby(grp_cols, as_index=False)
@@ -419,19 +442,17 @@ def build_heatmap_payloads_topoff(
                     how="left",
                 )
 
-                rows_all["__last_int_off_pct"] = pd.to_numeric(rows_all["__last_int_off_pct"], errors="coerce").fillna(
-                    -1).astype(int)
-                rows_all["__last_int_score_pct"] = pd.to_numeric(rows_all["__last_int_score_pct"],
-                                                                 errors="coerce").fillna(float("-inf"))
+                rows_all["__last_int_off_pct"] = pd.to_numeric(rows_all["__last_int_off_pct"], errors="coerce").fillna(-1).astype(int)
+                rows_all["__last_int_score_pct"] = pd.to_numeric(rows_all["__last_int_score_pct"], errors="coerce").fillna(float("-inf"))
                 rows_all["__has_interest_pct"] = (rows_all["__last_int_off_pct"] >= 0).astype(int)
 
+                # “Escalerita”: vector por offset para desempates (sort estable)
                 if not df_score_bin.empty:
                     wide = df_score_bin.pivot(index=grp_cols, columns="offset192", values="score_interest_pct").reset_index()
                     wide = wide.rename(columns={c: f"__p_{int(c):03d}" for c in wide.columns if isinstance(c, (int, np.integer))})
-
                     rows_all = rows_all.merge(wide, on=grp_cols, how="left")
 
-                # asegura columnas __p_000..__p_191 para sort estable
+                # Asegura columnas __p_000..__p_191
                 for off in range(0, 192):
                     c = f"__p_{off:03d}"
                     if c not in rows_all.columns:
@@ -441,7 +462,7 @@ def build_heatmap_payloads_topoff(
                 for c in stair_sort_cols:
                     rows_all[c] = pd.to_numeric(rows_all[c], errors="coerce").fillna(float("-inf"))
 
-                # ====== SORT MAIN-LIKE (con has_any_sample primero) ======
+                # Sort “main-like”: con interés primero, luego más reciente, luego peor score
                 rows_all = rows_all.sort_values(
                     by=["__has_interest_pct", "__last_int_off_pct", "__last_int_score_pct"] + stair_sort_cols,
                     ascending=[False, False, False] + ([False] * len(stair_sort_cols)),
@@ -450,16 +471,13 @@ def build_heatmap_payloads_topoff(
                 rows_all["__row_rank_mainlike"] = np.arange(len(rows_all), dtype=int)
 
             else:
-                # sin métricas pct -> no orden main-like posible
+                # Si no hay métricas pct, deja orden “neutral”
                 rows_all["__has_any_sample_pct"] = 0
                 rows_all["__row_rank_mainlike"] = np.arange(len(rows_all), dtype=int)
 
-        # ======================================================
-        # resto de modos: tu lógica (sin prints extra)
-        # ======================================================
+        # Otros modos (placeholders)
         elif order_by in ("alarm_bins_unit", "alarm_unit"):
             out_col = "alarm_bins_unit"
-            # (tu lógica original aquí, sin cambios, si quieres la vuelvo a integrar)
             rows_all[out_col] = np.nan
 
         elif order_by == "pct":
@@ -471,14 +489,11 @@ def build_heatmap_payloads_topoff(
             rows_all[out_col] = np.nan
 
     else:
-        # sin TS
+        # Si no hay TS, no hay orden real
         rows_all["__has_any_sample_pct"] = 0
         rows_all["__row_rank_mainlike"] = np.arange(len(rows_all), dtype=int)
 
-    # =========================================================
-    # ✅ GUARDAS: columnas que usa el CLUSTER SORT siempre deben existir
-    # (si no se calculó main-like o no hubo data TS, quedan defaults)
-    # =========================================================
+    # Guardas: columnas usadas por sorts deben existir siempre
     if "__last_any_off_pct" not in rows_all.columns:
         rows_all["__last_any_off_pct"] = -1
     if "__last_any_lvl_pct" not in rows_all.columns:
@@ -486,17 +501,15 @@ def build_heatmap_payloads_topoff(
     if "__last_any_score_pct" not in rows_all.columns:
         rows_all["__last_any_score_pct"] = float("-inf")
 
-    # bandera: tiene al menos 1 muestra real (%)
     if "__has_any_sample_pct" not in rows_all.columns:
         rows_all["__has_any_sample_pct"] = (
-                pd.to_numeric(rows_all["__last_any_off_pct"], errors="coerce").fillna(-1) >= 0
+            pd.to_numeric(rows_all["__last_any_off_pct"], errors="coerce").fillna(-1) >= 0
         ).astype(int)
     else:
         rows_all["__has_any_sample_pct"] = (
             pd.to_numeric(rows_all["__has_any_sample_pct"], errors="coerce").fillna(0).astype(int)
         )
 
-    # rank mainlike: si no existe, empuja al final
     if "__row_rank_mainlike" not in rows_all.columns:
         rows_all["__row_rank_mainlike"] = 10 ** 9
     else:
@@ -504,94 +517,28 @@ def build_heatmap_payloads_topoff(
             pd.to_numeric(rows_all["__row_rank_mainlike"], errors="coerce").fillna(10 ** 9).astype(int)
         )
 
-    # =========================================================
-    # ORDEN FINAL POR CLUSTER (sin romper main-like)
-    # =========================================================
-    DISABLE_CLUSTER_SORT = True  # ✅ Opción A: deja SOLO main-like (sin agrupar por cluster)
-
+    # Orden final por cluster (opcional; aquí deshabilitado para no romper main-like)
+    DISABLE_CLUSTER_SORT = True
     if not DISABLE_CLUSTER_SORT:
-
-        for col in ["technology", "vendor", "cluster", "site_att"]:
-            if col in rows_all.columns:
-                rows_all[col] = rows_all[col].astype(str)
-
-        mask_empty_cluster = rows_all["cluster"].isin(["", "nan", "None"])
-        if "site_att" in rows_all.columns:
-            rows_all.loc[mask_empty_cluster, "cluster"] = rows_all.loc[mask_empty_cluster, "site_att"].astype(str)
-
-        cluster_group_cols = ["cluster"]
-
-        cluster_stats = (
-            rows_all.groupby(cluster_group_cols, as_index=False)
-            .agg(
-                cluster_has_any=("__has_any_sample_pct", "max"),
-                cluster_best_rank=("__row_rank_mainlike", "min"),
-            )
-        )
-
-        rows_all = rows_all.merge(cluster_stats, on=cluster_group_cols, how="left", validate="many_to_one")
-
-        # valores en orden fijo
-        if valores_order:
-            rows_all["valores"] = pd.Categorical(rows_all["valores"], categories=list(valores_order), ordered=True)
-
-        rows_all = rows_all.sort_values(
-            by=[
-                "cluster_has_any",
-                "cluster_best_rank",
-                "cluster",
-                "site_att",
-                "technology",
-                "vendor",
-                "__has_any_sample_pct",  # <- 1 primero (tiene datos)
-                "__row_rank_mainlike",  # <- orden real main-like dentro del cluster
-                "valores",
-            ],
-            ascending=[
-                False,  # cluster_has_any
-                True,  # cluster_best_rank
-                True,  # cluster
-                True,  # site_att
-                True,  # technology
-                True,  # vendor
-                False,  # __has_any_sample_pct
-                True,  # __row_rank_mainlike
-                True,  # valores
-            ],
-            kind="stable",
-        )
-
+        # (si se habilita) agrupa por cluster y mantiene orden main-like dentro del cluster
+        pass
     else:
-        # ✅ Opción A: NO reordenar por cluster, conservar exactamente el orden main-like ya calculado.
-        # Solo aplica el orden fijo de "valores" si lo deseas (no altera el rank, solo el tipo).
         if valores_order:
             rows_all["valores"] = pd.Categorical(rows_all["valores"], categories=list(valores_order), ordered=True)
 
-    # --- paginado ---
     # =========================================================
-    # ✅ QUITAR "HUECOS": filas sin ninguna muestra en el dominio actual
+    # Paginación + filtro de huecos (filas sin muestras)
     # =========================================================
     if order_by in ("alarm_bins_pct", "alarm_pct"):
-        # aquí ya existe __has_any_sample_pct por tu merge de df_last_any
         if "__has_any_sample_pct" in rows_all.columns:
             rows_all = rows_all[rows_all["__has_any_sample_pct"].fillna(0).astype(int) == 1].copy()
 
-    elif order_by in ("alarm_bins_unit", "alarm_unit"):
-        # si quieres equivalente para UNIT, necesitas construir __has_any_sample_unit
-        # (si no lo construyes, no filtres aquí)
-        if "__has_any_sample_unit" in rows_all.columns:
-            rows_all = rows_all[rows_all["__has_any_sample_unit"].fillna(0).astype(int) == 1].copy()
-
-    else:
-        # pct/max o unit/max: si quieres quitar vacíos, filtra por out_col
-        if out_col and out_col in rows_all.columns:
-            rows_all = rows_all[pd.to_numeric(rows_all[out_col], errors="coerce").notna()].copy()
     total_rows = len(rows_all)
     start = max(0, int(offset))
     end = start + max(1, int(limit))
     rows_page = rows_all.iloc[start:end].reset_index(drop=True)
 
-    # --- keys visibles y df_small TS ---
+    # --- keys visibles y TS reducido a visibles ---
     keys_df = rows_page[META_COLS_TOPOFF].drop_duplicates().reset_index(drop=True)
     keys_df = _norm_key_cols(keys_df, META_COLS_TOPOFF)
     keys_df["rid"] = np.arange(len(keys_df))
@@ -604,6 +551,7 @@ def build_heatmap_payloads_topoff(
         if "hora" in df_ts2.columns:
             df_ts2["hora"] = df_ts2["hora"].apply(_norm_hora_str)
 
+        # Filtra ayer/hoy y cruza contra keys visibles (para acelerar)
         df_small = (
             df_ts2.loc[df_ts2["fecha"].astype(str).isin([yday, today])]
             .merge(keys_df, on=META_COLS_TOPOFF, how="inner")
@@ -615,13 +563,12 @@ def build_heatmap_payloads_topoff(
         df_small = df_small.dropna(subset=["offset192"])
         df_small["offset192"] = df_small["offset192"].astype(int)
 
-    # --- maps por métrica ---
+    # Mapas por métrica: (rid, offset192) -> valor
     metric_maps = {}
     if not df_small.empty:
         for m in metrics_needed:
             if m in df_small.columns:
-                sub = df_small[["rid", "offset192", m]].dropna()
-                sub = sub.sort_values("offset192")
+                sub = df_small[["rid", "offset192", m]].dropna().sort_values("offset192")
                 metric_maps[m] = dict(zip(zip(sub["rid"], sub["offset192"]), sub[m]))
             else:
                 metric_maps[m] = {}
@@ -629,6 +576,7 @@ def build_heatmap_payloads_topoff(
         metric_maps = {m: {} for m in metrics_needed}
 
     def _row192_raw(metric, rid):
+        """Devuelve 192 valores (ayer+ hoy en bins de 15m) para una métrica y rid."""
         mp = metric_maps.get(metric) or {}
         return [mp.get((rid, off)) for off in range(192)]
 
@@ -637,6 +585,7 @@ def build_heatmap_payloads_topoff(
     # --- ejes ---
     x_dt = _build_x_dt_15m(yday) + _build_x_dt_15m(today)
 
+    # Matrices para heatmap y metadatos por fila
     z_pct, z_unit = [], []
     z_pct_raw, z_unit_raw = [], []
     y_labels, row_detail = [], []
@@ -649,24 +598,17 @@ def build_heatmap_payloads_topoff(
         valores = r.valores
         pm, um = VALORES_MAP_TOPOFF.get(valores, (None, None))
 
-        nodeb = getattr(r, "nodeb", "") or ""
-        tech = r.technology
-        vend = r.vendor
-
-        region = getattr(r, "region", "") or ""
-        province = getattr(r, "province", "") or ""
-        municipality = getattr(r, "municipality", "") or ""
-        site_att = getattr(r, "site_att", "") or ""
-        rnc = getattr(r, "rnc", "") or ""
-
-        y_id = f"{tech}/{vend}/{region}/{province}/{municipality}/{r.site_att}/{r.rnc}/{nodeb}/{r.cluster}/{valores}"
+        # y-label “larga” (incluye cluster) para estabilidad visual
+        y_id = f"{r.technology}/{r.vendor}/{getattr(r,'region','')}/{getattr(r,'province','')}/{getattr(r,'municipality','')}/{r.site_att}/{r.rnc}/{getattr(r,'nodeb','')}/{r.cluster}/{valores}"
         y_labels.append(y_id)
 
-        row_detail.append(f"{tech}/{vend}/{region}/{province}/{municipality}/{site_att}/{rnc}/{nodeb}/{valores}")
+        # row_detail (para tabla/hover): sin cluster en medio (pero incluye valores)
+        row_detail.append(f"{r.technology}/{r.vendor}/{getattr(r,'region','')}/{getattr(r,'province','')}/{getattr(r,'municipality','')}/{getattr(r,'site_att','')}/{getattr(r,'rnc','')}/{getattr(r,'nodeb','')}/{valores}")
 
         row_raw   = _row192_raw(pm, rid) if pm else [None] * 192
         row_raw_u = _row192_raw(um, rid) if um else [None] * 192
 
+        # % -> score continuo (severity)
         if pm:
             orient, thr = _sev_cfg(pm, None, UMBRAL_CFG)
             row_color = [
@@ -679,6 +621,7 @@ def build_heatmap_payloads_topoff(
             z_pct.append([None] * 192)
             z_pct_raw.append(row_raw)
 
+        # UNIT -> normalizado 0..1 (progress)
         if um:
             mn, mx = _prog_cfg(um, None, UMBRAL_CFG)
             row_norm = [_normalize(v, mn, mx) if v is not None else None for v in row_raw_u]
@@ -691,6 +634,7 @@ def build_heatmap_payloads_topoff(
             z_unit.append([None] * 192)
             z_unit_raw.append(row_raw_u)
 
+        # Stats por fila: última muestra + máximos (para tabla resumen)
         arr_u = np.array([v if isinstance(v, (int, float)) else np.nan for v in row_raw_u], float)
         arr_p = np.array([v if isinstance(v, (int, float)) else np.nan for v in row_raw], float)
 
@@ -701,7 +645,7 @@ def build_heatmap_payloads_topoff(
         row_max_pct.append(np.nanmax(arr_p) if np.isfinite(arr_p).any() else np.nan)
         row_max_unit.append(np.nanmax(arr_u) if np.isfinite(arr_u).any() else np.nan)
 
-    # zmin/zmax
+    # Rango de colores
     zmin_pct, zmax_pct = 0.0, 2.0
     if all_scores_unit:
         zmin_unit = min(all_scores_unit)
@@ -755,6 +699,11 @@ def build_heatmap_payloads_topoff(
 # =========================================================
 
 def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
+    """
+    Convierte un payload (pct o unit) en una figura Plotly Heatmap:
+    - usa z para colores y z_raw para hover.
+    - separa visualmente ayer|hoy con una línea vertical.
+    """
     if not payload:
         return go.Figure()
 
@@ -767,7 +716,7 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
     mode    = payload.get("color_mode", "severity")
     detail  = payload.get("row_detail") or y
 
-    # colores
+    # Colores según modo
     if mode == "severity":
         colorscale = [
             [0/3, SEV_COLORS["excelente"]],
@@ -781,14 +730,14 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
             [1.0, "#0d6efd"],
         ]
 
-    # customdata
+    # customdata: empaqueta info por celda para el hover (site/rnc/nodeb/última hora/valor)
     customdata = []
     for i, row in enumerate(z_raw):
-        arr = np.array([v if isinstance(v,(int,float)) else np.nan for v in row], dtype=float)
+        arr = np.array([v if isinstance(v, (int, float)) else np.nan for v in row], dtype=float)
         if np.isfinite(arr).any():
             valid_idx = np.where(np.isfinite(arr))[0]
             last_idx = int(valid_idx[-1])
-            last_label = str(x[last_idx]).replace("T"," ")[:16]
+            last_label = str(x[last_idx]).replace("T", " ")[:16]
         else:
             last_label = "—"
 
@@ -839,15 +788,17 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
         xgap=0.5, ygap=0.5,
     ))
 
+    # Eje X: ticks cada hora (aunque internamente son bins de 15m)
     ONE_HOUR_MS = 3600 * 1000
     fig.update_xaxes(
         type="date",
-        dtick=ONE_HOUR_MS,  # ticks cada hora aunque haya bins de 15m
+        dtick=ONE_HOUR_MS,
         showticklabels=False,
         ticks="",
         fixedrange=False,
     )
 
+    # Eje Y: oculto (se maneja por hover + tabla resumen)
     fig.update_yaxes(
         showticklabels=False,
         ticks="",
@@ -861,6 +812,7 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
         autorange="reversed",
     )
 
+    # Línea separadora ayer|hoy (en x[96])
     if isinstance(x, (list, tuple)) and len(x) >= 97:
         fig.add_vline(
             x=x[96],
@@ -881,6 +833,7 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
     )
     return fig
 
+
 # =========================================================
 # SUMMARY TABLE TOPOFF
 # =========================================================
@@ -893,6 +846,10 @@ def render_heatmap_summary_table_topoff(
     unit_decimals=0,
     active_y=None,
 ):
+    """
+    Render UI: tabla resumen para TopOff (mismo orden del heatmap).
+    Muestra cluster, site, tech, vendor, familia (valor), última hora, último % y última UNIT.
+    """
     src = pct_payload or unit_payload
     if not src:
         return dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
@@ -903,7 +860,7 @@ def render_heatmap_summary_table_topoff(
     z_raw_pct = (pct_payload or {}).get("z_raw")
     z_raw_unit = (unit_payload or {}).get("z_raw")
 
-    # ===== NEW HEADERS =====
+    # Encabezados de la tabla
     cols = [
         ("Cluster", "w-cluster"),
         ("Sitio", "w-sitio"),
@@ -920,8 +877,8 @@ def render_heatmap_summary_table_topoff(
         className="table-dark"
     )
 
-    # fmt helper
     def _fmt_full(v):
+        """Formato completo para tooltip numérico (fallback seguro)."""
         try:
             f = float(v)
             if not np.isfinite(f):
@@ -931,20 +888,19 @@ def render_heatmap_summary_table_topoff(
             return ""
 
     body_rows = []
-
     for i in range(len(y)):
-        # y-label contiene: tech/vendor/region/province/mun/site/rnc/nodeb/cluster/valores
+        # y-label: tech/vendor/region/province/mun/site/rnc/nodeb/cluster/valores
         parts_y = str(y[i]).split("/", 9)
         site    = parts_y[5] if len(parts_y) > 5 else ""
         cluster = parts_y[8] if len(parts_y) > 8 else ""
         valor   = parts_y[9] if len(parts_y) > 9 else ""
 
-        # detail contiene: tech/vendor/region/prov/mun/site/rnc/nodeb/valores
+        # detail: tech/vendor/region/prov/mun/site/rnc/nodeb/valores
         parts_d = (detail[i] if i < len(detail) else str(y[i])).split("/", 8)
         tech   = parts_d[0] if len(parts_d) > 0 else ""
         vendor = parts_d[1] if len(parts_d) > 1 else ""
 
-        # últimas muestras
+        # Últimos valores numéricos (desde el final de la serie)
         last_pct  = _last_numeric(z_raw_pct[i]) if z_raw_pct and i < len(z_raw_pct) else None
         last_unit = _last_numeric(z_raw_unit[i]) if z_raw_unit and i < len(z_raw_unit) else None
 
@@ -954,21 +910,13 @@ def render_heatmap_summary_table_topoff(
 
         body_rows.append(
             html.Tr([
-                # Cluster
                 html.Td(
-                    html.Span(
-                        html.Span(cluster, className="unflip"),
-                        className="ellipsis-left"
-                    ),
+                    html.Span(html.Span(cluster, className="unflip"), className="ellipsis-left"),
                     className="w-cluster",
                     title=cluster
                 ),
-                # Site
                 html.Td(
-                    html.Span(
-                        html.Span(site, className="unflip"),
-                        className="ellipsis-left"
-                    ),
+                    html.Span(html.Span(site, className="unflip"), className="ellipsis-left"),
                     className="w-sitio",
                     title=site
                 ),
@@ -994,24 +942,33 @@ def render_heatmap_summary_table_topoff(
         className="mb-0 table-dark kpi-table topoff-table compact"
     )
 
+
 # =========================================================
 # TIME HEADERS
 # =========================================================
 
 def build_time_header_children_by_dates(fecha_str: str):
+    """
+    Construye headers “visuales” para el timeline de 48 horas:
+    - fila de fechas (ayer / hoy)
+    - fila de horas (0..23 y 0..23) con separador al llegar a 24
+    """
     try:
         today_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.utcnow()
     except Exception:
         today_dt = datetime.utcnow()
+
     yday_dt = today_dt - timedelta(days=1)
     today_s = today_dt.strftime("%Y-%m-%d")
     yday_s  = yday_dt.strftime("%Y-%m-%d")
 
+    # Etiquetas de fechas (ayer | hoy)
     dates_children = [
         html.Div(yday_s,  className="cell"),
         html.Div(today_s, className="cell sep"),
     ]
 
+    # Etiquetas de horas (48 posiciones)
     hours_children = []
     for i in range(48):
         hh = i if i < 24 else i - 24
@@ -1024,5 +981,3 @@ def build_time_header_children_by_dates(fecha_str: str):
         hours_children.append(html.Div(label, className=" ".join(cls)))
 
     return dates_children, hours_children
-
-

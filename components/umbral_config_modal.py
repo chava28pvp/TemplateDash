@@ -6,32 +6,32 @@ from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
 def create_umbral_config_modal(network_options=None):
     """
-    Modal para configurar umbrales por Tabla/Perfil (main/topoff) y por Network.
-    - Selecciona primero la Tabla (perfil) -> 'umbral-table'
-    - Luego la Métrica -> 'umbral-metric'
-    - Y el Ámbito de Network -> 'umbral-network'
-    Los callbacks usarán el valor de 'umbral-table' como 'profile' al leer/guardar:
-        UM_MANAGER.get_severity(..., profile=table)
-        UM_MANAGER.get_progress(..., profile=table)
-        UM_MANAGER.upsert_severity(..., profile=table)
-        UM_MANAGER.upsert_progress(..., profile=table)
+    Crea el UI (botón + modal) para configurar umbrales.
+    Incluye:
+    - Selector de tabla/perfil (main / topoff)
+    - Selector de métrica (desde UM_MANAGER)
+    - Selector de network (Global o una network específica)
+    - Panel de severidad (excelente/bueno/regular/crítico)
+    - Panel de progress (min/max)
+    - Store + Toast para guardar/feedback (lo controlan callbacks)
     """
-    # Opciones de tablas/perfiles (puedes extenderlas si agregas más tablas)
+
+    # Opciones de tablas/perfiles disponibles
     table_options = [
         {"label": "Tabla principal (Main)", "value": "main"},
         {"label": "TopOff", "value": "topoff"},
     ]
 
-    # Métricas disponibles (unión de perfiles, así no depende del orden inicial)
+    # Lista de métricas disponibles (centralizada en UM_MANAGER)
     metrics = UM_MANAGER.list_metrics()
 
-    # Opciones para el selector de network (ámbito).
-    # "" == Global (default). Puedes pasar network_options=["ATT","NET","TEF"] desde fuera.
+    # Selector de network: "" significa Global (sin scope por red)
     net_options = [{"label": "(Global)", "value": ""}]
     if network_options:
         net_options += [{"label": n, "value": n} for n in network_options]
 
     return html.Div([
+        # Botón que abre el modal (callback lo usa con el id)
         dbc.Button(
             "Configurar umbrales",
             id="open-umbral-config",
@@ -39,10 +39,10 @@ def create_umbral_config_modal(network_options=None):
             className="ms-2",
         ),
 
-        # Guarda el JSON completo de configuración en memoria (lo manejarán los callbacks)
+        # Store para mantener el JSON de config en memoria (lo actualizan callbacks)
         dcc.Store(id="umbral-config-store"),
 
-        # Toast para feedback (guardado/errores)
+        # Toast para mostrar “Guardado” o errores rápidos
         dbc.Toast(
             id="umbral-toast",
             header="Umbrales",
@@ -53,18 +53,19 @@ def create_umbral_config_modal(network_options=None):
             style={"position": "fixed", "top": 10, "right": 10, "zIndex": 2000},
         ),
 
+        # Modal completo de configuración
         dbc.Modal([
             dbc.ModalHeader(dbc.ModalTitle("Configurar umbrales")),
             dbc.ModalBody([
 
-                # Selector de Tabla / Perfil
+                # Tabla / perfil al que aplica la config
                 dbc.Row([
                     dbc.Col([
                         html.Label("Tabla / Perfil"),
                         dcc.Dropdown(
                             id="umbral-table",
                             options=table_options,
-                            value="main",            # por defecto 'main'
+                            value="main",
                             clearable=False,
                         ),
                         html.Small(
@@ -74,7 +75,7 @@ def create_umbral_config_modal(network_options=None):
                     ], md=8),
                 ], className="mb-3"),
 
-                # Selector de métrica
+                # Métrica a configurar
                 dbc.Row([
                     dbc.Col([
                         html.Label("Métrica a configurar"),
@@ -84,6 +85,7 @@ def create_umbral_config_modal(network_options=None):
                             placeholder="Seleccione una métrica…",
                             clearable=False,
                         ),
+                        # Texto de ayuda dinámico (lo puede llenar un callback)
                         html.Small(
                             id="umbral-metric-help",
                             className="text-muted d-block mt-1",
@@ -91,14 +93,14 @@ def create_umbral_config_modal(network_options=None):
                     ])
                 ], className="mb-3"),
 
-                # Selector de network (ámbito)
+                # Network scope (Global o network específica)
                 dbc.Row([
                     dbc.Col([
                         html.Label("Network"),
                         dcc.Dropdown(
                             id="umbral-network",
                             options=net_options,
-                            value="",          # "" == Global
+                            value="",  # "" == Global
                             clearable=False,
                         ),
                         html.Small(
@@ -108,7 +110,7 @@ def create_umbral_config_modal(network_options=None):
                     ], md=8),
                 ], className="mb-3"),
 
-                # Panel de Severidad (4 colores)
+                # Panel Severidad (4 niveles). Se muestra/oculta según la métrica/callback.
                 html.Div([
                     dbc.Badge("4 niveles", color="primary", className="me-2"),
                     dbc.Row([
@@ -119,7 +121,7 @@ def create_umbral_config_modal(network_options=None):
                     ], className="g-3 mt-1"),
                 ], id="severity-panel", hidden=True, className="mb-3"),
 
-                # Panel de Progress (min/max)
+                # Panel Progress (min/max). Se muestra/oculta según la métrica/callback.
                 html.Div([
                     dbc.Badge("Progress (min/max)", color="info", className="me-2"),
                     dbc.Row([
@@ -128,9 +130,11 @@ def create_umbral_config_modal(network_options=None):
                     ], className="g-3 mt-1"),
                 ], id="progress-panel", hidden=True, className="mb-3"),
 
-                # Área de errores
+                # Alert para mostrar errores de validación (lo controla un callback)
                 dbc.Alert(id="umbral-error", color="danger", is_open=False, className="py-2"),
             ]),
+
+            # Botones del modal (Cancel / Save)
             dbc.ModalFooter([
                 dbc.Button("Cancelar", id="umbral-cancel", color="secondary", className="me-2"),
                 dbc.Button("Guardar", id="umbral-save", color="primary"),
@@ -140,15 +144,24 @@ def create_umbral_config_modal(network_options=None):
 
 
 def _severity_card(label: str, color: str) -> dbc.Card:
+    """
+    Tarjeta simple para capturar un umbral de severidad:
+    - Muestra el nombre (excelente/bueno/regular/critico) con un cuadrito de color
+    - Input numérico para el valor del corte
+    """
     return dbc.Card(
         dbc.CardBody([
             html.Div([
+                # “Swatch” de color
                 html.Span(style={
                     "display": "inline-block", "width": 12, "height": 12,
                     "background": color, "borderRadius": 2, "marginRight": 6
                 }),
                 html.Strong(label.title()),
             ], className="mb-2 d-flex align-items-center"),
+
+            # Input del umbral para ese nivel
             dbc.Input(id=f"sev-{label}", type="number", placeholder="Valor", step="any"),
-        ]), className="h-100"
+        ]),
+        className="h-100"
     )
