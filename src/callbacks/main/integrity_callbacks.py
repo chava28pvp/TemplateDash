@@ -25,6 +25,7 @@ from src.callbacks.main.heatmap_callbacks import _as_list, _fetch_df_ts_cached
 
 # Baseline semanal (fallback si no viene en store)
 from src.dataAccess.data_access import fetch_integrity_baseline_week
+from src.callbacks.common import toggle_bool, reset_page_state
 
 
 # =========================================================
@@ -73,20 +74,22 @@ def integrity_callbacks(app):
         Input("heatmap-integrity-trigger", "data"),
         State("collapse-hm-int", "is_open"),
         State("f-fecha", "date"),
-        State("f-network", "value"),
-        State("f-technology", "value"),
-        State("f-vendor", "value"),
-        State("f-cluster", "value"),
+        State("applied-filters-store", "data"),
         State("heatmap-integrity-page-state", "data"),
         State("main-context-store", "data"),
         prevent_initial_call=True,
     )
-    def refresh_integrity_heatmap(_trigger, is_open, fecha, networks, technologies, vendors, clusters, page_state, main_ctx):
+    def refresh_integrity_heatmap(_trigger, is_open, fecha, applied_filters, page_state, main_ctx):
         # Si el panel está cerrado, no gastes CPU ni queries
         if not is_open:
             return no_update, no_update, no_update, no_update, no_update, no_update
 
         # Normaliza filtros a listas
+        applied_filters = applied_filters or {}
+        networks = applied_filters.get("network")
+        technologies = applied_filters.get("technology")
+        vendors = applied_filters.get("vendor")
+        clusters = applied_filters.get("cluster")
         networks = _as_list(networks)
         technologies = _as_list(technologies)
         vendors = _as_list(vendors)
@@ -251,10 +254,7 @@ def integrity_callbacks(app):
         Output("heatmap-integrity-trigger", "data"),
         Input("collapse-hm-int", "is_open"),
         Input("f-fecha", "date"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("heatmap-integrity-page-state", "data"),
         Input("main-context-store", "data"),
         prevent_initial_call=False,
@@ -275,10 +275,7 @@ def integrity_callbacks(app):
         prevent_initial_call=True,
     )
     def toggle_integrity_panel(n, is_open):
-        # Si no hubo click válido, no cambies estado
-        if not n:
-            return is_open
-        return not is_open
+        return toggle_bool(n, is_open)
 
     # -------------------------------------------------
     # Reset de paginación cuando cambian filtros / page size
@@ -286,17 +283,15 @@ def integrity_callbacks(app):
     @app.callback(
         Output("heatmap-integrity-page-state", "data"),
         Input("f-fecha", "date"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("hm-int-page-size", "value"),
         prevent_initial_call=False,
     )
-    def hm_int_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, page_size):
+    def hm_int_reset_page_on_filters(_fecha, _applied_filters, page_size):
         # Nota: aquí fuerzas mínimo 10
-        ps = max(10, int(page_size or 50))
-        return {"page": 1, "page_size": ps}
+        state = reset_page_state(page_size, default_size=50)
+        state["page_size"] = max(10, int(state["page_size"]))
+        return state
 
     # -------------------------------------------------
     # Paginación prev/next (con límite por total_rows)

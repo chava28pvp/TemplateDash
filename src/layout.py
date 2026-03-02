@@ -985,6 +985,16 @@ def serve_layout():
         dcc.Store(id="sort-state", data={"column": None, "ascending": True}),
         dcc.Store(id="table-page-data"),
         dcc.Store(id="main-context-store"),
+        dcc.Store(
+            id="applied-filters-store",
+            data={
+                "network": [],
+                "technology": [],
+                "vendor": [],
+                "cluster": [],
+                "sort_mode": "alarmado",
+            },
+        ),
 
         # Señales/estado Heatmap
         dcc.Store(id="heatmap-trigger", data=None),

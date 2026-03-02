@@ -1,0 +1,41 @@
+Metadata-Version: 2.1
+Name: anitya_schema
+Version: 2.3.0
+Summary: JSON schema definitions for messages published by Anitya
+Home-page: https://github.com/fedora-infra/anitya-messages
+License: GPL-2.0-or-later
+Author: Fedora Infrastructure Team
+Author-email: infrastructure@lists.fedoraproject.org
+Maintainer: Fedora Infrastructure Team
+Maintainer-email: infrastructure@lists.fedoraproject.org
+Requires-Python: >=3.10,<4.0
+Classifier: License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Dist: fedora-messaging (>=3.1.0,<4.0.0)
+Project-URL: Documentation, https://anitya-messages.readthedocs.io/en/latest
+Project-URL: Repository, https://github.com/fedora-infra/anitya-messages
+Description-Content-Type: text/x-rst
+
+.. image:: https://img.shields.io/pypi/v/anitya_schema.svg
+  :target: https://pypi.org/project/anitya_schema/
+
+.. image:: https://readthedocs.org/projects/anitya-messages/badge/?version=latest
+  :alt: Documentation Status
+  :target: https://anitya-messages.readthedocs.io/en/latest/?badge=latest
+
+Anitya Message Schema
+=====================
+
+JSON schema definitions for messages published by
+`Anitya <https://github.com/fedora-infra/anitya>`_.
+
+Documentation for Anitya Message Schema could be found
+`here <https://anitya-messages.readthedocs.io/en/latest>`_.
+
+See http://json-schema.org/ for documentation on the schema format. See
+https://fedora-messaging.readthedocs.io/en/latest/messages.html for
+documentation on fedora-messaging.
+

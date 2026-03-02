@@ -1,0 +1,6 @@
+[console_scripts]
+fedora-messaging=fedora_messaging.cli:cli
+
+[fedora.messages]
+base.message=fedora_messaging.message:Message
+

@@ -1,0 +1,77 @@
+Metadata-Version: 2.4
+Name: fedora_messaging
+Version: 3.9.0
+Summary: A set of tools for using Fedora's messaging infrastructure
+License: GPLv2+
+License-File: LICENSES/GPL-2.0-or-later.txt
+Keywords: fedora
+Author: Fedora Infrastructure
+Author-email: admin@fedoraproject.org
+Maintainer: Fedora Infrastructure Team
+Requires-Python: >=3.9.0,<4.0.0
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)
+Classifier: License :: Other/Proprietary License
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: 3.14
+Requires-Dist: blinker (>=1.5,<2.0)
+Requires-Dist: click (>=8.0.3,<9.0.0)
+Requires-Dist: crochet (>=1.12.0)
+Requires-Dist: jsonschema (>=3.2.0,<5.0.0)
+Requires-Dist: pika (>=1.2.1,<2.0.0)
+Requires-Dist: pyopenssl (>=21.0.0)
+Requires-Dist: requests (>=2.5.0)
+Requires-Dist: service-identity (>=21.1.0)
+Requires-Dist: tomli (>=2.0.1,<3.0.0)
+Requires-Dist: twisted (>=22.4.0)
+Project-URL: Repository, https://github.com/fedora-infra/fedora-messaging
+Description-Content-Type: text/x-rst
+
+.. SPDX-FileCopyrightText: 2024 Red Hat, Inc
+..
+.. SPDX-License-Identifier: GPL-2.0-or-later
+
+Fedora Messaging
+================
+
+.. image:: https://img.shields.io/pypi/v/fedora-messaging.svg
+    :target: https://pypi.org/project/fedora-messaging/
+
+.. image:: https://img.shields.io/pypi/pyversions/fedora-messaging.svg
+    :target: https://pypi.org/project/fedora-messaging/
+
+.. image:: https://readthedocs.org/projects/fedora-messaging/badge/?version=stable
+    :alt: Documentation Status
+    :target: https://fedora-messaging.readthedocs.io/en/stable/?badge=stable
+
+.. image:: https://github.com/fedora-infra/fedora-messaging/actions/workflows/main.yml/badge.svg?branch=develop
+    :alt: Tests Status
+    :target: https://github.com/fedora-infra/fedora-messaging/actions/workflows/main.yml?query=branch%3Adevelop
+
+.. image:: https://codecov.io/gh/fedora-infra/fedora-messaging/branch/master/graph/badge.svg
+  :target: https://codecov.io/gh/fedora-infra/fedora-messaging
+
+This package provides tools and APIs to make using Fedora's messaging
+infrastructure easier. These include a framework for declaring message schemas,
+a set of synchronous APIs to publish messages to AMQP brokers, a set of
+asynchronous APIs to consume messages, and services to easily run consumers.
+
+This library is designed to be a replacement for the `PyZMQ`_-backed `fedmsg`_
+library in Fedora Infrastructure.
+
+To get started, check out our `user guide`_.
+
+Looking to contribute? We appreciate it! Check out the `contributor guide`_.
+
+
+.. _`user guide`: https://fedora-messaging.readthedocs.io/en/latest/#user-guide
+.. _`contributor guide`: https://fedora-messaging.readthedocs.io/en/latest/contributing.html
+.. _`PyZMQ`: https://pyzmq.readthedocs.io/
+.. _`fedmsg`: https://github.com/fedora-infra/fedmsg/
+

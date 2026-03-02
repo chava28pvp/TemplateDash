@@ -1,0 +1,17 @@
+[fedora.messages]
+anitya.distro.add=anitya_schema:DistroCreated
+anitya.distro.edit=anitya_schema:DistroEdited
+anitya.distro.remove=anitya_schema:DistroDeleted
+anitya.project.add=anitya_schema:ProjectCreated
+anitya.project.edit=anitya_schema:ProjectEdited
+anitya.project.flag=anitya_schema:ProjectFlag
+anitya.project.flag.set=anitya_schema:ProjectFlagSet
+anitya.project.map.new=anitya_schema:ProjectMapCreated
+anitya.project.map.remove=anitya_schema:ProjectMapDeleted
+anitya.project.map.update=anitya_schema:ProjectMapEdited
+anitya.project.remove=anitya_schema:ProjectDeleted
+anitya.project.version.remove=anitya_schema:ProjectVersionDeleted
+anitya.project.version.remove.v2=anitya_schema:ProjectVersionDeletedV2
+anitya.project.version.update=anitya_schema:ProjectVersionUpdated
+anitya.project.version.update.v2=anitya_schema:ProjectVersionUpdatedV2
+

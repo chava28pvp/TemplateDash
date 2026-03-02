@@ -24,6 +24,7 @@ from components.main.histograma import (
 )
 
 import dash_bootstrap_components as dbc
+from src.callbacks.common import paginate_state, reset_page_state
 
 # Manager de umbrales (config centralizada)
 from src.Utils.umbrales.umbrales_manager import UM_MANAGER
@@ -160,6 +161,10 @@ def _as_list(x):
     if isinstance(x, (list, tuple)):
         return list(x)
     return [x]
+
+
+def _applied_value(applied_filters, key):
+    return (applied_filters or {}).get(key)
 
 
 def _cache_get(cache: dict, key, ttl: int):
@@ -394,22 +399,20 @@ def heatmap_callbacks(app):
         Output("heatmap-page-info", "data"),
         Input("heatmap-trigger", "data"),
         State("f-fecha", "date"),
-        State("f-network", "value"),
-        State("f-technology", "value"),
-        State("f-vendor", "value"),
-        State("f-cluster", "value"),
+        State("applied-filters-store", "data"),
         State("heatmap-page-state", "data"),
         State("hm-order-by", "value"),
         prevent_initial_call=True,
     )
-    def refresh_heatmaps(_trigger, fecha, networks, technologies, vendors, clusters, hm_page_state, hm_order_by):
+    def refresh_heatmaps(_trigger, fecha, applied_filters, hm_page_state, hm_order_by):
         global _LAST_HEATMAP_KEY
 
         # Normaliza filtros
-        networks = _as_list(networks)
-        technologies = _as_list(technologies)
-        vendors = _as_list(vendors)
-        clusters = _as_list(clusters)
+        applied_filters = applied_filters or {}
+        networks = _as_list(_applied_value(applied_filters, "network"))
+        technologies = _as_list(_applied_value(applied_filters, "technology"))
+        vendors = _as_list(_applied_value(applied_filters, "vendor"))
+        clusters = _as_list(_applied_value(applied_filters, "cluster"))
 
         # -------- Paginación HEATMAP --------
         page = int((hm_page_state or {}).get("page", 1))
@@ -526,15 +529,12 @@ def heatmap_callbacks(app):
     @app.callback(
         Output("heatmap-trigger", "data"),
         Input("f-fecha", "date"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("heatmap-page-state", "data"),
         Input("hm-order-by", "value"),
         prevent_initial_call=False,  # bootstrap al cargar
     )
-    def heatmap_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state, _ord):
+    def heatmap_trigger_controller(_fecha, _applied_filters, _page_state, _ord):
         # Un timestamp basta para “forzar” la actualización
         return {"ts": time.time()}
 
@@ -544,17 +544,13 @@ def heatmap_callbacks(app):
     @app.callback(
         Output("heatmap-page-state", "data"),
         Input("f-fecha", "date"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("hm-page-size", "value"),
         Input("hm-order-by", "value"),
         prevent_initial_call=False,  # bootstrap
     )
-    def hm_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size, _ord):
-        ps = max(1, int(hm_page_size or 50))
-        return {"page": 1, "page_size": ps}
+    def hm_reset_page_on_filters(_fecha, _applied_filters, hm_page_size, _ord):
+        return reset_page_state(hm_page_size, default_size=50)
 
     # -------------------------------------------------
     # Botones prev/next del heatmap
@@ -567,17 +563,7 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def hm_paginate(n_prev, n_next, state):
-        state = state or {"page": 1, "page_size": 50}
-        page = int(state.get("page", 1))
-        ps = int(state.get("page_size", 50))
-
-        trig = ctx.triggered_id
-        if trig == "hm-page-prev":
-            page = max(1, page - 1)
-        elif trig == "hm-page-next":
-            page = page + 1
-
-        return {"page": page, "page_size": ps}
+        return paginate_state(state, prev_id="hm-page-prev", next_id="hm-page-next", default_size=50)
 
     # -------------------------------------------------
     # Encabezados de tiempo (dates/hours) arriba del heatmap
@@ -605,15 +591,17 @@ def heatmap_callbacks(app):
         Input("histo-trigger", "data"),
         Input("histo-selected-wave", "data"),
         State("f-fecha", "date"),
-        State("f-network", "value"),
-        State("f-technology", "value"),
-        State("f-vendor", "value"),
-        State("f-cluster", "value"),
+        State("applied-filters-store", "data"),
         State("histo-page-state", "data"),
         State("topoff-link-state", "data"),
         prevent_initial_call=True,
     )
-    def refresh_histograma_ps(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state):
+    def refresh_histograma_ps(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state):
+        applied_filters = applied_filters or {}
+        networks = _as_list(_applied_value(applied_filters, "network"))
+        technologies = _as_list(_applied_value(applied_filters, "technology"))
+        vendors = _as_list(_applied_value(applied_filters, "vendor"))
+        clusters = _as_list(_applied_value(applied_filters, "cluster"))
         fig_pct, fig_unit, page_info, is_cache_hit = _build_histograma_for_domain(
             "PS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state
         )
@@ -631,15 +619,17 @@ def heatmap_callbacks(app):
         Input("histo-trigger", "data"),
         Input("histo-selected-wave", "data"),
         State("f-fecha", "date"),
-        State("f-network", "value"),
-        State("f-technology", "value"),
-        State("f-vendor", "value"),
-        State("f-cluster", "value"),
+        State("applied-filters-store", "data"),
         State("histo-page-state", "data"),
         State("topoff-link-state", "data"),
         prevent_initial_call=True,
     )
-    def refresh_histograma_cs(_trigger, sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state):
+    def refresh_histograma_cs(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state):
+        applied_filters = applied_filters or {}
+        networks = _as_list(_applied_value(applied_filters, "network"))
+        technologies = _as_list(_applied_value(applied_filters, "technology"))
+        vendors = _as_list(_applied_value(applied_filters, "vendor"))
+        clusters = _as_list(_applied_value(applied_filters, "cluster"))
         fig_pct, fig_unit, _page_info, is_cache_hit = _build_histograma_for_domain(
             "CS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state
         )
@@ -653,15 +643,12 @@ def heatmap_callbacks(app):
     @app.callback(
         Output("histo-trigger", "data"),
         Input("f-fecha", "date"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("histo-page-state", "data"),
         Input("topoff-link-state", "data"),
         prevent_initial_call=False,
     )
-    def histo_trigger_controller(_fecha, _net, _tech, _vend, _clus, _page_state, _link_state):
+    def histo_trigger_controller(_fecha, _applied_filters, _page_state, _link_state):
         return {"ts": time.time()}
 
     # -------------------------------------------------
@@ -671,17 +658,13 @@ def heatmap_callbacks(app):
     @app.callback(
         Output("histo-page-state", "data"),
         Input("f-fecha", "date"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("hm-page-size", "value"),
         Input("topoff-link-state", "data"),
         prevent_initial_call=False,
     )
-    def hi_reset_page_on_filters(_fecha, _net, _tech, _ven, _clu, hm_page_size, _link_state):
-        ps = max(1, int(hm_page_size or 50))
-        return {"page": 1, "page_size": ps}
+    def hi_reset_page_on_filters(_fecha, _applied_filters, hm_page_size, _link_state):
+        return reset_page_state(hm_page_size, default_size=50)
 
     # -------------------------------------------------
     # Paginación del histograma (usa botones del heatmap)
@@ -694,17 +677,7 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def hi_paginate(n_prev, n_next, state):
-        state = state or {"page": 1, "page_size": 50}
-        page = int(state.get("page", 1))
-        ps = int(state.get("page_size", 50))
-
-        trig = ctx.triggered_id
-        if trig == "hm-page-prev":
-            page = max(1, page - 1)
-        elif trig == "hm-page-next":
-            page = page + 1
-
-        return {"page": page, "page_size": ps}
+        return paginate_state(state, prev_id="hm-page-prev", next_id="hm-page-next", default_size=50)
 
     # -------------------------------------------------
     # Click: seleccionar una wave (PS %)

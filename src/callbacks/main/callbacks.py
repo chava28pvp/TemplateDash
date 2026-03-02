@@ -13,12 +13,14 @@ import dash_bootstrap_components as dbc
 
 from src.Utils.alarmados import add_alarm_streak
 from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, \
-    fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week, fetch_kpis_by_keys
+    fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week, fetch_kpis_by_keys, \
+    fetch_main_distinct_catalogs
 from src.config import REFRESH_INTERVAL_MS
 
 from src.Utils.utils_time import now_local
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct
 from dash.exceptions import PreventUpdate
+from src.callbacks.common import paginate_state, reset_page_state, toggle_bool
 
 _DFTS_CACHE = {}
 _DFTS_TTL = 300
@@ -58,6 +60,10 @@ def _as_list(x):
     if isinstance(x, (list, tuple)):
         return list(x)
     return [x]
+
+
+def _applied_value(applied_filters, key):
+    return (applied_filters or {}).get(key)
 
 def round_down_to_hour(dt):
     """
@@ -291,30 +297,22 @@ def register_callbacks(app):
             - Conservar selecciones previas si siguen existiendo
             - Mezclar catálogo principal con catálogo TopOff (tech/vendors)
             """
-        # -------- 1) Traer DF principal para esa fecha/hora --------
-        df_main = fetch_kpis(fecha=fecha, hora=None, limit=None)
-        df_main = _ensure_df(df_main)
-
-        # Catálogos base
-        networks_all = order_networks(df_main["network"].dropna().unique().tolist()) \
-            if "network" in df_main.columns else []
-        techs_all = sorted(df_main["technology"].dropna().unique().tolist()) \
-            if "technology" in df_main.columns else []
-
         # Normalizamos seleccionados para filtrar vendors/clusters
         nets_sel = _as_list(net_val_current)
         techs_sel = _as_list(tech_val_current)
 
-        df_filtered = df_main.copy()
-        if nets_sel and "network" in df_filtered.columns:
-            df_filtered = df_filtered[df_filtered["network"].isin(nets_sel)]
-        if techs_sel and "technology" in df_filtered.columns:
-            df_filtered = df_filtered[df_filtered["technology"].isin(techs_sel)]
+        # -------- 1) Catálogos principales vía DISTINCT (sin traer dataset completo) --------
+        main_opts = fetch_main_distinct_catalogs(
+            fecha=fecha,
+            hora=None,
+            networks=nets_sel or None,
+            technologies=techs_sel or None,
+        ) or {}
 
-        vendors_main = sorted(df_filtered["vendor"].dropna().unique().tolist()) \
-            if "vendor" in df_filtered.columns else []
-        clusters_main = sorted(df_filtered["noc_cluster"].dropna().unique().tolist()) \
-            if "noc_cluster" in df_filtered.columns else []
+        networks_all = order_networks(main_opts.get("networks", []) or [])
+        techs_all = main_opts.get("technologies", []) or []
+        vendors_main = main_opts.get("vendors", []) or []
+        clusters_main = main_opts.get("clusters", []) or []
 
         # -------- 2) Merge con TOPOFF (para tech y vendors) --------
         top_opts = fetch_topoff_distinct(
@@ -347,6 +345,25 @@ def register_callbacks(app):
             ven_opts, new_ven_value,
             clu_opts, new_clu_value,
         )
+
+    @app.callback(
+        Output("applied-filters-store", "data"),
+        Input("apply-filters-btn", "n_clicks"),
+        State("f-network", "value"),
+        State("f-technology", "value"),
+        State("f-vendor", "value"),
+        State("f-cluster", "value"),
+        State("f-sort-mode", "value"),
+        prevent_initial_call=False,
+    )
+    def apply_filters(_n, networks, technologies, vendors, clusters, sort_mode):
+        return {
+            "network": _as_list(networks) or [],
+            "technology": _as_list(technologies) or [],
+            "vendor": _as_list(vendors) or [],
+            "cluster": _as_list(clusters) or [],
+            "sort_mode": sort_mode or "alarmado",
+        }
     # -------------------------------------------------
     # Botones de sort en headers
     # -------------------------------------------------
@@ -397,20 +414,16 @@ def register_callbacks(app):
         Output("page-state", "data"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("page-size", "value"),
         prevent_initial_call=True,
     )
-    def reset_page_on_filters(_fecha, _hora, _net, _tech, _ven, _clu, page_size):
+    def reset_page_on_filters(_fecha, _hora, _applied_filters, page_size):
         """
             Cada vez que cambian filtros o tamaño de página:
             - resetea la paginación a página 1
             """
-        ps = max(1, int(page_size or 50))
-        return {"page": 1, "page_size": ps}
+        return reset_page_state(page_size, default_size=50)
 
     # -------------------------------------------------
     # 3) Botones Anterior/Siguiente → actualizan page-state
@@ -427,16 +440,7 @@ def register_callbacks(app):
             Botones anterior / siguiente:
             - Solo modifica 'page'
             """
-        state = state or {"page": 1, "page_size": 50}
-        page = int(state.get("page", 1))
-        ps = int(state.get("page_size", 50))
-
-        trig = ctx.triggered_id
-        if trig == "page-prev":
-            page = max(1, page - 1)
-        elif trig == "page-next":
-            page = page + 1
-        return {"page": page, "page_size": ps}
+        return paginate_state(state, prev_id="page-prev", next_id="page-next", default_size=50)
 
     # -------------------------------------------------
     # 4) Tabla + Charts + Indicadores de paginación (UN SOLO callback)
@@ -450,11 +454,7 @@ def register_callbacks(app):
         Output("table-page-data", "data"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
-        Input("f-sort-mode", "value"),
+        Input("applied-filters-store", "data"),
         Input("refresh-timer", "n_intervals"),
         Input("sort-state", "data"),
         Input("page-state", "data"),
@@ -462,14 +462,16 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def refresh_table(
-            fecha, hora, networks, technologies, vendors, clusters,
-            sort_mode, _n, sort_state, page_state,
+            fecha, hora, applied_filters,
+            _n, sort_state, page_state,
             main_ctx
     ):
-        networks = _as_list(networks)
-        technologies = _as_list(technologies)
-        vendors = _as_list(vendors)
-        clusters = _as_list(clusters)
+        applied_filters = applied_filters or {}
+        networks = _as_list(_applied_value(applied_filters, "network"))
+        technologies = _as_list(_applied_value(applied_filters, "technology"))
+        vendors = _as_list(_applied_value(applied_filters, "vendor"))
+        clusters = _as_list(_applied_value(applied_filters, "cluster"))
+        sort_mode = _applied_value(applied_filters, "sort_mode") or "alarmado"
 
         page = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", 50))
@@ -772,46 +774,22 @@ def register_callbacks(app):
         return hh, today
 
     @app.callback(
-        Output("page-state", "data", allow_duplicate=True),
-        Input("f-fecha", "date"),
-        Input("f-hora", "value"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
-        Input("page-size", "value"),
-        Input("f-sort-mode", "value"),
-        prevent_initial_call=True,
-    )
-    def reset_page_on_filters(_fecha, _hora, _net, _tech, _ven, _clu, page_size, _mode):
-        """
-            Si cambian filtros o el modo de orden, limpiamos el sort manual
-            (para evitar flechas viejas o columnas inválidas).
-            """
-        ps = max(1, int(page_size or 50))
-        return {"page": 1, "page_size": ps}
-
-    @app.callback(
         Output("filters-collapse", "is_open"),
         Input("filters-toggle", "n_clicks"),
         State("filters-collapse", "is_open"),
         prevent_initial_call=True,
     )
     def toggle_filters(n, is_open):
-        return not is_open
+        return toggle_bool(n, is_open)
 
     @app.callback(
         Output("sort-state", "data", allow_duplicate=True),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
-        Input("f-sort-mode", "value"),  # si cambia entre 'global' y 'alarmado'
+        Input("applied-filters-store", "data"),
         prevent_initial_call=True,
     )
-    def reset_sort_state_on_filters(_fecha, _hora, _net, _tech, _ven, _clu, _mode):
+    def reset_sort_state_on_filters(_fecha, _hora, _applied_filters):
         # Vuelve al estado “sin columna seleccionada”
         return {"column": None, "ascending": True}
 
@@ -879,13 +857,10 @@ def register_callbacks(app):
         Output("main-context-store", "data"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
-        Input("f-network", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         prevent_initial_call=False,
     )
-    def build_main_context(fecha, hora, networks, technologies, vendors, clusters):
+    def build_main_context(fecha, hora, applied_filters):
         """
            Construye un 'contexto' pesado para evitar repetir cálculos en refresh_table:
            - Baseline semanal de integridad (por network/vendor/cluster/tech)
@@ -894,10 +869,11 @@ def register_callbacks(app):
 
            Se guarda en dcc.Store (main-context-store).
            """
-        networks = _as_list(networks)
-        technologies = _as_list(technologies)
-        vendors = _as_list(vendors)
-        clusters = _as_list(clusters)
+        applied_filters = applied_filters or {}
+        networks = _as_list(_applied_value(applied_filters, "network"))
+        technologies = _as_list(_applied_value(applied_filters, "technology"))
+        vendors = _as_list(_applied_value(applied_filters, "vendor"))
+        clusters = _as_list(_applied_value(applied_filters, "cluster"))
 
         # -----------------------------
         # 0) Cache

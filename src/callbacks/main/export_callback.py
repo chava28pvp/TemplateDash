@@ -149,21 +149,20 @@ def export_callback(app):
         Input("export-excel", "n_clicks"),
         State("f-fecha", "date"),
         State("f-hora", "value"),
-        State("f-network", "value"),
-        State("f-technology", "value"),
-        State("f-vendor", "value"),
-        State("f-cluster", "value"),
-        State("f-sort-mode", "value"),
+        State("applied-filters-store", "data"),
         State("sort-state", "data"),
         State("page-state", "data"),
         prevent_initial_call=True,
     )
-    def do_export(_, fecha, hora, networks, techs, vendors, clusters,
-                  sort_mode, sort_state, page_state):
+    def do_export(_, fecha, hora, applied_filters, sort_state, page_state):
 
         # 1) Exporta LA MISMA PÁGINA que está viendo el usuario en la tabla
-        networks = _as_list(networks); techs = _as_list(techs)
-        vendors  = _as_list(vendors);  clusters = _as_list(clusters)
+        applied_filters = applied_filters or {}
+        networks = _as_list(applied_filters.get("network"))
+        techs = _as_list(applied_filters.get("technology"))
+        vendors = _as_list(applied_filters.get("vendor"))
+        clusters = _as_list(applied_filters.get("cluster"))
+        sort_mode = applied_filters.get("sort_mode") or "alarmado"
         page      = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", 50))
 

@@ -1,0 +1,4 @@
+[fedora.messages]
+hotness.update.bug.file=hotness_schema:UpdateBugFile
+hotness.update.drop=hotness_schema:UpdateDrop
+

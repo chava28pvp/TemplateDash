@@ -114,7 +114,20 @@ def build_filters(
                         placeholder="Selecciona orden",
                         persistence=True, persistence_type="session"
                     )
-                ], md=3),  # usa md=3 para alinearlo con otros filtros de la fila
+                ], md=3),
+                dbc.Col([
+                    html.Div(
+                        dbc.Button(
+                            "Aplicar",
+                            id="apply-filters-btn",
+                            color="primary",
+                            size="sm",
+                            n_clicks=0,
+                            className="px-3"
+                        ),
+                        className="d-flex justify-content-end align-items-end h-100"
+                    ),
+                ], md=3, className="d-flex"),
             ], className="g-3"),
 
         ]),

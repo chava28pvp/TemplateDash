@@ -1,0 +1,68 @@
+Metadata-Version: 2.1
+Name: the-new-hotness
+Version: 1.3.0
+Summary: A fedora messaging consumer that files bugzilla bugs for upstream releases
+Home-page: https://github.com/fedora-infra/the-new-hotness
+License: GPL-2.0-or-later
+Author: Ralph Bean
+Author-email: rbean@redhat.com
+Maintainer: Michal Konecny
+Maintainer-email: mkonecny@redhat.com
+Requires-Python: >=3.8.10,<4.0.0
+Classifier: License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Requires-Dist: anitya-schema (>=2.0.1,<3.0.0)
+Requires-Dist: fedora-messaging (>=3.1.0,<4.0.0)
+Requires-Dist: fedora-messaging-the-new-hotness-schema (>=1.1.2,<2.0.0)
+Requires-Dist: koji (>=1.30.0,<2.0.0)
+Requires-Dist: python-bugzilla (>=3.2.0,<4.0.0)
+Requires-Dist: redis (>=5.0.0,<6.0.0)
+Requires-Dist: requests (>=2.28.1,<3.0.0)
+Project-URL: Documentation, https://the-new-hotness.readthedocs.io
+Project-URL: Repository, https://github.com/fedora-infra/the-new-hotness
+Description-Content-Type: text/x-rst
+
+.. image:: https://img.shields.io/pypi/v/the-new-hotness.svg
+  :target: https://pypi.org/project/the-new-hotness/
+
+.. image:: https://readthedocs.org/projects/the-new-hotness/badge/?version=latest
+  :alt: Documentation Status
+  :target: https://the-new-hotness.readthedocs.io/en/latest/?badge=latest
+
+the-new-hotness
+---------------
+
+`Fedora-messaging <https://github.com/fedora-infra/fedora-messaging>`_ consumer that listens to `release-monitoring.org
+<http://release-monitoring.org>`_ and files bugzilla bugs in response (to
+notify packagers that they can update their packages).
+
+For additional information see `documentation <https://the-new-hotness.readthedocs.io/en/stable/>`_.
+
+Seeing it in action
+^^^^^^^^^^^^^^^^^^^
+
+To see recent messages from the-new-hotness:
+
+* Check Fedora's `datagrepper
+  <https://apps.fedoraproject.org/datagrepper/raw?category=hotness&delta=2592000>`_
+
+* Or join #fedora-fedmsg IRC channel on `libera <https://libera.chat/>`_ and watch for ``hotness``
+  messages.
+
+To see recent koji builds started by the-new-hotness:
+
+* Check Fedora's `koji builds
+  <https://koji.fedoraproject.org/koji/tasks?owner=the-new-hotness/release-monitoring.org&state=all>`_
+
+Development
+^^^^^^^^^^^
+
+Contributions are welcome, check out `contribution guidelines <https://the-new-hotness.readthedocs.io/en/stable/dev-guide.html#contribution-guidelines>`_.
+

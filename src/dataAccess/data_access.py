@@ -457,7 +457,7 @@ def fetch_kpis(
     """
     # 1) columnas amigables válidas
     requested_cols = columns or BASE_COLUMNS
-    friendly_cols = _resolve_columns(BASE_COLUMNS)
+    friendly_cols = _resolve_columns(requested_cols)
     select_cols = _select_list_with_aliases(friendly_cols)
 
     # 2) where + params compartidos
@@ -488,6 +488,75 @@ def fetch_kpis(
         df = df.where(pd.notna(df), "")
 
     return df
+
+
+def fetch_main_distinct_catalogs(
+    *,
+    fecha=None,
+    hora=None,
+    networks=None,
+    technologies=None,
+):
+    """
+    Devuelve catálogos DISTINCT para filtros principales sin cargar filas completas.
+    - networks/technologies: catálogo global del corte fecha/hora.
+    - vendors/noc_clusters: catálogo condicionado por network/technology seleccionados.
+    """
+    # 1) Catálogo base de network/technology (sin filtrar por network/technology).
+    where_base, params_base, uvb, ucb, unb, utb = _filters_where_and_params(
+        fecha=fecha,
+        hora=hora,
+        vendors=None,
+        clusters=None,
+        networks=None,
+        technologies=None,
+    )
+
+    sql_base = f"""
+        SELECT DISTINCT
+            {_quote(COLMAP['network'])} AS network,
+            {_quote(COLMAP['technology'])} AS technology
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_base}
+    """
+
+    # 2) Catálogo de vendor/cluster condicionado por network/technology.
+    where_dep, params_dep, uvd, ucd, und, utd = _filters_where_and_params(
+        fecha=fecha,
+        hora=hora,
+        vendors=None,
+        clusters=None,
+        networks=networks,
+        technologies=technologies,
+    )
+
+    sql_dep = f"""
+        SELECT DISTINCT
+            {_quote(COLMAP['vendor'])} AS vendor,
+            {_quote(COLMAP['noc_cluster'])} AS noc_cluster
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_dep}
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt_base = _prepare_stmt_with_expanding(sql_base, uvb, ucb, unb, utb)
+        df_base = pd.read_sql(stmt_base, conn, params=params_base)
+
+        stmt_dep = _prepare_stmt_with_expanding(sql_dep, uvd, ucd, und, utd)
+        df_dep = pd.read_sql(stmt_dep, conn, params=params_dep)
+
+    networks_all = sorted([x for x in df_base.get("network", pd.Series()).dropna().unique().tolist() if str(x).strip()])
+    technologies_all = sorted([x for x in df_base.get("technology", pd.Series()).dropna().unique().tolist() if str(x).strip()])
+    vendors_all = sorted([x for x in df_dep.get("vendor", pd.Series()).dropna().unique().tolist() if str(x).strip()])
+    clusters_all = sorted([x for x in df_dep.get("noc_cluster", pd.Series()).dropna().unique().tolist() if str(x).strip()])
+
+    return {
+        "networks": networks_all,
+        "technologies": technologies_all,
+        "vendors": vendors_all,
+        "clusters": clusters_all,
+    }
 
 def fetch_kpis_paginated_severity_global_sort(
     *,
