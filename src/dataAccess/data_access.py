@@ -89,6 +89,16 @@ _SEVERITY_KPIS = [
     "cs_rab_ia_percent",
     "cs_drop_dc_percent",
 ]
+
+_PROGRESS_MAIN_KPIS = [
+    "ps_rrc_fail",
+    "ps_rab_fail",
+    "ps_s1_fail",
+    "ps_drop_abnrel",
+    "cs_rrc_fail",
+    "cs_rab_fail",
+    "cs_drop_abnrel",
+]
 # =========================================================
 # Helpers internos
 # =========================================================
@@ -435,6 +445,78 @@ def _build_severity_expr_from_json(profile: str = "main"):
 
     severity_expr = " + ".join(kpi_terms)
     return severity_expr, params
+
+
+def _build_critical_flag_expressions_from_json(
+    *,
+    cfg=None,
+    profile: str = "main",
+    kpis: Optional[List[str]] = None,
+    network_expr: Optional[str] = None,
+):
+    """
+    Devuelve expresiones SQL CASE por KPI que valen 1 si la métrica cae en crítico.
+    También devuelve la suma OR-like de esas flags y los parámetros asociados.
+    """
+    if cfg is None:
+        cfg = load_threshold_cfg()
+
+    prof = (cfg.get("profiles") or {}).get(profile) or {}
+    sev_cfg = prof.get("severity") or {}
+    kpis = kpis or list(_SEVERITY_KPIS)
+    net_expr = network_expr or _quote(COLMAP["network"])
+
+    flag_exprs = {}
+    params = {}
+
+    for kpi in kpis:
+        if kpi not in COLMAP:
+            continue
+
+        col_sql = _quote(COLMAP[kpi])
+        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+        kcfg = sev_cfg.get(kpi) or {}
+        default_block = (kcfg.get("default") or kcfg) or {}
+        per_net_block = kcfg.get("per_network") or {}
+
+        thresholds_def = (default_block.get("thresholds") or {})
+        orientation_def = default_block.get("orientation", "lower_is_better")
+        critical_def = float(thresholds_def.get("critico", 0.0))
+
+        p_def = f"{kpi}_def"
+        params[f"{p_def}_cri"] = critical_def
+        if orientation_def == "higher_is_better":
+            def_cond = f"COALESCE({num_col}, 0) <= :{p_def}_cri"
+        else:
+            def_cond = f"COALESCE({num_col}, 0) >= :{p_def}_cri"
+
+        if per_net_block:
+            when_parts = []
+            for idx, (net_name, net_cfg) in enumerate(per_net_block.items()):
+                thresholds_net = (net_cfg.get("thresholds") or thresholds_def) or {}
+                orientation_net = net_cfg.get("orientation", orientation_def)
+                net_cri = float(thresholds_net.get("critico", critical_def))
+                p_net = f"{kpi}_net{idx}"
+                params[f"{p_net}_cri"] = net_cri
+                params[f"{p_net}_name"] = net_name
+
+                if orientation_net == "higher_is_better":
+                    cond_net = f"COALESCE({num_col}, 0) <= :{p_net}_cri"
+                else:
+                    cond_net = f"COALESCE({num_col}, 0) >= :{p_net}_cri"
+
+                when_parts.append(
+                    f"WHEN {net_expr} = :{p_net}_name AND {cond_net} THEN 1"
+                )
+
+            expr = f"(CASE {' '.join(when_parts)} ELSE (CASE WHEN {def_cond} THEN 1 ELSE 0 END) END)"
+        else:
+            expr = f"(CASE WHEN {def_cond} THEN 1 ELSE 0 END)"
+
+        flag_exprs[kpi] = expr
+
+    sum_expr = " + ".join([f"COALESCE(({expr}), 0)" for expr in flag_exprs.values()]) if flag_exprs else "0"
+    return flag_exprs, sum_expr, params
 
 # =========================================================
 # API pública
@@ -801,77 +883,13 @@ def fetch_alarm_meta_for_heatmap(
     if not alarm_kpis:
         return pd.DataFrame(columns=["technology","vendor","noc_cluster"]), set()
 
-    # Construye expresiones CASE por KPI y parámetros de umbrales
-    flag_cols_sql = []
-    thr_params_all = {}
-
-    # Bloques de severidad desde el JSON
-    profiles = (cfg.get("profiles") or {})
-    prof_main = profiles.get("main") or {}
-    sev_cfg = prof_main.get("severity") or {}
-
-    # Construye expresión CASE que vale 1 si el KPI está en nivel "crítico" según severity
-    def _flag_expr_for(kpi: str) -> str:
-        col_sql = _quote(COLMAP[kpi])
-        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
-
-        kcfg = sev_cfg.get(kpi) or {}
-        # puede venir como:
-        #   { "orientation":..., "thresholds":..., "per_network":... }
-        # o como:
-        #   { "default": {...}, "per_network": {...} }
-        default_block = (kcfg.get("default") or kcfg) or {}
-        per_net_block = kcfg.get("per_network") or {}
-
-        thresholds_def = (default_block.get("thresholds") or {})
-        orientation_def = default_block.get("orientation", "lower_is_better")
-
-        # Umbral crítico default
-        def_cri = float(thresholds_def.get("critico", 0.0))
-        p_def = f"{kpi}_def"
-        thr_params_all[f"{p_def}_cri"] = def_cri
-
-        # Condición de alarma para el default
-        if orientation_def == "higher_is_better":
-            # valores bajos son peores -> alarma si valor <= crítico
-            def_cond = f"COALESCE({num_col}, 0) <= :{p_def}_cri"
-        else:
-            # lower_is_better (tu caso) -> valores altos son peores -> alarma si valor >= crítico
-            def_cond = f"COALESCE({num_col}, 0) >= :{p_def}_cri"
-
-        # Si hay per_network, armamos CASE por red usando alias "network"
-        if per_net_block:
-            when_parts = []
-            for idx, (net_name, net_cfg) in enumerate(per_net_block.items()):
-                thresholds_net = (net_cfg.get("thresholds") or thresholds_def) or {}
-                orientation_net = net_cfg.get("orientation", orientation_def)
-
-                net_cri = float(thresholds_net.get("critico", def_cri))
-                p_net = f"{kpi}_net{idx}"
-                thr_params_all[f"{p_net}_cri"] = net_cri
-                thr_params_all[f"{p_net}_name"] = net_name
-
-                if orientation_net == "higher_is_better":
-                    cond_net = f"COALESCE({num_col}, 0) <= :{p_net}_cri"
-                else:
-                    cond_net = f"COALESCE({num_col}, 0) >= :{p_net}_cri"
-
-                # OJO: aquí comparamos contra el alias 'network', no contra `Network`
-                when_parts.append(
-                    f"WHEN network = :{p_net}_name AND {cond_net} THEN 1"
-                )
-
-            # Si ninguna red coincide, cae al default
-            return f"(CASE {' '.join(when_parts)} ELSE (CASE WHEN {def_cond} THEN 1 ELSE 0 END) END)"
-        else:
-            # sin per_network, sólo default
-            return f"(CASE WHEN {def_cond} THEN 1 ELSE 0 END)"
-
-    for kpi in alarm_kpis:
-        if kpi not in COLMAP:
-            continue
-        alias = f"f_{kpi}"
-        flag_cols_sql.append(f"{_flag_expr_for(kpi)} AS {alias}")
+    flag_exprs, _sum_expr, thr_params_all = _build_critical_flag_expressions_from_json(
+        cfg=cfg,
+        profile="main",
+        kpis=alarm_kpis,
+        network_expr="network",
+    )
+    flag_cols_sql = [f"{expr} AS f_{kpi}" for kpi, expr in flag_exprs.items()]
 
     if not flag_cols_sql:
         return pd.DataFrame(columns=["technology","vendor","noc_cluster"]), set()
@@ -1127,6 +1145,118 @@ def fetch_kpis_by_keys(
 
     if na_as_empty and not df.empty:
         df = df.where(pd.notna(df), "")
+
+    return df
+
+
+def fetch_progress_max_by_network(
+    *,
+    fecha=None,
+    hora=None,
+    vendors=None,
+    clusters=None,
+    networks=None,
+    technologies=None,
+):
+    """
+    Devuelve máximos por network para las columnas de progress del main.
+    Estructura:
+      { "NET__ps_rrc_fail": 123.0, ... }
+    """
+    requested = [k for k in _PROGRESS_MAIN_KPIS if k in COLMAP]
+    if not requested:
+        return {}
+
+    where_sql, params, uv, uc, un, ut = _filters_where_and_params(
+        fecha, hora, vendors, clusters, networks, technologies
+    )
+
+    select_max = ", ".join(
+        [f"MAX(CAST({_quote(COLMAP[k])} AS DECIMAL(20,6))) AS {k}" for k in requested]
+    )
+    sql = f"""
+        SELECT
+            {_quote(COLMAP['network'])} AS network,
+            {select_max}
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+        GROUP BY {_quote(COLMAP['network'])}
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(sql, uv, uc, un, ut)
+        df = pd.read_sql(stmt, conn, params=params)
+
+    if df.empty or "network" not in df.columns:
+        return {}
+
+    out = {}
+    for _, row in df.iterrows():
+        net = str(row.get("network", "")).strip()
+        if not net:
+            continue
+        for k in requested:
+            v = row.get(k)
+            out[f"{net}__{k}"] = None if pd.isna(v) else float(v)
+    return out
+
+
+def fetch_main_alarm_state(
+    *,
+    fecha: str,
+    vendors=None,
+    clusters=None,
+    networks=None,
+    technologies=None,
+):
+    """
+    Devuelve filas mínimas para calcular la racha de alarmas en Python sin bajar todo el dataset.
+    Incluye solo keys, tiempo y un flag `has_alarm`.
+    """
+    if not fecha:
+        return pd.DataFrame()
+
+    where_sql, params, uv, uc, un, ut = _filters_where_and_params(
+        fecha=fecha,
+        hora=None,
+        vendors=vendors,
+        clusters=clusters,
+        networks=networks,
+        technologies=technologies,
+    )
+
+    flag_exprs, flag_sum_expr, thr_params = _build_critical_flag_expressions_from_json(
+        profile="main",
+        kpis=_SEVERITY_KPIS,
+    )
+    if not flag_exprs:
+        return pd.DataFrame()
+
+    sql = f"""
+        SELECT
+            {_quote(COLMAP['fecha'])} AS fecha,
+            DATE_FORMAT({_quote(COLMAP['hora'])}, '%H:%i:%s') AS hora,
+            {_quote(COLMAP['network'])} AS network,
+            {_quote(COLMAP['vendor'])} AS vendor,
+            {_quote(COLMAP['noc_cluster'])} AS noc_cluster,
+            {_quote(COLMAP['technology'])} AS technology,
+            CASE WHEN ({flag_sum_expr}) > 0 THEN 1 ELSE 0 END AS has_alarm
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {where_sql}
+        ORDER BY
+            {_quote(COLMAP['network'])} ASC,
+            {_quote(COLMAP['vendor'])} ASC,
+            {_quote(COLMAP['noc_cluster'])} ASC,
+            {_quote(COLMAP['technology'])} ASC,
+            {_quote(COLMAP['fecha'])} ASC,
+            {_quote(COLMAP['hora'])} ASC
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        stmt = _prepare_stmt_with_expanding(sql, uv, uc, un, ut)
+        df = pd.read_sql(stmt, conn, params={**params, **thr_params})
 
     return df
 

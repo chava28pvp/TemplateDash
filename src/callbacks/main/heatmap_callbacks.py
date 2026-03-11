@@ -5,6 +5,7 @@ from dash import Input, Output, State, no_update, ctx
 from hashlib import md5
 import json
 import time
+import logging
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
 
@@ -13,6 +14,8 @@ from components.main.heatmap import (
     build_heatmap_figure,
     render_heatmap_summary_table,
     build_heatmap_payloads_fast,
+    build_heatmap_ranked_rows_fast,
+    build_heatmap_payloads_from_ranked_rows,
     _hm_height,
     _build_time_header_children_by_dates
 )
@@ -31,6 +34,7 @@ from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
 # Acceso a datos
 from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap
+from src.config import PROFILE_MAIN_CALLBACKS
 
 
 # =========================================================
@@ -54,6 +58,34 @@ _ALARM_META_TTL = 300  # seg
 # Cache de payloads del heatmap por state_key (para no recalcular z/y/x cada rato)
 _HM_PAYLOAD_CACHE = {}
 _HM_PAYLOAD_TTL = 120  # seg
+_HM_RANK_CACHE = {}
+_HM_RANK_TTL = 120  # seg
+
+# Cache de payloads/figuras del histograma
+_HI_PAYLOAD_CACHE = {}
+_HI_PAYLOAD_TTL = 120  # seg
+_HI_FIG_CACHE = {}
+_HI_FIG_TTL = 120  # seg
+logger = logging.getLogger(__name__)
+
+
+def _perf_log(callback_name, started_at, marks=None, extra=None):
+    if not PROFILE_MAIN_CALLBACKS:
+        return
+    marks = marks or []
+    extra = extra or {}
+    now = time.perf_counter()
+    prev = started_at
+    parts = []
+    for label, ts in marks:
+        parts.append(f"{label}={(ts - prev) * 1000:.1f}ms")
+        prev = ts
+    parts.append(f"total={(now - started_at) * 1000:.1f}ms")
+    if extra:
+        parts.append(
+            ", ".join([f"{k}={v}" for k, v in extra.items()])
+        )
+    logger.warning("%s | %s", callback_name, " | ".join(parts))
 
 
 # =========================================================
@@ -239,6 +271,8 @@ def _build_histograma_for_domain(
     - filtro extra de "link_state" (click desde main para fijar cluster/vendor/tech)
     """
     global _LAST_HI_KEY
+    perf_start = time.perf_counter()
+    perf_marks = []
 
     # selected_wave viene de click en histograma (series_key)
     selected_wave = (sel_wave or {}).get("series_key")
@@ -275,7 +309,7 @@ def _build_histograma_for_domain(
     limit = max(1, page_sz)
 
     # -------- Clave de estado: cambia si cambia filtro/página/selección/dominio --------
-    state_key = (
+    base_state_key = (
         _hm_key(
             fecha,
             networks,
@@ -285,11 +319,18 @@ def _build_histograma_for_domain(
             offset,
             limit,
         )
-        + f"|selw={selected_wave}|dom={domain}"
+        + f"|dom={domain}"
     )
+    state_key = f"{base_state_key}|selw={selected_wave}"
 
     # Evita recomputar si es exactamente lo mismo (y no fue click de wave)
     if _LAST_HI_KEY.get(domain) == state_key and ctx.triggered_id != "histo-selected-wave":
+        _perf_log(
+            f"histograma_{domain.lower()}",
+            perf_start,
+            [("cache_hit", time.perf_counter())],
+            {"cached": True},
+        )
         return None, None, None, True  # cache-hit: el callback que llama usa no_update
 
     # -------- Fechas HOY/AYER --------
@@ -310,6 +351,7 @@ def _build_histograma_for_domain(
         vendors_effective,
         clusters_effective,
     )
+    perf_marks.append(("df_ts", time.perf_counter()))
 
     # -------- Redes efectivas para el heat/histo --------
     if networks:
@@ -321,67 +363,87 @@ def _build_histograma_for_domain(
 
     # -------- Meta para heat/histo (alarmados) --------
     # Nota: aquí usas fetch directo (si quieres, puedes cambiarlo por _fetch_alarm_meta_cached)
-    df_meta_heat, alarm_keys_set = fetch_alarm_meta_for_heatmap(
-        fecha=today_str,
-        vendors=vendors_effective or None,
-        clusters=clusters_effective or None,
-        networks=nets_heat or None,
-        technologies=technologies_effective or None,
+    df_meta_heat, alarm_keys_set = _fetch_alarm_meta_cached(
+        today_str,
+        vendors_effective,
+        clusters_effective,
+        nets_heat,
+        technologies_effective,
     )
+    perf_marks.append(("alarm_meta", time.perf_counter()))
 
     # -------- Payloads para overlay --------
-    if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
-        traffic_metric = "ps_traff_gb" if str(domain).upper() != "CS" else "cs_traff_erl"
-
-        pct_payload, unit_payload, page_info = build_histo_payloads_fast(
-            df_meta=df_meta_heat,
-            df_ts=df_ts,
-            UMBRAL_CFG=UM_MANAGER.config(),
-            networks=nets_heat,
-            valores_order=_valores_by_domain(domain),
-            today=today_str, yday=yday_str,
-            alarm_keys=alarm_keys_set,
-            alarm_only=False,
-            offset=offset, limit=limit,
-            traffic_metric=traffic_metric,
-        )
+    cached_payload = _cache_get(_HI_PAYLOAD_CACHE, base_state_key, _HI_PAYLOAD_TTL)
+    if cached_payload is not None:
+        pct_payload, unit_payload, page_info = cached_payload
     else:
-        pct_payload = unit_payload = None
-        page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+        if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
+            traffic_metric = "ps_traff_gb" if str(domain).upper() != "CS" else "cs_traff_erl"
+
+            pct_payload, unit_payload, page_info = build_histo_payloads_fast(
+                df_meta=df_meta_heat,
+                df_ts=df_ts,
+                UMBRAL_CFG=UM_MANAGER.config(),
+                networks=nets_heat,
+                valores_order=_valores_by_domain(domain),
+                today=today_str, yday=yday_str,
+                alarm_keys=alarm_keys_set,
+                alarm_only=False,
+                offset=offset, limit=limit,
+                traffic_metric=traffic_metric,
+            )
+        else:
+            pct_payload = unit_payload = None
+            page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+        _cache_set(_HI_PAYLOAD_CACHE, base_state_key, (pct_payload, unit_payload, page_info))
+    perf_marks.append(("payloads", time.perf_counter()))
 
     # -------- Figuras overlay (sin selected_x) --------
-    fig_pct = build_overlay_waves_figure(
-        pct_payload,
-        UMBRAL_CFG=UM_MANAGER.config(),
-        mode="severity",
-        height=420,
-        smooth_win=3,
-        opacity=0.28,
-        line_width=1.2,
-        decimals=2,
-        show_yaxis_ticks=True,
-        selected_wave=selected_wave,
-        show_traffic_bars=True,
-        traffic_agg="mean",
-        traffic_decimals=1
-    ) if pct_payload else go.Figure()
+    cached_figs = _cache_get(_HI_FIG_CACHE, state_key, _HI_FIG_TTL)
+    if cached_figs is not None:
+        fig_pct, fig_unit = cached_figs
+    else:
+        cfg = UM_MANAGER.config()
+        fig_pct = build_overlay_waves_figure(
+            pct_payload,
+            UMBRAL_CFG=cfg,
+            mode="severity",
+            height=420,
+            smooth_win=3,
+            opacity=0.28,
+            line_width=1.2,
+            decimals=2,
+            show_yaxis_ticks=True,
+            selected_wave=selected_wave,
+            show_traffic_bars=True,
+            traffic_agg="mean",
+            traffic_decimals=1
+        ) if pct_payload else go.Figure()
 
-    fig_unit = build_overlay_waves_figure(
-        unit_payload,
-        UMBRAL_CFG=UM_MANAGER.config(),
-        mode="progress",
-        height=420,
-        smooth_win=3,
-        opacity=0.25,
-        line_width=1.2,
-        decimals=0,
-        show_yaxis_ticks=True,
-        selected_wave=selected_wave,
-        show_traffic_bars=False,
-    ) if unit_payload else go.Figure()
+        fig_unit = build_overlay_waves_figure(
+            unit_payload,
+            UMBRAL_CFG=cfg,
+            mode="progress",
+            height=420,
+            smooth_win=3,
+            opacity=0.25,
+            line_width=1.2,
+            decimals=0,
+            show_yaxis_ticks=True,
+            selected_wave=selected_wave,
+            show_traffic_bars=False,
+        ) if unit_payload else go.Figure()
+        _cache_set(_HI_FIG_CACHE, state_key, (fig_pct, fig_unit))
+    perf_marks.append(("figures", time.perf_counter()))
 
     # Marca el estado como “ya renderizado”
     _LAST_HI_KEY[domain] = state_key
+    _perf_log(
+        f"histograma_{domain.lower()}",
+        perf_start,
+        perf_marks,
+        {"rows": int((page_info or {}).get("showing", 0)), "page_size": limit},
+    )
     return fig_pct, fig_unit, page_info, False
 
 
@@ -406,6 +468,8 @@ def heatmap_callbacks(app):
     )
     def refresh_heatmaps(_trigger, fecha, applied_filters, hm_page_state, hm_order_by):
         global _LAST_HEATMAP_KEY
+        perf_start = time.perf_counter()
+        perf_marks = []
 
         # Normaliza filtros
         applied_filters = applied_filters or {}
@@ -429,6 +493,12 @@ def heatmap_callbacks(app):
 
         # Si no cambió nada, no re-renderiza
         if _LAST_HEATMAP_KEY == state_key:
+            _perf_log(
+                "refresh_heatmaps",
+                perf_start,
+                [("cache_hit", time.perf_counter())],
+                {"cached": True},
+            )
             return (no_update, no_update, no_update, no_update, no_update, no_update)
 
         # -------- Fechas HOY/AYER (sin hora) --------
@@ -443,6 +513,7 @@ def heatmap_callbacks(app):
 
         # -------- Datos TS (cacheados) --------
         df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
+        perf_marks.append(("df_ts", time.perf_counter()))
 
         # -------- Redes efectivas --------
         if networks:
@@ -459,14 +530,15 @@ def heatmap_callbacks(app):
             nets_heat,
             technologies
         )
+        perf_marks.append(("alarm_meta", time.perf_counter()))
 
-        # -------- Payloads (cacheados por state_key) --------
-        cached = _cache_get(_HM_PAYLOAD_CACHE, state_key, _HM_PAYLOAD_TTL)
-        if cached is not None:
-            pct_payload, unit_payload, page_info = cached
+        rank_key = _hm_key(fecha, networks, technologies, vendors, clusters, 0, 0) + f"|ord={hm_order_by_norm}|rank"
+        rank_cached = _cache_get(_HM_RANK_CACHE, rank_key, _HM_RANK_TTL)
+        if rank_cached is not None:
+            ranked_rows, rank_meta = rank_cached
         else:
             if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
-                pct_payload, unit_payload, page_info = build_heatmap_payloads_fast(
+                ranked_rows, rank_meta = build_heatmap_ranked_rows_fast(
                     df_meta=df_meta_heat,
                     df_ts=df_ts,
                     UMBRAL_CFG=UM_MANAGER.config(),
@@ -475,15 +547,33 @@ def heatmap_callbacks(app):
                     today=today_str, yday=yday_str,
                     alarm_keys=alarm_keys_set,
                     alarm_only=False,
+                    order_by=hm_order_by_norm
+                )
+            else:
+                ranked_rows, rank_meta = None, None
+            _cache_set(_HM_RANK_CACHE, rank_key, (ranked_rows, rank_meta))
+        perf_marks.append(("ranking", time.perf_counter()))
+
+        # -------- Payloads (cacheados por state_key) --------
+        cached = _cache_get(_HM_PAYLOAD_CACHE, state_key, _HM_PAYLOAD_TTL)
+        if cached is not None:
+            pct_payload, unit_payload, page_info = cached
+        else:
+            if ranked_rows is not None and rank_meta is not None and not ranked_rows.empty:
+                pct_payload, unit_payload, page_info = build_heatmap_payloads_from_ranked_rows(
+                    ranked_rows,
+                    df_ts=df_ts,
+                    UMBRAL_CFG=UM_MANAGER.config(),
+                    rank_meta=rank_meta,
                     offset=offset,
                     limit=limit,
-                    order_by=hm_order_by_norm
                 )
             else:
                 pct_payload = unit_payload = None
                 page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
 
             _cache_set(_HM_PAYLOAD_CACHE, state_key, (pct_payload, unit_payload, page_info))
+        perf_marks.append(("payloads", time.perf_counter()))
 
         # -------- Altura del heatmap (para que cuadre con #filas) --------
         nrows = len((pct_payload or unit_payload or {}).get("y") or [])
@@ -492,6 +582,7 @@ def heatmap_callbacks(app):
         # -------- Figuras --------
         fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
         fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
+        perf_marks.append(("figures", time.perf_counter()))
 
         # -------- Tabla resumen --------
         if pct_payload or unit_payload:
@@ -500,6 +591,7 @@ def heatmap_callbacks(app):
             )
         else:
             table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
+        perf_marks.append(("summary_table", time.perf_counter()))
 
         # -------- Indicadores de paginación --------
         total = int(page_info.get("total_rows", 0))
@@ -513,6 +605,12 @@ def heatmap_callbacks(app):
 
         # Marca renderizado
         _LAST_HEATMAP_KEY = state_key
+        _perf_log(
+            "refresh_heatmaps",
+            perf_start,
+            perf_marks,
+            {"rows": showing, "page_size": limit, "order": hm_order_by_norm},
+        )
         return (
             table_component,
             fig_pct,

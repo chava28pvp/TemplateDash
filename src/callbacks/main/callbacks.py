@@ -2,6 +2,7 @@ import math
 import pandas as pd
 from dash import Input, Output, State, ALL, no_update, ctx
 import time
+import logging
 from datetime import timedelta
 import numpy as np
 from components.main.main_table import (
@@ -11,11 +12,10 @@ from components.main.main_table import (
 )
 import dash_bootstrap_components as dbc
 
-from src.Utils.alarmados import add_alarm_streak
 from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, \
     fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week, fetch_kpis_by_keys, \
-    fetch_main_distinct_catalogs
-from src.config import REFRESH_INTERVAL_MS
+    fetch_main_distinct_catalogs, fetch_progress_max_by_network, fetch_main_alarm_state
+from src.config import REFRESH_INTERVAL_MS, PROFILE_MAIN_CALLBACKS
 
 from src.Utils.utils_time import now_local
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct
@@ -35,6 +35,26 @@ _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
 
 HOLD_SECONDS = 600  # 10 minutos
+logger = logging.getLogger(__name__)
+
+
+def _perf_log(callback_name, started_at, marks=None, extra=None):
+    if not PROFILE_MAIN_CALLBACKS:
+        return
+    marks = marks or []
+    extra = extra or {}
+    now = time.perf_counter()
+    prev = started_at
+    parts = []
+    for label, ts in marks:
+        parts.append(f"{label}={(ts - prev) * 1000:.1f}ms")
+        prev = ts
+    parts.append(f"total={(now - started_at) * 1000:.1f}ms")
+    if extra:
+        parts.append(
+            ", ".join([f"{k}={v}" for k, v in extra.items()])
+        )
+    logger.warning("%s | %s", callback_name, " | ".join(parts))
 
 def order_networks(nets):
     first = [n for n in PREFERRED_NET_ORDER if n in nets]
@@ -100,52 +120,48 @@ def _compute_progress_max_for_filters(fecha, hora, networks, technologies, vendo
     vendors = _as_list(vendors)
     clusters = _as_list(clusters)
 
-    # Dataset completo filtrado por fecha/hora + filtros, sin paginación
-    df_full = fetch_kpis(
+    max_dict = fetch_progress_max_by_network(
         fecha=fecha,
         hora=hora,
         vendors=vendors or None,
         clusters=clusters or None,
         networks=networks or None,
         technologies=technologies or None,
-        limit=None,
     )
-    df_full = _ensure_df(df_full)
-
-    if df_full.empty:
-        return {}
-
-    # Inferir redes efectivas si no vienen fijas por filtro
-    if networks:
-        nets = networks
-    else:
-        nets = (
-            sorted(df_full["network"].dropna().unique().tolist())
-            if "network" in df_full.columns
-            else []
-        )
-
-    if not nets:
-        return {}
-
-    # Pasamos a formato wide para tener columnas tipo NET__metric
-    df_wide_full = pivot_by_network(df_full, networks=nets)
-    if df_wide_full is None or df_wide_full.empty:
-        return {}
-
-    progress_cols = prefixed_progress_cols(nets)
-    max_dict = {}
-
-    for col in progress_cols:
-        if col in df_wide_full.columns:
-            serie = df_wide_full[col]
-            # ignorar NaN / inf
-            valid = serie.replace([np.inf, -np.inf], np.nan).dropna()
-            max_dict[col] = float(valid.max()) if not valid.empty else None
-        else:
-            max_dict[col] = None
-
     return max_dict
+
+
+def _build_alarm_list(df_alarm_state: pd.DataFrame):
+    if df_alarm_state is None or df_alarm_state.empty:
+        return []
+
+    df = df_alarm_state.copy()
+    key_cols = ["network", "vendor", "noc_cluster", "technology"]
+    sort_cols = key_cols + ["fecha", "hora"]
+    df = df.sort_values(sort_cols, kind="stable").reset_index(drop=True)
+    df["has_alarm"] = df["has_alarm"].fillna(0).astype(int).astype(bool)
+
+    grp_id = df.groupby(key_cols, sort=False).ngroup()
+    reset_id = (~df["has_alarm"]).groupby(grp_id, sort=False).cumsum()
+    df["alarmas"] = (
+        df["has_alarm"].astype(int)
+        .groupby([grp_id, reset_id], sort=False)
+        .cumsum()
+        .astype(int)
+    )
+
+    return [
+        {
+            "fecha": None if pd.isna(r.fecha) else str(r.fecha).strip(),
+            "hora": None if pd.isna(r.hora) else str(r.hora).strip(),
+            "network": r.network,
+            "vendor": r.vendor,
+            "noc_cluster": r.noc_cluster,
+            "technology": r.technology,
+            "alarmas": int(r.alarmas or 0),
+        }
+        for r in df.itertuples(index=False)
+    ]
 
 def _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters):
     """
@@ -466,6 +482,8 @@ def register_callbacks(app):
             _n, sort_state, page_state,
             main_ctx
     ):
+        perf_start = time.perf_counter()
+        perf_marks = []
         applied_filters = applied_filters or {}
         networks = _as_list(_applied_value(applied_filters, "network"))
         technologies = _as_list(_applied_value(applied_filters, "technology"))
@@ -502,6 +520,7 @@ def register_callbacks(app):
             for d in alarm_list
             if d is not None
         }
+        perf_marks.append(("ctx", time.perf_counter()))
 
         # ---------- orden explícito para alarmado / global (columna clickeada) ----------
         sort_by = None
@@ -559,6 +578,7 @@ def register_callbacks(app):
 
             # para que el header muestre la flecha en % integridad
             safe_sort_state = sort_state
+            perf_marks.append(("special_sort_fetch", time.perf_counter()))
 
         # ---------- fuente paginada normal (solo si NO venimos del modo especial) ----------
         if df is None:
@@ -582,8 +602,15 @@ def register_callbacks(app):
                     sort_net=sort_net,
                     ascending=ascending,
                 )
+            perf_marks.append(("page_fetch", time.perf_counter()))
 
         if df is None or df.empty:
+            _perf_log(
+                "refresh_table",
+                perf_start,
+                perf_marks,
+                {"page": page, "page_size": page_size, "rows": 0, "mode": sort_mode},
+            )
             store_payload = {"columns": [], "rows": []}
             empty_alert = dbc.Alert("Sin datos para los filtros seleccionados.", color="warning")
             return empty_alert, "Página 1 de 1", "Sin resultados.", store_payload
@@ -626,6 +653,7 @@ def register_callbacks(app):
                 ascending=[True],
                 kind="mergesort",
             )
+        perf_marks.append(("row_enrichment", time.perf_counter()))
 
         # ---------- alarmas (sin apply) ----------
         if "network" in df.columns:
@@ -667,6 +695,7 @@ def register_callbacks(app):
                 )
                 wide = wide.sort_values("_ord").drop(columns=["_ord"])
                 use_df = wide
+        perf_marks.append(("pivot_order", time.perf_counter()))
 
         # ---------- render ----------
         table = render_kpi_table_multinet(
@@ -676,6 +705,7 @@ def register_callbacks(app):
             progress_max_by_col=progress_max_by_col,
             integrity_baseline_map=integrity_baseline_map,
         )
+        perf_marks.append(("render_table", time.perf_counter()))
 
         total_pages = max(1, math.ceil((total or 0) / max(1, page_size)))
         page_corrected = min(max(1, page), total_pages)
@@ -692,6 +722,13 @@ def register_callbacks(app):
             "columns": list(use_df.columns),
             "rows": use_df.to_dict("records"),
         }
+        perf_marks.append(("serialize_store", time.perf_counter()))
+        _perf_log(
+            "refresh_table",
+            perf_start,
+            perf_marks,
+            {"page": page_corrected, "page_size": page_size, "rows": len(use_df), "mode": sort_mode},
+        )
 
         return table, indicator, banner, store_payload
 
@@ -869,6 +906,8 @@ def register_callbacks(app):
 
            Se guarda en dcc.Store (main-context-store).
            """
+        perf_start = time.perf_counter()
+        perf_marks = []
         applied_filters = applied_filters or {}
         networks = _as_list(_applied_value(applied_filters, "network"))
         technologies = _as_list(_applied_value(applied_filters, "technology"))
@@ -881,6 +920,12 @@ def register_callbacks(app):
         # -----------------------------
         cached = _get_main_context_cached(fecha, hora, networks, technologies, vendors, clusters)
         if cached is not None:
+            _perf_log(
+                "build_main_context",
+                perf_start,
+                [("cache_hit", time.perf_counter())],
+                {"cached": True},
+            )
             return cached
 
         # ============================================================
@@ -894,6 +939,7 @@ def register_callbacks(app):
             technologies=technologies or None,
         )
         df_baseline = df_baseline if isinstance(df_baseline, pd.DataFrame) else pd.DataFrame()
+        perf_marks.append(("baseline", time.perf_counter()))
 
         integrity_baseline_list = []
 
@@ -966,42 +1012,21 @@ def register_callbacks(app):
             vendors=vendors,
             clusters=clusters,
         )
+        perf_marks.append(("progress_max", time.perf_counter()))
 
         # ============================================================
         # 3) Alarm map para el día completo
         # ============================================================
-        df_day = fetch_kpis(
+        df_alarm_state = fetch_main_alarm_state(
             fecha=fecha,
-            hora=None,  # día completo
             vendors=vendors or None,
             clusters=clusters or None,
             networks=networks or None,
             technologies=technologies or None,
-            limit=None,
         )
-        df_day = _ensure_df(df_day)
-
-        def _norm_f(x):
-            return None if x is None else str(x).strip()
-
-        def _norm_h(x):
-            return None if x is None else str(x).strip()
-
-        alarm_list = []
-        if not df_day.empty:
-            df_day = add_alarm_streak(df_day)
-            alarm_list = [
-                {
-                    "fecha": _norm_f(r.get("fecha")),
-                    "hora": _norm_h(r.get("hora")),
-                    "network": r.get("network"),
-                    "vendor": r.get("vendor"),
-                    "noc_cluster": r.get("noc_cluster"),
-                    "technology": r.get("technology"),
-                    "alarmas": int(r.get("alarmas", 0) or 0),
-                }
-                for _, r in df_day.iterrows()
-            ]
+        perf_marks.append(("alarm_fetch", time.perf_counter()))
+        alarm_list = _build_alarm_list(df_alarm_state if isinstance(df_alarm_state, pd.DataFrame) else pd.DataFrame())
+        perf_marks.append(("alarm_streak", time.perf_counter()))
 
         payload = {
             "integrity_baseline_map": integrity_baseline_list,
@@ -1011,4 +1036,14 @@ def register_callbacks(app):
         }
 
         _set_main_context_cached(fecha, hora, networks, technologies, vendors, clusters, payload)
+        _perf_log(
+            "build_main_context",
+            perf_start,
+            perf_marks,
+            {
+                "baseline_rows": len(integrity_baseline_list),
+                "progress_cols": len(progress_max_by_col),
+                "alarm_rows": len(alarm_list),
+            },
+        )
         return payload

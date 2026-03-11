@@ -269,6 +269,8 @@ def build_histo_payloads_fast(
                 .dropna(subset=["h"])
             )
             df_small["h"] = df_small["h"].astype(int)
+            df_small["offset48"] = df_small["h"] + np.where(df_small["fecha"].astype(str) == today, 24, 0)
+            df_small["offset48"] = pd.to_numeric(df_small["offset48"], errors="coerce").astype(int)
 
     # Asigna rid a cada fila del page (para lookup rápido)
     rows_page = rows_page.merge(
@@ -280,6 +282,17 @@ def build_histo_payloads_fast(
 
     # Arma eje X como 48 timestamps: 24 de ayer + 24 de hoy
     x_dt = [f"{yday}T{h:02d}:00:00" for h in range(24)] + [f"{today}T{h:02d}:00:00" for h in range(24)]
+
+    metric_maps = {}
+    if not df_small.empty:
+        for m in metrics_needed:
+            if m in df_small.columns:
+                sub = df_small[["rid", "offset48", m]].dropna()
+                metric_maps[m] = dict(zip(zip(sub["rid"], sub["offset48"]), sub[m]))
+            else:
+                metric_maps[m] = {}
+    else:
+        metric_maps = {m: {} for m in metrics_needed}
 
     # Matrices a devolver (clasificado/normalizado + crudos para hover)
     z_pct, z_unit = [], []
@@ -305,32 +318,12 @@ def build_histo_payloads_fast(
 
         # Extrae 48 puntos (ayer+today) para una métrica dada
         def _row48_raw(metric):
-            if metric is None or df_small.empty or rid < 0 or metric not in df_small.columns:
+            if metric is None or rid < 0:
                 return [None] * 48
-
-            sub_y = df_small.loc[
-                (df_small["rid"] == rid) & (df_small["fecha"].astype(str) == yday),
-                ["h", metric]
-            ]
-            sub_t = df_small.loc[
-                (df_small["rid"] == rid) & (df_small["fecha"].astype(str) == today),
-                ["h", metric]
-            ]
-
-            arr_y = [None] * 24
-            arr_t = [None] * 24
-
-            if not sub_y.empty:
-                for _, rr in sub_y.iterrows():
-                    v = rr[metric]
-                    arr_y[int(rr["h"])] = float(v) if pd.notna(v) else None
-
-            if not sub_t.empty:
-                for _, rr in sub_t.iterrows():
-                    v = rr[metric]
-                    arr_t[int(rr["h"])] = float(v) if pd.notna(v) else None
-
-            return arr_y + arr_t
+            mp = metric_maps.get(metric)
+            if not mp:
+                return [None] * 48
+            return [mp.get((rid, off)) for off in range(48)]
 
         # PCT: clasifica valor -> severidad 0..3 usando umbrales
         if pm:

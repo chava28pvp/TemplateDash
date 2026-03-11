@@ -442,10 +442,10 @@ def add_integrity_deg_pct(df_ts: pd.DataFrame, integrity_baseline_map: dict) -> 
     return out
 
 # =========================================================
-# Payloads para heatmap (48 columnas) + paginado + orden “escalerita”
+# Ranking cacheable para heatmap (sin paginado)
 # =========================================================
 
-def build_heatmap_payloads_fast(
+def build_heatmap_ranked_rows_fast(
     df_meta: pd.DataFrame,
     df_ts: pd.DataFrame,
     *,
@@ -460,44 +460,18 @@ def build_heatmap_payloads_fast(
     limit=5,
     order_by="unit",
 ):
-    """
-    Construye dos payloads para heatmap en ventana de 48 horas:
-      - pct_payload: para métricas % (severity)
-      - unit_payload: para métricas UNIT (progress)
-    y un page_info para paginado.
-
-    Filas (y-axis):
-      (technology, vendor, noc_cluster) x network x valores_order
-
-    Columnas (x-axis):
-      48 slots: ayer 0..23 + hoy 24..47
-
-    Ordenamiento:
-      - order_by in ('alarm', 'alarm_hours', 'hours', 'alarm_hours_pct'):
-          genera features “escalerita” para % usando solo horas “interesantes”
-      - order_by in ('alarm_hours_unit','alarm_hours_fail','unit'):
-          genera features “escalerita” para UNIT
-      - fallback: ordena por max_unit o max_pct si no hay features
-    """
     import numpy as np
     import pandas as pd
     from datetime import datetime, timedelta
 
     if df_meta is None or df_meta.empty:
-        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+        return pd.DataFrame(), None
 
-    # ---------------------------------------------------------
-    # Redes a usar
-    # ---------------------------------------------------------
     if networks is None or not networks:
-        # intenta inferir de df_ts o df_meta
         networks = _infer_networks(df_ts if df_ts is not None else df_meta)
     if not networks:
-        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+        return pd.DataFrame(), None
 
-    # ---------------------------------------------------------
-    # Fechas hoy/ayer (YYYY-MM-DD)
-    # ---------------------------------------------------------
     if today is None:
         if df_ts is not None and "fecha" in df_ts.columns:
             today = _max_date_str(df_ts["fecha"]) or _day_str(datetime.now())
@@ -507,35 +481,25 @@ def build_heatmap_payloads_fast(
     if yday is None:
         yday = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # ---------------------------------------------------------
-    # Métricas requeridas (todas las columnas pct/unit involucradas)
-    # ---------------------------------------------------------
     metrics_needed = {
         m for v in valores_order for m in VALORES_MAP.get(v, (None, None)) if m
     }
     if not metrics_needed:
-        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+        return pd.DataFrame(), None
 
-    # ---------------------------------------------------------
-    # Universo de filas:
-    #   base(meta unique tech/vendor/cluster) x networks x valores_order
-    # ---------------------------------------------------------
     meta_cols = ["technology", "vendor", "noc_cluster"]
     base = df_meta.drop_duplicates(subset=meta_cols)[meta_cols].reset_index(drop=True)
 
-    # cartesian product con networks
     rows_full = base.assign(_tmp=1).merge(
         pd.DataFrame({"network": networks, "_tmp": 1}),
         on="_tmp"
     ).drop(columns="_tmp")
 
-    # agrega la dimensión valores (KPI lógico)
     rows_all_list = []
     for v in valores_order:
         rf = rows_full.copy()
         rf["valores"] = v
 
-        # filtro opcional: solo keys en alarma (tech,vendor,cluster,net)
         if alarm_only and alarm_keys is not None:
             keys_ok = set(alarm_keys)
             mask = list(zip(rf["technology"], rf["vendor"], rf["noc_cluster"], rf["network"]))
@@ -544,33 +508,22 @@ def build_heatmap_payloads_fast(
         rows_all_list.append(rf)
 
     if not rows_all_list:
-        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+        return pd.DataFrame(), None
 
     rows_all = pd.concat(rows_all_list, ignore_index=True)
-
-    # ---------------------------------------------------------
-    # Ordenamiento por criterio
-    # ---------------------------------------------------------
     order_by = (order_by or "unit").lower()
     stair_sort_cols_pct = None
     stair_sort_cols_unit = None
 
-    # =========================================================
-    # 1) Construye features de orden si hay TS (df_ts)
-    # =========================================================
     if df_ts is not None and not df_ts.empty:
-
-        # Detecta qué métricas (pct/unit) existen en df_ts
         pct_metrics = [pm for pm, _ in VALORES_MAP.values() if pm and pm in df_ts.columns]
         unit_metrics = [um for _, um in VALORES_MAP.values() if um and um in df_ts.columns]
 
         base_cols = ["technology", "vendor", "noc_cluster", "network", "fecha", "hora"]
         used_cols = base_cols + [c for c in (pct_metrics + unit_metrics) if c in df_ts.columns]
 
-        # df2: sólo datos de hoy y ayer (para ventana de 48h)
         df2 = df_ts.loc[df_ts["fecha"].astype(str).isin([yday, today]), used_cols].copy()
 
-        # offset48 (0..47): hora 0..23, suma 24 si es today
         hh = df2["hora"].astype(str).str.split(":", n=1).str[0]
         df2["h"] = pd.to_numeric(hh, errors="coerce")
         df2 = df2[(df2["h"] >= 0) & (df2["h"] <= 23)].copy()
@@ -578,15 +531,8 @@ def build_heatmap_payloads_fast(
         df2["offset48"] = df2["h"] + np.where(df2["fecha"].astype(str) == today, 24, 0)
         df2["offset48"] = pd.to_numeric(df2["offset48"], errors="coerce").fillna(-1).astype(int)
 
-        # ---------------------------------------------------------
-        # A) Escalerita para % (cuando order_by es tipo alarm/hours)
-        # ---------------------------------------------------------
         if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct") and pct_metrics:
-
-            # Mapa: columna pct -> KPI lógico (PS_RRC, CS_RRC, etc.)
             COL_TO_VAL_PCT = {pm: name for name, (pm, _) in VALORES_MAP.items() if pm}
-
-            # melt para pasar de wide->long (una fila por (key,hora,metric))
             df_long = df2.melt(
                 id_vars=base_cols + ["offset48"],
                 value_vars=pct_metrics,
@@ -595,7 +541,6 @@ def build_heatmap_payloads_fast(
             )
             df_long["valores"] = df_long["metric"].map(COL_TO_VAL_PCT)
 
-            # seguridad: si por algún motivo no está offset48 en df_long, lo re-mergea
             if "offset48" not in df_long.columns:
                 df_long = df_long.merge(
                     df2[["technology", "vendor", "noc_cluster", "network", "fecha", "hora", "offset48"]].drop_duplicates(),
@@ -605,7 +550,6 @@ def build_heatmap_payloads_fast(
 
             grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
 
-            # Cache de thresholds por (metric, net) para evitar recomputar
             thr_cache = {}
             for pm in pct_metrics:
                 for net in networks:
@@ -619,7 +563,6 @@ def build_heatmap_payloads_fast(
                     thr_cache[(pm, net)] = (orient, thr)
 
             def _score_pct(metric, net, v):
-                """Score continuo (0..max_ratio) para colorear/ordenar."""
                 if v is None or (isinstance(v, float) and np.isnan(v)):
                     return np.nan
                 orient, thr = thr_cache.get(
@@ -629,7 +572,6 @@ def build_heatmap_payloads_fast(
                 return _sev_score_continuo(v, orient, thr, max_ratio=2.0)
 
             def _level_pct(metric, net, v):
-                """Nivel discreto 0..4 para decidir “interés”."""
                 if v is None or (isinstance(v, float) and np.isnan(v)):
                     return -1
                 orient, thr = thr_cache.get(
@@ -638,29 +580,21 @@ def build_heatmap_payloads_fast(
                 )
                 return _sev_level_safe(v, orient, thr)
 
-            # score continuo por celda
             df_long["score_pct"] = [
                 _score_pct(m, n, v) for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
             ]
 
-            # nivel discreto por celda
             df_long["lvl_pct"] = [
                 _level_pct(m, n, v) for m, n, v in zip(df_long["metric"], df_long["network"], df_long["value"])
             ]
 
-            # Importante:
-            # aquí defines qué niveles cuentan como “interesantes” para el orden escalerita.
-            # (Tu comentario decía regular/critico, pero el mínimo actual es 1.)
             STAIR_LVL_MIN_PCT = 1
-
-            # score_interest_pct: solo deja score cuando el nivel es “interesante”
             df_long["score_interest_pct"] = np.where(
                 df_long["lvl_pct"] >= STAIR_LVL_MIN_PCT,
                 df_long["score_pct"],
                 np.nan
             )
 
-            # Compacta a 1 score por hora (max) por fila (solo celdas “interesantes”)
             df_score_hour = (
                 df_long.dropna(subset=["valores", "offset48"])
                 .groupby(grp_cols + ["offset48"], as_index=False)["score_interest_pct"]
@@ -668,10 +602,8 @@ def build_heatmap_payloads_fast(
                 .dropna(subset=["score_interest_pct"])
             )
 
-            # Si hubo algo “interesante”: crea features __p_XX por hora para ordenar
             stair_sort_cols_pct = None
             if not df_score_hour.empty:
-                # última hora con interés (por fila)
                 df_last = (
                     df_score_hour.sort_values("offset48")
                     .groupby(grp_cols, as_index=False)
@@ -679,7 +611,6 @@ def build_heatmap_payloads_fast(
                     .rename(columns={"offset48": "__last_off_pct", "score_interest_pct": "__last_score_pct"})
                 )
 
-                # pivot (wide): columnas __p_00..__p_47
                 wide = df_score_hour.pivot(
                     index=grp_cols, columns="offset48", values="score_interest_pct"
                 ).reset_index()
@@ -687,27 +618,19 @@ def build_heatmap_payloads_fast(
                     c: f"__p_{int(c):02d}" for c in wide.columns if isinstance(c, (int, np.integer))
                 })
 
-                # merge features a rows_all
                 rows_all = rows_all.merge(wide, on=grp_cols, how="left")
                 rows_all = rows_all.merge(df_last[grp_cols + ["__last_off_pct", "__last_score_pct"]], on=grp_cols, how="left")
 
-                # asegura todas las columnas __p_XX hasta max_off
                 max_off = int(df2["offset48"].max()) if not df2.empty else 47
                 for off in range(0, max_off + 1):
                     c = f"__p_{off:02d}"
                     if c not in rows_all.columns:
                         rows_all[c] = np.nan
 
-                # orden en forma de “escalera” de la última hora hacia atrás
                 stair_sort_cols_pct = [f"__p_{off:02d}" for off in range(max_off, -1, -1)]
 
-        # ---------------------------------------------------------
-        # B) Escalerita UNIT (cuando order_by es unit o alarm_hours_unit)
-        # ---------------------------------------------------------
         if order_by in ("alarm_hours_unit", "alarm_hours_fail", "unit") and unit_metrics:
-
             COL_TO_VAL_UNIT = {um: name for name, (_, um) in VALORES_MAP.items() if um}
-
             df_long_u = df2.melt(
                 id_vars=base_cols + ["offset48"],
                 value_vars=unit_metrics,
@@ -719,7 +642,6 @@ def build_heatmap_payloads_fast(
 
             grp_cols = ["technology", "vendor", "noc_cluster", "network", "valores"]
 
-            # Cache min/max por (metric, net)
             prog_cache = {}
             for um in unit_metrics:
                 for net in networks:
@@ -730,7 +652,6 @@ def build_heatmap_payloads_fast(
                     prog_cache[(um, net)] = (mn, mx)
 
             def _score_unit(metric, net, v):
-                """Normaliza UNIT a 0..1 (clamp), según min/max por network."""
                 if v is None or (isinstance(v, float) and np.isnan(v)):
                     return np.nan
                 mn, mx = prog_cache.get((metric, net), (0.0, 1.0))
@@ -743,23 +664,13 @@ def build_heatmap_payloads_fast(
             df_long_u["score_unit"] = [
                 _score_unit(m, n, v) for m, n, v in zip(df_long_u["metric"], df_long_u["network"], df_long_u["value"])
             ]
-
-            # Nivel discreto UNIT basado en score (no usa thresholds "regular" explícitos):
-            # critico: >= 1.0 (rebasó max)
-            # regular: >= 0.80
-            # bueno:   >= 0.60
-            # excelente: < 0.60
             su = df_long_u["score_unit"]
             df_long_u["lvl_unit"] = np.select(
                 [su >= 1.0, su >= 0.80, su >= 0.60],
                 [3, 2, 1],
                 default=0
             )
-
-            # SOLO regular(2) y critico(3) cuentan para escalerita
             df_long_u["score_interest_unit"] = np.where(df_long_u["lvl_unit"] >= 2, df_long_u["score_unit"], np.nan)
-
-            # 1 score por hora (max) SOLO “interesantes”
             df_score_hour_u = (
                 df_long_u.dropna(subset=["offset48", "score_interest_unit"])
                 .groupby(grp_cols + ["offset48"], as_index=False)["score_interest_unit"]
@@ -775,7 +686,6 @@ def build_heatmap_payloads_fast(
                     .tail(1)
                     .rename(columns={"offset48": "__last_off_unit", "score_interest_unit": "__last_score_unit"})
                 )
-
                 wide_u = df_score_hour_u.pivot(
                     index=grp_cols, columns="offset48", values="score_interest_unit"
                 ).reset_index()
@@ -794,45 +704,26 @@ def build_heatmap_payloads_fast(
 
                 stair_sort_cols_unit = [f"__u_{off:02d}" for off in range(max_off, -1, -1)]
 
-    # =========================================================
-    # 2) Orden final (aplica escalerita o fallback)
-    # =========================================================
-
     if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct"):
-
-        # Si construimos features escalerita (%), ordenar por:
-        # - tiene interés
-        # - última hora con interés (más reciente arriba)
-        # - score de esa última hora
-        # - y luego por todas las columnas __p_XX de 47..0
         if stair_sort_cols_pct and ("__last_off_pct" in rows_all.columns) and ("__last_score_pct" in rows_all.columns):
-
             rows_all["__last_off_pct"] = pd.to_numeric(rows_all["__last_off_pct"], errors="coerce").fillna(-1).astype(int)
             rows_all["__last_score_pct"] = pd.to_numeric(rows_all["__last_score_pct"], errors="coerce").fillna(float("-inf"))
 
             for c in stair_sort_cols_pct:
                 rows_all[c] = pd.to_numeric(rows_all[c], errors="coerce").fillna(float("-inf"))
 
-            # flag: tiene algo “interesante” en 48h
             rows_all["__has_interest_pct"] = (rows_all["__last_off_pct"] >= 0).astype(int)
-
-            # Nota: aquí filtras a SOLO las filas con interés
             rows_all = rows_all[rows_all["__has_interest_pct"] == 1].copy()
-
             rows_all = rows_all.sort_values(
                 by=["__has_interest_pct", "__last_off_pct", "__last_score_pct"] + stair_sort_cols_pct,
                 ascending=[False, False, False] + ([False] * len(stair_sort_cols_pct)),
                 kind="stable",
             )
-
         else:
-            # Fallback por columnas “clásicas” si existieran:
-            # - last_alarm_ts, alarm_hours, max_value
             if "last_alarm_ts" in rows_all.columns:
                 s_raw = rows_all["last_alarm_ts"]
             else:
                 s_raw = pd.Series([pd.NaT] * len(rows_all), index=rows_all.index)
-
             rows_all["__ord_last_alarm_ts"] = pd.to_datetime(s_raw, errors="coerce")
             rows_all["__ord_last_alarm_ts"] = rows_all["__ord_last_alarm_ts"].fillna(pd.Timestamp("1970-01-01"))
 
@@ -841,7 +732,6 @@ def build_heatmap_payloads_fast(
 
             s_max = rows_all["max_value"] if "max_value" in rows_all.columns else pd.Series(float("-inf"), index=rows_all.index)
             rows_all["__ord_max_value"] = pd.to_numeric(s_max, errors="coerce").fillna(float("-inf"))
-
             rows_all = rows_all.sort_values(
                 ["__ord_last_alarm_ts", "__ord_alarm_hours", "__ord_max_value"],
                 ascending=[False, False, False],
@@ -849,8 +739,6 @@ def build_heatmap_payloads_fast(
             )
 
     elif order_by in ("alarm_hours_unit", "alarm_hours_fail", "unit") and stair_sort_cols_unit:
-
-        # Escalerita UNIT
         rows_all["__last_off_unit"] = pd.to_numeric(rows_all.get("__last_off_unit"), errors="coerce").fillna(-1).astype(int)
         rows_all["__last_score_unit"] = pd.to_numeric(rows_all.get("__last_score_unit"), errors="coerce").fillna(float("-inf"))
 
@@ -859,7 +747,6 @@ def build_heatmap_payloads_fast(
 
         rows_all["__has_interest_unit"] = (rows_all["__last_off_unit"] >= 0).astype(int)
         rows_all = rows_all[rows_all["__has_interest_unit"] == 1].copy()
-
         rows_all = rows_all.sort_values(
             by=["__has_interest_unit", "__last_off_unit", "__last_score_unit"] + stair_sort_cols_unit,
             ascending=[False, False, False] + ([False] * len(stair_sort_cols_unit)),
@@ -867,7 +754,6 @@ def build_heatmap_payloads_fast(
         )
 
     else:
-        # Fallback general: orden por max_unit o max_pct si existieran (si no, -inf)
         out_col = "max_unit" if order_by == "unit" else "max_pct"
         rows_all["__ord_last_alarm_ts"] = pd.Timestamp("1970-01-01")
         rows_all["__ord_alarm_hours"] = 0.0
@@ -881,17 +767,43 @@ def build_heatmap_payloads_fast(
             kind="stable",
         )
 
-    # ---------------------------------------------------------
-    # Paginado
-    # ---------------------------------------------------------
+    rank_meta = {
+        "networks": list(networks),
+        "today": today,
+        "yday": yday,
+        "metrics_needed": list(metrics_needed),
+    }
+    return rows_all.reset_index(drop=True), rank_meta
+
+
+# =========================================================
+# Payloads para heatmap (48 columnas) + paginado
+# =========================================================
+
+def build_heatmap_payloads_from_ranked_rows(
+    rows_all: pd.DataFrame,
+    df_ts: pd.DataFrame,
+    *,
+    UMBRAL_CFG: dict,
+    rank_meta: dict,
+    offset=0,
+    limit=5,
+):
+    import numpy as np
+    import pandas as pd
+
+    if rows_all is None or rows_all.empty:
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+
+    today = rank_meta["today"]
+    yday = rank_meta["yday"]
+    metrics_needed = set(rank_meta["metrics_needed"])
+
     total_rows = len(rows_all)
     start = max(0, int(offset))
     end = start + max(1, int(limit))
     rows_page = rows_all.iloc[start:end].reset_index(drop=True)
 
-    # ---------------------------------------------------------
-    # df_small: reduce df_ts SOLO a las keys visibles (para acelerar)
-    # ---------------------------------------------------------
     if df_ts is None or df_ts.empty:
         df_small = pd.DataFrame()
         keys_df = rows_page[["technology", "vendor", "noc_cluster", "network"]].drop_duplicates().reset_index(drop=True)
@@ -922,10 +834,6 @@ def build_heatmap_payloads_fast(
             how="left",
         )
 
-    # ---------------------------------------------------------
-    # metric_maps: dict por métrica => {(rid, offset48): valor}
-    # para reconstruir cada fila de 48 horas en O(48)
-    # ---------------------------------------------------------
     metric_maps = {}
     if not df_small.empty:
         for m in metrics_needed:
@@ -938,19 +846,13 @@ def build_heatmap_payloads_fast(
         metric_maps = {m: {} for m in metrics_needed}
 
     def _row48_raw(metric, rid):
-        """
-        Reconstruye una lista de 48 valores para (metric, rid):
-          row[off] = metric_maps[metric].get((rid, off))
-        """
         mp = metric_maps.get(metric)
         if not mp:
             return [None] * 48
         return [mp.get((rid, off)) for off in range(48)]
 
-    # Eje X con datetimes (strings) para hover y línea de corte
     x_dt = [f"{yday}T{h:02d}:00:00" for h in range(24)] + [f"{today}T{h:02d}:00:00" for h in range(24)]
 
-    # Matrices y metadatos por fila
     z_pct, z_unit = [], []
     z_pct_raw, z_unit_raw = [], []
     y_labels, row_detail = [], []
@@ -962,29 +864,17 @@ def build_heatmap_payloads_fast(
         tech, vend, clus, net, valores, rid = (r.technology, r.vendor, r.noc_cluster, r.network, r.valores, r.rid)
         pm, um = VALORES_MAP.get(valores, (None, None))
 
-        # ID de fila (se usa también como “detalle” separable por '/')
         y_id = f"{tech}/{vend}/{clus}/{net}/{valores}"
         y_labels.append(y_id)
         row_detail.append(y_id)
 
-        # Valores crudos 48h para pct y unit
         row_raw = _row48_raw(pm, rid) if pm else [None] * 48
         row_raw_u = _row48_raw(um, rid) if um else [None] * 48
 
-        # -------------------------------
-        # % (severity) -> score para color
-        # Regla especial: rojo SOLO cuando es crítico
-        # -------------------------------
         if pm:
             orient, thr = _sev_cfg(pm, net, UMBRAL_CFG)
 
             def _hm_score_pct(v):
-                """
-                Score para el heatmap de %.
-                - score continuo viene de _sev_score_continuo
-                - pero forzamos rojo SOLO si lvl >= 4 (critico)
-                - si no es crítico, nunca permitir 1.0 (máximo 0.999)
-                """
                 if v is None:
                     return None
 
@@ -1008,9 +898,6 @@ def build_heatmap_payloads_fast(
             z_pct.append([None] * 48)
             z_pct_raw.append(row_raw)
 
-        # -------------------------------
-        # UNIT (progress) -> normalizado 0..1
-        # -------------------------------
         if um:
             mn, mx = _prog_cfg(um, net, UMBRAL_CFG)
             row_norm = [_normalize(v, mn, mx) if v is not None else None for v in row_raw_u]
@@ -1024,9 +911,6 @@ def build_heatmap_payloads_fast(
             z_unit.append([None] * 48)
             z_unit_raw.append(row_raw_u)
 
-        # -------------------------------
-        # Estadísticas por fila (última hora con dato, máximos)
-        # -------------------------------
         arr_u = np.array([v if isinstance(v, (int, float)) else np.nan for v in row_raw_u], float)
         arr_p = np.array([v if isinstance(v, (int, float)) else np.nan for v in row_raw], float)
 
@@ -1048,7 +932,6 @@ def build_heatmap_payloads_fast(
         row_max_pct.append(rmax_p)
         row_max_unit.append(rmax_u)
 
-    # Rangos dinámicos para progress unit (por si hay valores fuera 0..1 en teoría)
     zmin_pct, zmax_pct = (0.0, 1.0)
 
     if all_scores_unit:
@@ -1089,6 +972,45 @@ def build_heatmap_payloads_fast(
     page_info = {"total_rows": total_rows, "offset": start, "limit": limit, "showing": len(rows_page)}
     return pct_payload, unit_payload, page_info
 
+
+def build_heatmap_payloads_fast(
+    df_meta: pd.DataFrame,
+    df_ts: pd.DataFrame,
+    *,
+    UMBRAL_CFG: dict,
+    networks=None,
+    valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+    today=None,
+    yday=None,
+    alarm_keys=None,
+    alarm_only=False,
+    offset=0,
+    limit=5,
+    order_by="unit",
+):
+    rows_all, rank_meta = build_heatmap_ranked_rows_fast(
+        df_meta=df_meta,
+        df_ts=df_ts,
+        UMBRAL_CFG=UMBRAL_CFG,
+        networks=networks,
+        valores_order=valores_order,
+        today=today,
+        yday=yday,
+        alarm_keys=alarm_keys,
+        alarm_only=alarm_only,
+        order_by=order_by,
+    )
+    if rank_meta is None:
+        return None, None, {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+    return build_heatmap_payloads_from_ranked_rows(
+        rows_all,
+        df_ts,
+        UMBRAL_CFG=UMBRAL_CFG,
+        rank_meta=rank_meta,
+        offset=offset,
+        limit=limit,
+    )
+
 # =========================================================
 # Figura Plotly del Heatmap
 # =========================================================
@@ -1118,6 +1040,9 @@ def build_heatmap_figure(payload, *, height=750, decimals=2):
     mode    = payload.get("color_mode", "severity")
     theme   = (payload.get("color_theme") or "").lower()
     detail  = payload.get("row_detail") or y
+    row_last_ts = payload.get("row_last_ts") or []
+    row_max_pct = payload.get("row_max_pct") or []
+    row_max_unit = payload.get("row_max_unit") or []
 
     # Colores según modo
     if mode == "severity":
@@ -1139,19 +1064,10 @@ def build_heatmap_figure(payload, *, height=750, decimals=2):
     # customdata (detalle por celda para hover)
     customdata = []
     for i, row in enumerate(z_raw):
-        arr = np.array([v if isinstance(v, (int, float)) else np.nan for v in row], dtype=float)
-
-        if np.isfinite(arr).any():
-            rmax = np.nanmax(arr)
-            rmin = np.nanmin(arr)
-            valid_idx = np.where(np.isfinite(arr))[0]
-            last_idx = int(valid_idx[-1])
-            last_label = (x[last_idx] if isinstance(x[last_idx], str) else str(x[last_idx]))
-            last_label = last_label.replace("T", " ")[:16]
-        else:
-            rmax = np.nan
-            rmin = np.nan
-            last_label = "—"
+        last_label = row_last_ts[i] if i < len(row_last_ts) else ""
+        rmax = (
+            row_max_pct[i] if mode == "severity" else row_max_unit[i]
+        ) if (mode == "severity" and i < len(row_max_pct)) or (mode != "severity" and i < len(row_max_unit)) else np.nan
 
         # detail se parte por '/', esperando: tech/vendor/cluster/net/valor
         parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 4)
@@ -1162,18 +1078,21 @@ def build_heatmap_figure(payload, *, height=750, decimals=2):
         valor  = parts[4] if len(parts) > 4 else ""
 
         def _fmt(v):
-            if not np.isfinite(v):
+            try:
+                fv = float(v)
+            except Exception:
                 return ""
-            return f"{v:,.{decimals}f}" if decimals > 0 else f"{v:,.0f}"
+            if not np.isfinite(fv):
+                return ""
+            return f"{fv:,.{decimals}f}" if decimals > 0 else f"{fv:,.0f}"
 
         rmax_s = _fmt(rmax)
-        rmin_s = _fmt(rmin)
 
         row_cd = []
         for j in range(len(x)):
-            raw_cell = arr[j] if j < len(arr) else np.nan
+            raw_cell = row[j] if j < len(row) else np.nan
             raw_s = _fmt(raw_cell)
-            row_cd.append([tech, vendor, clus, net, valor, last_label, rmax_s, rmin_s, raw_s])
+            row_cd.append([tech, vendor, clus, net, valor, last_label, rmax_s, "", raw_s])
         customdata.append(row_cd)
 
     hover_tmpl = (
