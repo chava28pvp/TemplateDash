@@ -510,7 +510,8 @@ def build_heatmap_ranked_rows_fast(
     if not rows_all_list:
         return pd.DataFrame(), None
 
-    rows_all = pd.concat(rows_all_list, ignore_index=True)
+    rows_all_base = pd.concat(rows_all_list, ignore_index=True)
+    rows_all = rows_all_base
     order_by = (order_by or "unit").lower()
     stair_sort_cols_pct = None
     stair_sort_cols_unit = None
@@ -604,6 +605,8 @@ def build_heatmap_ranked_rows_fast(
 
             stair_sort_cols_pct = None
             if not df_score_hour.empty:
+                rows_all = df_score_hour[grp_cols].drop_duplicates().reset_index(drop=True)
+
                 df_last = (
                     df_score_hour.sort_values("offset48")
                     .groupby(grp_cols, as_index=False)
@@ -680,6 +683,8 @@ def build_heatmap_ranked_rows_fast(
 
             stair_sort_cols_unit = None
             if not df_score_hour_u.empty:
+                rows_all = df_score_hour_u[grp_cols].drop_duplicates().reset_index(drop=True)
+
                 df_last_u = (
                     df_score_hour_u.sort_values("offset48")
                     .groupby(grp_cols, as_index=False)
@@ -703,6 +708,9 @@ def build_heatmap_ranked_rows_fast(
                         rows_all[c] = np.nan
 
                 stair_sort_cols_unit = [f"__u_{off:02d}" for off in range(max_off, -1, -1)]
+
+    if rows_all is None or rows_all.empty:
+        rows_all = rows_all_base.copy()
 
     if order_by in ("alarm", "alarm_hours", "hours", "alarm_hours_pct"):
         if stair_sort_cols_pct and ("__last_off_pct" in rows_all.columns) and ("__last_score_pct" in rows_all.columns):

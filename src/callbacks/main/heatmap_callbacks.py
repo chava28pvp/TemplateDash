@@ -6,6 +6,7 @@ from hashlib import md5
 import json
 import time
 import logging
+import threading
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
 
@@ -34,7 +35,8 @@ from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
 # Acceso a datos
 from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap
-from src.config import PROFILE_MAIN_CALLBACKS
+from src.config import PROFILE_MAIN_CALLBACKS, PREWARM_MAIN_CACHE, PREWARM_MAIN_PAGE_SIZE
+from src.Utils.utils_time import default_date_str
 
 
 # =========================================================
@@ -66,6 +68,8 @@ _HI_PAYLOAD_CACHE = {}
 _HI_PAYLOAD_TTL = 120  # seg
 _HI_FIG_CACHE = {}
 _HI_FIG_TTL = 120  # seg
+_PREWARM_LOCK = threading.Lock()
+_PREWARM_STARTED = False
 logger = logging.getLogger(__name__)
 
 
@@ -243,6 +247,168 @@ def _fetch_alarm_meta_cached(today_str, vendors, clusters, networks, technologie
     data = (df_meta, keys)
     _cache_set(_ALARM_META_CACHE, key, data)
     return data
+
+
+def prewarm_main_cache(
+    *,
+    fecha: str | None = None,
+    page_size: int | None = None,
+    order_by: str = "alarm_hours",
+):
+    """
+    Calienta en segundo plano los caches del main para la fecha por defecto:
+    - df_ts 48h
+    - alarm_meta
+    - ranking y payload del heatmap principal
+    - payloads/figuras de histogramas PS y CS
+    """
+    if not PREWARM_MAIN_CACHE:
+        return
+
+    target_date = fecha or default_date_str()
+    limit = int(page_size or PREWARM_MAIN_PAGE_SIZE or 50)
+
+    perf_start = time.perf_counter()
+    perf_marks = []
+    try:
+        today_dt = datetime.strptime(target_date, "%Y-%m-%d")
+    except Exception:
+        today_dt = datetime.utcnow()
+        target_date = today_dt.strftime("%Y-%m-%d")
+    yday_str = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    networks = technologies = vendors = clusters = None
+
+    df_ts = _fetch_df_ts_cached(target_date, yday_str, networks, technologies, vendors, clusters)
+    perf_marks.append(("df_ts", time.perf_counter()))
+
+    nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) if (
+        df_ts is not None and not df_ts.empty and "network" in df_ts.columns
+    ) else []
+
+    df_meta_heat, alarm_keys_set = _fetch_alarm_meta_cached(
+        target_date,
+        vendors,
+        clusters,
+        nets_heat,
+        technologies,
+    )
+    perf_marks.append(("alarm_meta", time.perf_counter()))
+
+    cfg = UM_MANAGER.config()
+
+    if df_meta_heat is not None and not df_meta_heat.empty and nets_heat:
+        rank_key = _hm_key(target_date, networks, technologies, vendors, clusters, 0, 0) + f"|ord={order_by}|rank"
+        ranked_rows, rank_meta = build_heatmap_ranked_rows_fast(
+            df_meta=df_meta_heat,
+            df_ts=df_ts,
+            UMBRAL_CFG=cfg,
+            networks=nets_heat,
+            valores_order=("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB"),
+            today=target_date,
+            yday=yday_str,
+            alarm_keys=alarm_keys_set,
+            alarm_only=False,
+            order_by=order_by,
+        )
+        _cache_set(_HM_RANK_CACHE, rank_key, (ranked_rows, rank_meta))
+        perf_marks.append(("ranking", time.perf_counter()))
+
+        state_key = _hm_key(target_date, networks, technologies, vendors, clusters, 0, limit) + f"|ord={order_by}"
+        pct_payload, unit_payload, page_info = build_heatmap_payloads_from_ranked_rows(
+            ranked_rows,
+            df_ts=df_ts,
+            UMBRAL_CFG=cfg,
+            rank_meta=rank_meta,
+            offset=0,
+            limit=limit,
+        )
+        _cache_set(_HM_PAYLOAD_CACHE, state_key, (pct_payload, unit_payload, page_info))
+        perf_marks.append(("heatmap_payload", time.perf_counter()))
+
+        for domain, valores, traffic in [
+            ("PS", _valores_by_domain("PS"), "ps_traff_gb"),
+            ("CS", _valores_by_domain("CS"), "cs_traff_erl"),
+        ]:
+            base_state_key = _hm_key(target_date, networks, technologies, vendors, clusters, 0, limit) + f"|dom={domain}"
+            pct_p, unit_p, page_info = build_histo_payloads_fast(
+                df_meta=df_meta_heat,
+                df_ts=df_ts,
+                UMBRAL_CFG=cfg,
+                networks=nets_heat,
+                valores_order=valores,
+                today=target_date,
+                yday=yday_str,
+                alarm_keys=alarm_keys_set,
+                alarm_only=False,
+                offset=0,
+                limit=limit,
+                traffic_metric=traffic,
+            )
+            _cache_set(_HI_PAYLOAD_CACHE, base_state_key, (pct_p, unit_p, page_info))
+
+            state_key = f"{base_state_key}|selw=None"
+            fig_pct = build_overlay_waves_figure(
+                pct_p,
+                UMBRAL_CFG=cfg,
+                mode="severity",
+                height=420,
+                smooth_win=3,
+                opacity=0.28,
+                line_width=1.2,
+                decimals=2,
+                show_yaxis_ticks=True,
+                selected_wave=None,
+                show_traffic_bars=True if domain == "PS" else False,
+                traffic_agg="mean",
+                traffic_decimals=1,
+            ) if pct_p else go.Figure()
+
+            fig_unit = build_overlay_waves_figure(
+                unit_p,
+                UMBRAL_CFG=cfg,
+                mode="progress",
+                height=420,
+                smooth_win=3,
+                opacity=0.25,
+                line_width=1.2,
+                decimals=0,
+                show_yaxis_ticks=True,
+                selected_wave=None,
+                show_traffic_bars=False,
+            ) if unit_p else go.Figure()
+            _cache_set(_HI_FIG_CACHE, state_key, (fig_pct, fig_unit))
+        perf_marks.append(("histos", time.perf_counter()))
+
+        _perf_log(
+            "prewarm_main_cache",
+            perf_start,
+            perf_marks,
+            {
+                "date": target_date,
+                "rows_ts": 0 if df_ts is None else len(df_ts),
+                "rows_ranked": 0 if ranked_rows is None else len(ranked_rows),
+                "page_size": limit,
+            },
+        )
+
+
+def start_main_prewarm_thread():
+    global _PREWARM_STARTED
+    if not PREWARM_MAIN_CACHE:
+        return
+    with _PREWARM_LOCK:
+        if _PREWARM_STARTED:
+            return
+        _PREWARM_STARTED = True
+
+    t = threading.Thread(
+        target=prewarm_main_cache,
+        kwargs={"fecha": default_date_str(), "page_size": PREWARM_MAIN_PAGE_SIZE},
+        daemon=True,
+        name="main-cache-prewarm",
+    )
+    t.start()
 
 
 def _valores_by_domain(domain: str):
@@ -740,13 +906,13 @@ def heatmap_callbacks(app):
     # -------------------------------------------------
     @app.callback(
         Output("histo-trigger", "data"),
-        Input("f-fecha", "date"),
-        Input("applied-filters-store", "data"),
-        Input("histo-page-state", "data"),
+        Input("heatmap-page-info", "data"),
         Input("topoff-link-state", "data"),
         prevent_initial_call=False,
     )
-    def histo_trigger_controller(_fecha, _applied_filters, _page_state, _link_state):
+    def histo_trigger_controller(_heatmap_page_info, _link_state):
+        if not _heatmap_page_info:
+            return no_update
         return {"ts": time.time()}
 
     # -------------------------------------------------

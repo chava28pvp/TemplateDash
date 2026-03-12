@@ -8,7 +8,7 @@ from src.callbacks.topoff.heatmap_callbacks import topoff_heatmap_callbacks
 from src.layout import serve_layout
 from src.callbacks.main.callbacks import register_callbacks
 from src.callbacks.umbrales_callbacks import umbral_callbacks
-from src.callbacks.main.heatmap_callbacks import heatmap_callbacks
+from src.callbacks.main.heatmap_callbacks import heatmap_callbacks, start_main_prewarm_thread
 from src.callbacks.topoff.topoff_callback import register_topoff_callbacks
 # Tema Bootstrap (elige otro si quieres: LUX, COSMO, CYBORG, etc.)
 cache = Cache(config={
@@ -32,6 +32,7 @@ register_topoff_callbacks(app)
 topoff_heatmap_callbacks(app)
 export_topoff_callback(app)
 integrity_callbacks(app)
+start_main_prewarm_thread()
 
 app.clientside_callback(
     """

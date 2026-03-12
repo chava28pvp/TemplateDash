@@ -452,15 +452,21 @@ def build_heatmap_payloads_topoff(
                     wide = wide.rename(columns={c: f"__p_{int(c):03d}" for c in wide.columns if isinstance(c, (int, np.integer))})
                     rows_all = rows_all.merge(wide, on=grp_cols, how="left")
 
-                # Asegura columnas __p_000..__p_191
-                for off in range(0, 192):
-                    c = f"__p_{off:03d}"
-                    if c not in rows_all.columns:
-                        rows_all[c] = np.nan
+                # Asegura columnas __p_000..__p_191 en bloque para evitar fragmentación
+                missing_cols = {
+                    f"__p_{off:03d}": np.nan
+                    for off in range(0, 192)
+                    if f"__p_{off:03d}" not in rows_all.columns
+                }
+                if missing_cols:
+                    rows_all = pd.concat([rows_all, pd.DataFrame(missing_cols, index=rows_all.index)], axis=1)
 
                 stair_sort_cols = [f"__p_{off:03d}" for off in range(191, -1, -1)]
-                for c in stair_sort_cols:
-                    rows_all[c] = pd.to_numeric(rows_all[c], errors="coerce").fillna(float("-inf"))
+                rows_all.loc[:, stair_sort_cols] = (
+                    rows_all[stair_sort_cols]
+                    .apply(pd.to_numeric, errors="coerce")
+                    .fillna(float("-inf"))
+                )
 
                 # Sort “main-like”: con interés primero, luego más reciente, luego peor score
                 rows_all = rows_all.sort_values(

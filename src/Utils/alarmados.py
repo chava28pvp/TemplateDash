@@ -129,24 +129,14 @@ def add_alarm_streak(df: pd.DataFrame) -> pd.DataFrame:
     sort_cols = [c for c in (KEY_COLS + TIME_COLS) if c in df.columns]
     df = df.sort_values(sort_cols)
 
-    # 3) calcular racha dentro de cada grupo
-    def _compute_group_streak(group: pd.DataFrame) -> pd.DataFrame:
-        streak = 0
-        out = []
-        for flag in group["has_alarm"]:
-            if flag:
-                streak += 1
-            else:
-                streak = 0
-            out.append(streak)
-        group = group.copy()
-        group["alarmas"] = out
-        return group
-
-    df = (
-        df.groupby(KEY_COLS, group_keys=False)
-          .apply(_compute_group_streak)
-          .reset_index(drop=True)
+    # 3) calcular racha dentro de cada grupo sin groupby.apply
+    grp_id = df.groupby(KEY_COLS, sort=False).ngroup()
+    reset_id = (~df["has_alarm"]).groupby(grp_id, sort=False).cumsum()
+    df["alarmas"] = (
+        df["has_alarm"].astype(int)
+        .groupby([grp_id, reset_id], sort=False)
+        .cumsum()
+        .astype(int)
     )
 
     return df
@@ -210,28 +200,22 @@ def add_ucrr_streak_topoff(df: pd.DataFrame) -> pd.DataFrame:
     if sort_cols:
         df = df.sort_values(sort_cols)
 
-    # 3) calcular racha dentro de cada grupo
-    def _compute_group_streak(group: pd.DataFrame) -> pd.DataFrame:
-        streak = 0
-        out = []
-        for flag in group["has_alarm_topoff"]:
-            if flag:
-                streak += 1
-            else:
-                streak = 0
-            out.append(streak)
-        group = group.copy()
-        group["ucrr"] = out
-        return group
-
     if group_cols:
-        df = (
-            df.groupby(group_cols, group_keys=False)
-              .apply(_compute_group_streak)
-              .reset_index(drop=True)
+        grp_id = df.groupby(group_cols, sort=False).ngroup()
+        reset_id = (~df["has_alarm_topoff"]).groupby(grp_id, sort=False).cumsum()
+        df["ucrr"] = (
+            df["has_alarm_topoff"].astype(int)
+            .groupby([grp_id, reset_id], sort=False)
+            .cumsum()
+            .astype(int)
         )
     else:
-        # si no hay columnas de grupo, aplica racha global
-        df = _compute_group_streak(df)
+        reset_id = (~df["has_alarm_topoff"]).cumsum()
+        df["ucrr"] = (
+            df["has_alarm_topoff"].astype(int)
+            .groupby(reset_id, sort=False)
+            .cumsum()
+            .astype(int)
+        )
 
     return df

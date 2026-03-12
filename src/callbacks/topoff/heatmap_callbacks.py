@@ -135,7 +135,11 @@ def _fetch_df_ts_topoff_cached(today_str, yday_str, technologies, vendors, clust
     df_today = _fetch_topoff_all(today_str, technologies, vendors, clusters, sites, rncs, nodebs)
     df_yday = _fetch_topoff_all(yday_str, technologies, vendors, clusters, sites, rncs, nodebs)
 
-    df_ts = pd.concat([df_today, df_yday], ignore_index=True, sort=False)
+    frames = [
+        df for df in (df_today, df_yday)
+        if df is not None and not df.empty
+    ]
+    df_ts = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
     _DFTS_TOPOFF_CACHE[key] = {"df": df_ts, "ts": now}
     return df_ts
 
