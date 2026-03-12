@@ -531,9 +531,6 @@ def _build_histograma_for_domain(
     )
     perf_marks.append(("df_ts", time.perf_counter()))
 
-    if (df_ts is None or df_ts.empty) and trigger_source == "data_ready" and _LAST_HI_KEY.get(domain) is not None:
-        return None, None, None, True
-
     # -------- Redes efectivas para el heat/histo --------
     if networks:
         nets_heat = networks
@@ -578,9 +575,6 @@ def _build_histograma_for_domain(
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
         _cache_set(_HI_PAYLOAD_CACHE, base_state_key, (pct_payload, unit_payload, page_info))
     perf_marks.append(("payloads", time.perf_counter()))
-
-    if not (pct_payload or unit_payload) and trigger_source == "data_ready" and _LAST_HI_KEY.get(domain) is not None:
-        return None, None, None, True
 
     # -------- Figuras overlay (sin selected_x) --------
     cached_figs = _cache_get(_HI_FIG_CACHE, state_key, _HI_FIG_TTL)
@@ -705,9 +699,6 @@ def heatmap_callbacks(app):
         )
         perf_marks.append(("df_ts", time.perf_counter()))
 
-        if df_ts.empty and trigger_source == "data_ready" and _LAST_HEATMAP_KEY is not None:
-            return (no_update, no_update, no_update, no_update, no_update, no_update)
-
         # -------- Redes efectivas --------
         if networks:
             nets_heat = networks
@@ -769,9 +760,6 @@ def heatmap_callbacks(app):
 
             _cache_set(_HM_PAYLOAD_CACHE, state_key, (pct_payload, unit_payload, page_info))
         perf_marks.append(("payloads", time.perf_counter()))
-
-        if not (pct_payload or unit_payload) and trigger_source == "data_ready" and _LAST_HEATMAP_KEY is not None:
-            return (no_update, no_update, no_update, no_update, no_update, no_update)
 
         # -------- Altura del heatmap (para que cuadre con #filas) --------
         nrows = len((pct_payload or unit_payload or {}).get("y") or [])

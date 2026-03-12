@@ -817,11 +817,6 @@ def register_callbacks(app):
         if not hh or not today:
             return no_update, no_update
 
-        last_manual_ts = float((manual_store or {}).get("last_manual_ts") or 0)
-
-        if last_manual_ts > 0 and time.time() < (last_manual_ts + HOLD_SECONDS):
-            return no_update, no_update
-
         if current_hour == hh and current_date == today:
             return no_update, no_update
 

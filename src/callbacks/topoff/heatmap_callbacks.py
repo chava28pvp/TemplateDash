@@ -223,9 +223,6 @@ def _run_topoff_histo_for_domain(
         sites, rncs, nodebs, revision=trigger_revision
     )
 
-    if (df_ts is None or df_ts.empty) and trigger_source == "data_ready" and _LAST_TOPOFF_HI_KEY.get(dom) is not None:
-        return None, None, None, True
-
     # Meta + set de alarm keys (para marcar alarmados)
     df_meta_topoff, alarm_keys_set = fetch_alarm_meta_for_topoff(
         fecha=today_str,
@@ -254,9 +251,6 @@ def _run_topoff_histo_for_domain(
     else:
         pct_payload = unit_payload = None
         page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
-
-    if not (pct_payload or unit_payload) and trigger_source == "data_ready" and _LAST_TOPOFF_HI_KEY.get(dom) is not None:
-        return None, None, None, True
 
     # Figuras
     fig_pct = build_overlay_waves_figure_topoff(
@@ -383,9 +377,6 @@ def topoff_heatmap_callbacks(app):
             sites, rncs, nodebs, revision=trigger_revision
         )
 
-        if df_ts.empty and trigger_source == "data_ready" and _LAST_TOPOFF_HEATMAP_KEY is not None:
-            return (no_update, no_update, no_update, no_update, no_update, no_update)
-
         # Meta de alarmados (para ordenar y marcar alarmas)
         df_meta_topoff, alarm_keys_set = fetch_alarm_meta_for_topoff(
             fecha=today_str,
@@ -420,9 +411,6 @@ def topoff_heatmap_callbacks(app):
                 "showing": 0,
                 "height": 300,
             }
-
-        if not (pct_payload or unit_payload) and trigger_source == "data_ready" and _LAST_TOPOFF_HEATMAP_KEY is not None:
-            return (no_update, no_update, no_update, no_update, no_update, no_update)
 
         # Altura alineada a la cantidad de filas de la página
         hm_height = int(page_info.get("height") or 300)

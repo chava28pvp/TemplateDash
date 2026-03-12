@@ -113,7 +113,9 @@ def integrity_callbacks(app):
 
         # ---------- df_ts (ayer+hoy) SIN hora ----------
         # Reutiliza cache para no volver a consultar cada vez
-        df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
+        df_ts = _fetch_df_ts_cached(
+            today_str, yday_str, networks, technologies, vendors, clusters, revision=trigger_revision
+        )
         df_ts = df_ts if isinstance(df_ts, pd.DataFrame) else pd.DataFrame()
 
         # Si no hay datos, devuelve UI vacía
@@ -264,7 +266,13 @@ def integrity_callbacks(app):
         # Si el panel está cerrado, no dispares el render pesado
         if not is_open:
             return no_update
-        return {"ts": time.time()}
+        ready = _[0] if _ else None
+        return {
+            "ts": time.time(),
+            "source": "data_ready" if ctx.triggered_id == "data-ready-store" else "ui",
+            "slot": ((ready or {}).get("slot") or {}),
+            "updated_at": (ready or {}).get("updated_at"),
+        }
 
     # -------------------------------------------------
     # Toggle del panel de integridad (abre/cierra collapse)
@@ -337,3 +345,8 @@ def integrity_callbacks(app):
         dates_children, hours_children = _build_time_header_children_by_dates(selected_date)
         # % y UNIT comparten la misma línea temporal
         return dates_children, hours_children, dates_children, hours_children
+        trigger_revision = (
+            f"{((_trigger or {}).get('slot') or {}).get('fecha') or ''}|"
+            f"{((_trigger or {}).get('slot') or {}).get('hora') or ''}|"
+            f"{(_trigger or {}).get('updated_at') or ''}"
+        )
