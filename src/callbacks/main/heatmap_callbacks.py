@@ -103,7 +103,7 @@ CS_VALORES = ("CS_RRC", "CS_DROP", "CS_RAB")
 # HELPERS GENERALES
 # =========================================================
 
-def _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit):
+def _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit, revision=None):
     """
     Genera una "firma" (hash md5) del estado actual del heatmap:
     - filtros
@@ -123,6 +123,7 @@ def _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit):
         "clusters": _norm(clusters),
         "offset": int(offset),
         "limit": int(limit),
+        "revision": revision,
     }
     return md5(json.dumps(obj, sort_keys=True).encode()).hexdigest()
 
@@ -132,7 +133,7 @@ def _ensure_df(x):
     return x if isinstance(x, pd.DataFrame) else pd.DataFrame()
 
 
-def _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters):
+def _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters, revision=None):
     """
     Trae el dataset de serie de tiempo (TS) del día de HOY y AYER:
     - fetch_kpis(... hoy ...)
@@ -147,7 +148,8 @@ def _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, cl
         tuple(sorted(networks or [])),
         tuple(sorted(technologies or [])),
         tuple(sorted(vendors or [])),
-        tuple(sorted(clusters or []))
+        tuple(sorted(clusters or [])),
+        revision,
     )
     now = time.time()
     hit = _DFTS_CACHE.get(key)
@@ -247,6 +249,11 @@ def _fetch_alarm_meta_cached(today_str, vendors, clusters, networks, technologie
     data = (df_meta, keys)
     _cache_set(_ALARM_META_CACHE, key, data)
     return data
+
+
+def _trigger_revision(trigger_data):
+    slot = (trigger_data or {}).get("slot") or {}
+    return f"{slot.get('fecha') or ''}|{slot.get('hora') or ''}|{(trigger_data or {}).get('updated_at') or ''}"
 
 
 def prewarm_main_cache(
@@ -426,6 +433,7 @@ def _build_histograma_for_domain(
     clusters,
     hm_page_state,
     link_state,
+    trigger_data=None,
 ):
     """
     Construye 2 figuras (pct y unit) del histograma overlay para el dominio:
@@ -442,6 +450,8 @@ def _build_histograma_for_domain(
 
     # selected_wave viene de click en histograma (series_key)
     selected_wave = (sel_wave or {}).get("series_key")
+    trigger_source = (trigger_data or {}).get("source")
+    trigger_revision = _trigger_revision(trigger_data)
 
     # Normaliza filtros
     networks = _as_list(networks)
@@ -484,6 +494,7 @@ def _build_histograma_for_domain(
             clusters_effective,
             offset,
             limit,
+            revision=trigger_revision,
         )
         + f"|dom={domain}"
     )
@@ -516,8 +527,12 @@ def _build_histograma_for_domain(
         technologies_effective,
         vendors_effective,
         clusters_effective,
+        revision=trigger_revision,
     )
     perf_marks.append(("df_ts", time.perf_counter()))
+
+    if (df_ts is None or df_ts.empty) and trigger_source == "data_ready" and _LAST_HI_KEY.get(domain) is not None:
+        return None, None, None, True
 
     # -------- Redes efectivas para el heat/histo --------
     if networks:
@@ -563,6 +578,9 @@ def _build_histograma_for_domain(
             page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
         _cache_set(_HI_PAYLOAD_CACHE, base_state_key, (pct_payload, unit_payload, page_info))
     perf_marks.append(("payloads", time.perf_counter()))
+
+    if not (pct_payload or unit_payload) and trigger_source == "data_ready" and _LAST_HI_KEY.get(domain) is not None:
+        return None, None, None, True
 
     # -------- Figuras overlay (sin selected_x) --------
     cached_figs = _cache_get(_HI_FIG_CACHE, state_key, _HI_FIG_TTL)
@@ -636,6 +654,8 @@ def heatmap_callbacks(app):
         global _LAST_HEATMAP_KEY
         perf_start = time.perf_counter()
         perf_marks = []
+        trigger_source = (_trigger or {}).get("source")
+        trigger_revision = _trigger_revision(_trigger)
 
         # Normaliza filtros
         applied_filters = applied_filters or {}
@@ -655,7 +675,9 @@ def heatmap_callbacks(app):
         hm_order_by_norm = str(hm_order_by_norm).strip().lower()
 
         # State key incluye filtros + página + orden
-        state_key = _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit) + f"|ord={hm_order_by_norm}"
+        state_key = _hm_key(
+            fecha, networks, technologies, vendors, clusters, offset, limit, revision=trigger_revision
+        ) + f"|ord={hm_order_by_norm}"
 
         # Si no cambió nada, no re-renderiza
         if _LAST_HEATMAP_KEY == state_key:
@@ -678,8 +700,13 @@ def heatmap_callbacks(app):
         yday_str = yday_dt.strftime("%Y-%m-%d")
 
         # -------- Datos TS (cacheados) --------
-        df_ts = _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters)
+        df_ts = _fetch_df_ts_cached(
+            today_str, yday_str, networks, technologies, vendors, clusters, revision=trigger_revision
+        )
         perf_marks.append(("df_ts", time.perf_counter()))
+
+        if df_ts.empty and trigger_source == "data_ready" and _LAST_HEATMAP_KEY is not None:
+            return (no_update, no_update, no_update, no_update, no_update, no_update)
 
         # -------- Redes efectivas --------
         if networks:
@@ -698,7 +725,9 @@ def heatmap_callbacks(app):
         )
         perf_marks.append(("alarm_meta", time.perf_counter()))
 
-        rank_key = _hm_key(fecha, networks, technologies, vendors, clusters, 0, 0) + f"|ord={hm_order_by_norm}|rank"
+        rank_key = _hm_key(
+            fecha, networks, technologies, vendors, clusters, 0, 0, revision=trigger_revision
+        ) + f"|ord={hm_order_by_norm}|rank"
         rank_cached = _cache_get(_HM_RANK_CACHE, rank_key, _HM_RANK_TTL)
         if rank_cached is not None:
             ranked_rows, rank_meta = rank_cached
@@ -740,6 +769,9 @@ def heatmap_callbacks(app):
 
             _cache_set(_HM_PAYLOAD_CACHE, state_key, (pct_payload, unit_payload, page_info))
         perf_marks.append(("payloads", time.perf_counter()))
+
+        if not (pct_payload or unit_payload) and trigger_source == "data_ready" and _LAST_HEATMAP_KEY is not None:
+            return (no_update, no_update, no_update, no_update, no_update, no_update)
 
         # -------- Altura del heatmap (para que cuadre con #filas) --------
         nrows = len((pct_payload or unit_payload or {}).get("y") or [])
@@ -801,7 +833,12 @@ def heatmap_callbacks(app):
     )
     def heatmap_trigger_controller(_ready, _fecha, _applied_filters, _page_state, _ord):
         # Un timestamp basta para “forzar” la actualización
-        return {"ts": time.time()}
+        return {
+            "ts": time.time(),
+            "source": "data_ready" if ctx.triggered_id == "data-ready-store" else "ui",
+            "slot": ((_ready or {}).get("slot") or {}),
+            "updated_at": (_ready or {}).get("updated_at"),
+        }
 
     # -------------------------------------------------
     # Reset de paginación del heatmap cuando cambian filtros/tamaño/orden
@@ -868,7 +905,7 @@ def heatmap_callbacks(app):
         vendors = _as_list(_applied_value(applied_filters, "vendor"))
         clusters = _as_list(_applied_value(applied_filters, "cluster"))
         fig_pct, fig_unit, page_info, is_cache_hit = _build_histograma_for_domain(
-            "PS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state
+            "PS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state, _trigger
         )
         # Si fue “cache hit” no actualizamos nada
         if is_cache_hit:
@@ -896,7 +933,7 @@ def heatmap_callbacks(app):
         vendors = _as_list(_applied_value(applied_filters, "vendor"))
         clusters = _as_list(_applied_value(applied_filters, "cluster"))
         fig_pct, fig_unit, _page_info, is_cache_hit = _build_histograma_for_domain(
-            "CS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state
+            "CS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state, _trigger
         )
         if is_cache_hit:
             return no_update, no_update
@@ -915,7 +952,12 @@ def heatmap_callbacks(app):
     def histo_trigger_controller(_ready, _heatmap_page_info, _link_state):
         if not _heatmap_page_info:
             return no_update
-        return {"ts": time.time()}
+        return {
+            "ts": time.time(),
+            "source": "data_ready" if ctx.triggered_id == "data-ready-store" else "ui",
+            "slot": ((_ready or {}).get("slot") or {}),
+            "updated_at": (_ready or {}).get("updated_at"),
+        }
 
     # -------------------------------------------------
     # Reset de paginación de histograma cuando cambian filtros/tamaño/link

@@ -55,7 +55,7 @@ def _as_list(x):
     return [x]
 
 
-def _hm_key_topoff(fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit):
+def _hm_key_topoff(fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit, revision=None):
     """
     Crea una llave hash (md5) que representa el “estado” actual del heatmap TopOff.
     Si el estado no cambia, no re-renderizamos (optimización).
@@ -75,6 +75,7 @@ def _hm_key_topoff(fecha, technologies, vendors, clusters, sites, rncs, nodebs, 
         "nodeb": _norm(nodebs),
         "offset": int(offset),
         "limit": int(limit),
+        "revision": revision,
     }
     return md5(json.dumps(obj, sort_keys=True).encode()).hexdigest()
 
@@ -112,7 +113,7 @@ def _fetch_topoff_all(fecha, technologies, vendors, clusters, sites, rncs, nodeb
     return _ensure_df(df)
 
 
-def _fetch_df_ts_topoff_cached(today_str, yday_str, technologies, vendors, clusters, sites, rncs, nodebs):
+def _fetch_df_ts_topoff_cached(today_str, yday_str, technologies, vendors, clusters, sites, rncs, nodebs, revision=None):
     """
     Construye df_ts = df(hoy) + df(ayer) (sin hora), cacheado por filtros.
     Esto alimenta heatmap/histo y evita pegarle a BD en cada repaint.
@@ -126,6 +127,7 @@ def _fetch_df_ts_topoff_cached(today_str, yday_str, technologies, vendors, clust
         tuple(sorted(sites or [])),
         tuple(sorted(rncs or [])),
         tuple(sorted(nodebs or [])),
+        revision,
     )
     now = time.time()
     hit = _DFTS_TOPOFF_CACHE.get(key)
@@ -149,6 +151,11 @@ def _valores_by_domain_topoff(domain: str):
     return TOPOFF_CS_VALORES if str(domain).upper() == "CS" else TOPOFF_PS_VALORES
 
 
+def _trigger_revision_topoff(trigger_data):
+    slot = (trigger_data or {}).get("slot") or {}
+    return f"{slot.get('fecha') or ''}|{slot.get('hora') or ''}|{(trigger_data or {}).get('updated_at') or ''}"
+
+
 def _run_topoff_histo_for_domain(
     domain: str,
     sel_wave,
@@ -160,6 +167,7 @@ def _run_topoff_histo_for_domain(
     rncs,
     nodebs,
     hi_page_state,
+    trigger_data=None,
 ):
     """
     Construye y regresa:
@@ -171,6 +179,8 @@ def _run_topoff_histo_for_domain(
     global _LAST_TOPOFF_HI_KEY
 
     selected_wave = (sel_wave or {}).get("series_key")
+    trigger_source = (trigger_data or {}).get("source")
+    trigger_revision = _trigger_revision_topoff(trigger_data)
 
     # Normaliza filtros
     technologies = _as_list(technologies)
@@ -190,7 +200,7 @@ def _run_topoff_histo_for_domain(
 
     # Llave de estado: filtros + paginado + wave seleccionada + dominio
     state_key = _hm_key_topoff(
-        fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit
+        fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit, revision=trigger_revision
     ) + f"|selw={selected_wave}|dom={dom}"
 
     # Evita re-render idéntico (excepto si el trigger fue click a wave)
@@ -210,8 +220,11 @@ def _run_topoff_histo_for_domain(
     df_ts = _fetch_df_ts_topoff_cached(
         today_str, yday_str,
         technologies, vendors, clusters,
-        sites, rncs, nodebs
+        sites, rncs, nodebs, revision=trigger_revision
     )
+
+    if (df_ts is None or df_ts.empty) and trigger_source == "data_ready" and _LAST_TOPOFF_HI_KEY.get(dom) is not None:
+        return None, None, None, True
 
     # Meta + set de alarm keys (para marcar alarmados)
     df_meta_topoff, alarm_keys_set = fetch_alarm_meta_for_topoff(
@@ -241,6 +254,9 @@ def _run_topoff_histo_for_domain(
     else:
         pct_payload = unit_payload = None
         page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+
+    if not (pct_payload or unit_payload) and trigger_source == "data_ready" and _LAST_TOPOFF_HI_KEY.get(dom) is not None:
+        return None, None, None, True
 
     # Figuras
     fig_pct = build_overlay_waves_figure_topoff(
@@ -325,6 +341,8 @@ def topoff_heatmap_callbacks(app):
           - page_info (para paginado/altura)
         """
         global _LAST_TOPOFF_HEATMAP_KEY
+        trigger_source = (_trigger or {}).get("source")
+        trigger_revision = _trigger_revision_topoff(_trigger)
 
         # Normaliza filtros
         technologies = _as_list(technologies)
@@ -342,7 +360,7 @@ def topoff_heatmap_callbacks(app):
 
         # Llave de estado (incluye order_by) para evitar recomputar si todo es igual
         state_key = _hm_key_topoff(
-            fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit
+            fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit, revision=trigger_revision
         ) + f"|ord={hm_order_by or 'alarm_bins_pct'}"
 
         if _LAST_TOPOFF_HEATMAP_KEY == state_key:
@@ -362,8 +380,11 @@ def topoff_heatmap_callbacks(app):
         df_ts = _fetch_df_ts_topoff_cached(
             today_str, yday_str,
             technologies, vendors, clusters,
-            sites, rncs, nodebs
+            sites, rncs, nodebs, revision=trigger_revision
         )
+
+        if df_ts.empty and trigger_source == "data_ready" and _LAST_TOPOFF_HEATMAP_KEY is not None:
+            return (no_update, no_update, no_update, no_update, no_update, no_update)
 
         # Meta de alarmados (para ordenar y marcar alarmas)
         df_meta_topoff, alarm_keys_set = fetch_alarm_meta_for_topoff(
@@ -399,6 +420,9 @@ def topoff_heatmap_callbacks(app):
                 "showing": 0,
                 "height": 300,
             }
+
+        if not (pct_payload or unit_payload) and trigger_source == "data_ready" and _LAST_TOPOFF_HEATMAP_KEY is not None:
+            return (no_update, no_update, no_update, no_update, no_update, no_update)
 
         # Altura alineada a la cantidad de filas de la página
         hm_height = int(page_info.get("height") or 300)
@@ -453,9 +477,15 @@ def topoff_heatmap_callbacks(app):
         Input("topoff-hm-order-by", "value"),
         prevent_initial_call=False,  # bootstrap
     )
-    def topoff_heatmap_trigger_controller(*_):
+    def topoff_heatmap_trigger_controller(*args):
         """Store “dummy” para disparar el callback grande sin loops raros."""
-        return {"ts": time.time()}
+        ready = args[0] if args else None
+        return {
+            "ts": time.time(),
+            "source": "data_ready" if ctx.triggered_id == "data-ready-store" else "ui",
+            "slot": ((ready or {}).get("slot") or {}),
+            "updated_at": (ready or {}).get("updated_at"),
+        }
 
     # -------------------------------------------------
     # C) Reset page heatmap en filtros / page-size / order
@@ -563,6 +593,7 @@ def topoff_heatmap_callbacks(app):
             rncs,
             nodebs,
             hi_page_state,
+            _trigger,
         )
         if is_cache:
             return no_update, no_update, no_update
@@ -610,6 +641,7 @@ def topoff_heatmap_callbacks(app):
             rncs,
             nodebs,
             hi_page_state,
+            _trigger,
         )
         if is_cache:
             return no_update, no_update
@@ -842,6 +874,12 @@ def topoff_heatmap_callbacks(app):
         Input("topoff-heatmap-page-state", "data"),  # paginado compartido
         prevent_initial_call=False,  # bootstrap
     )
-    def topoff_histo_trigger_controller(*_):
+    def topoff_histo_trigger_controller(*args):
         """Store dummy que dispara el refresh de histogramas."""
-        return {"ts": time.time()}
+        ready = args[0] if args else None
+        return {
+            "ts": time.time(),
+            "source": "data_ready" if ctx.triggered_id == "data-ready-store" else "ui",
+            "slot": ((ready or {}).get("slot") or {}),
+            "updated_at": (ready or {}).get("updated_at"),
+        }
