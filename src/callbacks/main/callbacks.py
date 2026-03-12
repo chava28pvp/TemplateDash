@@ -99,6 +99,27 @@ def _keep_valid(selected, valid_values):
     filtered = [v for v in selected if v in valid_set]
     return filtered
 
+
+def _normalize_hour_to_options(hour_value, hour_options):
+    """
+    Si la hora no existe exactamente en el dropdown, la baja a la hora completa previa.
+    Ejemplo: 10:30:00 -> 10:00:00.
+    """
+    if not hour_value:
+        return None
+
+    opt_values = {(o["value"] if isinstance(o, dict) else o) for o in (hour_options or [])}
+    if hour_value in opt_values:
+        return hour_value
+
+    try:
+        hh = str(hour_value).strip()[:2]
+        normalized = f"{int(hh):02d}:00:00"
+    except Exception:
+        return None
+
+    return normalized if normalized in opt_values else None
+
 def _compute_progress_max_for_filters(fecha, hora, networks, technologies, vendors, clusters):
     """
         Calcula el máximo por columna "progress" para los filtros actuales.
@@ -487,6 +508,7 @@ def register_callbacks(app):
         Output("page-indicator", "children"),
         Output("total-rows-banner", "children"),
         Output("table-page-data", "data"),
+        Input("data-ready-store", "data"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         Input("applied-filters-store", "data"),
@@ -496,7 +518,7 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def refresh_table(
-            fecha, hora, applied_filters,
+            _ready, fecha, hora, applied_filters,
             sort_state, page_state,
             main_ctx
     ):
@@ -790,32 +812,16 @@ def register_callbacks(app):
            - El hold dura HOLD_SECONDS o hasta el siguiente cambio de hora (lo que ocurra primero)
            """
         slot = (data_ready or {}).get("slot") or {}
-        hh = slot.get("hora")
+        hh = _normalize_hour_to_options(slot.get("hora"), hour_options)
         today = slot.get("fecha")
         if not hh or not today:
             return no_update, no_update
 
-        # Validar que la hora actual exista en options
-        opt_values = {(o["value"] if isinstance(o, dict) else o) for o in (hour_options or [])}
-        if opt_values and hh not in opt_values:
-            return no_update, no_update
-
-        # 1) Primer arranque: fuerza "ahora"
-
-        # 2) Hold inteligente
         last_manual_ts = float((manual_store or {}).get("last_manual_ts") or 0)
-
-        # Calcula el timestamp del siguiente cambio de hora local
-        # Convertimos a epoch "naive"
-
-        # Hold hasta:
-        # - X segundos desde edición manual
-        # - o el siguiente cambio de hora (lo que ocurra primero)
 
         if last_manual_ts > 0 and time.time() < (last_manual_ts + HOLD_SECONDS):
             return no_update, no_update
 
-        # 3) Si ya pasó el hold, actualiza a "ahora"
         if current_hour == hh and current_date == today:
             return no_update, no_update
 

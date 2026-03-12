@@ -253,6 +253,7 @@ def integrity_callbacks(app):
     @app.callback(
         Output("heatmap-integrity-trigger", "data"),
         Input("collapse-hm-int", "is_open"),
+        Input("data-ready-store", "data"),
         Input("f-fecha", "date"),
         Input("applied-filters-store", "data"),
         Input("heatmap-integrity-page-state", "data"),

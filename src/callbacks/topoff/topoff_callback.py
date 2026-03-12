@@ -149,6 +149,7 @@ def register_topoff_callbacks(app):
         Output("topoff-table-container", "children"),
         Output("topoff-page-indicator", "children"),
         Output("topoff-total-rows-banner", "children"),
+        Input("data-ready-store", "data"),
         Input("topoff-page-state", "data"),
         Input("topoff-sort-state", "data"),
         Input("f-fecha", "date"),
@@ -165,7 +166,7 @@ def register_topoff_callbacks(app):
         prevent_initial_call=False,
     )
     def refresh_table(
-        page_state, sort_state,
+        _ready, page_state, sort_state,
         fecha, hora, technologies, vendors,
         clusters,
         sites, rncs, nodebs,

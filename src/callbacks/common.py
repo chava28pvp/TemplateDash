@@ -29,8 +29,7 @@ def toggle_bool(n_clicks, current_value):
 
 def choose_common_available_slot(*slots):
     """
-    Toma varias marcas fecha/hora y devuelve la más reciente que sea segura para todos:
-    la mínima entre las últimas disponibles de cada dataset.
+    Toma varias marcas fecha/hora y devuelve la más reciente disponible entre ellas.
     """
     valid = []
     for slot in slots:
@@ -49,5 +48,5 @@ def choose_common_available_slot(*slots):
     if not valid:
         return None
 
-    _dt, slot = min(valid, key=lambda x: x[0])
+    _dt, slot = max(valid, key=lambda x: x[0])
     return slot
