@@ -2,7 +2,7 @@ from dash import html, dcc
 import dash_bootstrap_components as dbc
 import plotly.graph_objs as go
 from components.filters import build_filters, build_topoff_filters
-from src.config import REFRESH_INTERVAL_MS
+from src.config import DATA_READY_POLL_MS
 from src.Utils.utils_time import default_date_str, default_hour_str
 from components.umbral_config_modal import create_umbral_config_modal
 
@@ -1021,7 +1021,8 @@ def serve_layout():
         dcc.Store(id="topoff-histo-page-info"),
         dcc.Store(id="topoff-histo-selected-wave", data={}),
 
-        dcc.Interval(id="refresh-timer", interval=REFRESH_INTERVAL_MS, n_intervals=0),
+        dcc.Interval(id="refresh-timer", interval=DATA_READY_POLL_MS, n_intervals=0),
+        dcc.Store(id="data-ready-store"),
         dcc.Download(id="download-excel"),
         dcc.Store(id="topoff-link-state", data={"selected": None}),
         dcc.Store(id="topoff-cluster-mode", data={"mode": "full"}),

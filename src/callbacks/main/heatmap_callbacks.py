@@ -792,13 +792,14 @@ def heatmap_callbacks(app):
     # -------------------------------------------------
     @app.callback(
         Output("heatmap-trigger", "data"),
+        Input("data-ready-store", "data"),
         Input("f-fecha", "date"),
         Input("applied-filters-store", "data"),
         Input("heatmap-page-state", "data"),
         Input("hm-order-by", "value"),
         prevent_initial_call=False,  # bootstrap al cargar
     )
-    def heatmap_trigger_controller(_fecha, _applied_filters, _page_state, _ord):
+    def heatmap_trigger_controller(_ready, _fecha, _applied_filters, _page_state, _ord):
         # Un timestamp basta para “forzar” la actualización
         return {"ts": time.time()}
 
@@ -906,11 +907,12 @@ def heatmap_callbacks(app):
     # -------------------------------------------------
     @app.callback(
         Output("histo-trigger", "data"),
+        Input("data-ready-store", "data"),
         Input("heatmap-page-info", "data"),
         Input("topoff-link-state", "data"),
         prevent_initial_call=False,
     )
-    def histo_trigger_controller(_heatmap_page_info, _link_state):
+    def histo_trigger_controller(_ready, _heatmap_page_info, _link_state):
         if not _heatmap_page_info:
             return no_update
         return {"ts": time.time()}

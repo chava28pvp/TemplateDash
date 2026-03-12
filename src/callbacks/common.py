@@ -1,3 +1,4 @@
+from datetime import datetime
 from dash import ctx
 
 
@@ -24,3 +25,29 @@ def toggle_bool(n_clicks, current_value):
     if not n_clicks:
         return current_value
     return not current_value
+
+
+def choose_common_available_slot(*slots):
+    """
+    Toma varias marcas fecha/hora y devuelve la más reciente que sea segura para todos:
+    la mínima entre las últimas disponibles de cada dataset.
+    """
+    valid = []
+    for slot in slots:
+        if not slot:
+            continue
+        fecha = (slot.get("fecha") or "").strip()
+        hora = (slot.get("hora") or "").strip()
+        if not fecha or not hora:
+            continue
+        try:
+            dt = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
+        valid.append((dt, {"fecha": fecha, "hora": hora}))
+
+    if not valid:
+        return None
+
+    _dt, slot = min(valid, key=lambda x: x[0])
+    return slot

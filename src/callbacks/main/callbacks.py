@@ -3,7 +3,6 @@ import pandas as pd
 from dash import Input, Output, State, ALL, no_update, ctx
 import time
 import logging
-from datetime import timedelta
 import numpy as np
 from components.main.main_table import (
     pivot_by_network,
@@ -14,13 +13,12 @@ import dash_bootstrap_components as dbc
 
 from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, \
     fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week, fetch_kpis_by_keys, \
-    fetch_main_distinct_catalogs, fetch_progress_max_by_network, fetch_main_alarm_state
-from src.config import REFRESH_INTERVAL_MS, PROFILE_MAIN_CALLBACKS
-
-from src.Utils.utils_time import now_local
-from src.dataAccess.data_acess_topoff import fetch_topoff_distinct
+    fetch_main_distinct_catalogs, fetch_progress_max_by_network, fetch_main_alarm_state, \
+    fetch_latest_available_slot
+from src.config import PROFILE_MAIN_CALLBACKS
+from src.dataAccess.data_acess_topoff import fetch_topoff_distinct, fetch_latest_available_slot_topoff
 from dash.exceptions import PreventUpdate
-from src.callbacks.common import paginate_state, reset_page_state, toggle_bool
+from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot
 
 _DFTS_CACHE = {}
 _DFTS_TTL = 300
@@ -84,12 +82,6 @@ def _as_list(x):
 
 def _applied_value(applied_filters, key):
     return (applied_filters or {}).get(key)
-
-def round_down_to_hour(dt):
-    """
-        Redondea un datetime hacia abajo al inicio de la hora.
-        """
-    return dt.replace(minute=0, second=0, microsecond=0)
 
 def _keep_valid(selected, valid_values):
     """
@@ -284,6 +276,33 @@ def _build_global_order_keys_by_integrity_pct(
 
 def register_callbacks(app):
 
+    @app.callback(
+        Output("data-ready-store", "data"),
+        Input("refresh-timer", "n_intervals"),
+        State("data-ready-store", "data"),
+        prevent_initial_call=False,
+    )
+    def refresh_data_ready_store(_tick, current_store):
+        main_slot = fetch_latest_available_slot()
+        topoff_slot = fetch_latest_available_slot_topoff()
+        common_slot = choose_common_available_slot(main_slot, topoff_slot)
+
+        if not common_slot:
+            raise PreventUpdate
+
+        current_slot = (current_store or {}).get("slot") or {}
+        if current_slot == common_slot:
+            raise PreventUpdate
+
+        return {
+            "slot": common_slot,
+            "sources": {
+                "main": main_slot,
+                "topoff": topoff_slot,
+            },
+            "updated_at": time.time(),
+        }
+
     # -------------------------------------------------
     # 0) Actualiza opciones de Network y Technology
     # -------------------------------------------------
@@ -471,7 +490,6 @@ def register_callbacks(app):
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         Input("applied-filters-store", "data"),
-        Input("refresh-timer", "n_intervals"),
         Input("sort-state", "data"),
         Input("page-state", "data"),
         Input("main-context-store", "data"),
@@ -479,7 +497,7 @@ def register_callbacks(app):
     )
     def refresh_table(
             fecha, hora, applied_filters,
-            _n, sort_state, page_state,
+            sort_state, page_state,
             main_ctx
     ):
         perf_start = time.perf_counter()
@@ -735,15 +753,6 @@ def register_callbacks(app):
     # -------------------------------------------------
     # 5) Intervalo global → sincroniza el del card (si aplica)
     # -------------------------------------------------
-    @app.callback(
-        Output("refresh-interval", "interval"),
-        Input("refresh-interval-global", "n_intervals"),
-        prevent_initial_call=False,
-    )
-    def sync_intervals(_n):
-        return REFRESH_INTERVAL_MS
-
-
     # -------------------------------------------------
     # 7) Tick: actualizar fecha/hora al inicio de cada hora
     # -------------------------------------------------
@@ -751,35 +760,40 @@ def register_callbacks(app):
         Output("dt-manual-store", "data"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
+        State("data-ready-store", "data"),
         prevent_initial_call=True,
     )
-    def mark_datetime_manual(_fecha, _hora):
-        # Si no hay trigger real, no hagas nada
+    def mark_datetime_manual(_fecha, _hora, data_ready):
         if not ctx.triggered_id:
             raise PreventUpdate
 
-        return {"last_manual_ts": time.time()}
+        slot = (data_ready or {}).get("slot") or {}
+        if _fecha == slot.get("fecha") and _hora == slot.get("hora"):
+            raise PreventUpdate
+
+        return {"last_manual_ts": time.time(), "fecha": _fecha, "hora": _hora}
 
     @app.callback(
         Output("f-hora", "value"),
         Output("f-fecha", "date"),
-        Input("refresh-timer", "n_intervals"),
+        Input("data-ready-store", "data"),
         State("f-hora", "value"),
         State("f-fecha", "date"),
         State("f-hora", "options"),
         State("dt-manual-store", "data"),
         prevent_initial_call=False,
     )
-    def tick(n, current_hour, current_date, hour_options, manual_store):
+    def sync_datetime_from_data_ready(data_ready, current_hour, current_date, hour_options, manual_store):
         """
            Auto-actualiza fecha/hora a la hora actual, pero con "hold" inteligente:
            - Si el usuario cambió manualmente hace poco, NO lo pisamos
            - El hold dura HOLD_SECONDS o hasta el siguiente cambio de hora (lo que ocurra primero)
            """
-        now = now_local()
-        floored = round_down_to_hour(now)
-        hh = floored.strftime("%H:00:00")
-        today = floored.strftime("%Y-%m-%d")
+        slot = (data_ready or {}).get("slot") or {}
+        hh = slot.get("hora")
+        today = slot.get("fecha")
+        if not hh or not today:
+            return no_update, no_update
 
         # Validar que la hora actual exista en options
         opt_values = {(o["value"] if isinstance(o, dict) else o) for o in (hour_options or [])}
@@ -787,27 +801,24 @@ def register_callbacks(app):
             return no_update, no_update
 
         # 1) Primer arranque: fuerza "ahora"
-        if n in (None, 0):
-            return hh, today
 
         # 2) Hold inteligente
         last_manual_ts = float((manual_store or {}).get("last_manual_ts") or 0)
 
         # Calcula el timestamp del siguiente cambio de hora local
-        next_hour_dt = floored + timedelta(hours=1)
         # Convertimos a epoch "naive"
-        next_hour_ts = next_hour_dt.timestamp()
-        now_ts = now.timestamp()
 
         # Hold hasta:
         # - X segundos desde edición manual
         # - o el siguiente cambio de hora (lo que ocurra primero)
-        hold_until = min(last_manual_ts + HOLD_SECONDS, next_hour_ts)
 
-        if last_manual_ts > 0 and now_ts < hold_until:
+        if last_manual_ts > 0 and time.time() < (last_manual_ts + HOLD_SECONDS):
             return no_update, no_update
 
         # 3) Si ya pasó el hold, actualiza a "ahora"
+        if current_hour == hh and current_date == today:
+            return no_update, no_update
+
         return hh, today
 
     @app.callback(

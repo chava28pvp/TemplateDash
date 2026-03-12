@@ -533,6 +533,36 @@ def fetch_topoff_paginated(
     return df, int(total)
 
 
+def fetch_latest_available_slot_topoff():
+    """
+    Devuelve la última combinación fecha/hora disponible en dashboard_topoff.
+    Retorna dict {"fecha": "YYYY-MM-DD", "hora": "HH:MM:SS"} o None.
+    """
+    sql = f"""
+        SELECT
+            {_quote(COLMAP['fecha'])} AS fecha,
+            DATE_FORMAT({_quote(COLMAP['hora'])}, '%H:%i:%s') AS hora
+        FROM {_quote_table(_TABLE_NAME)}
+        WHERE {_quote(COLMAP['fecha'])} IS NOT NULL
+          AND {_quote(COLMAP['hora'])} IS NOT NULL
+        ORDER BY {_quote(COLMAP['fecha'])} DESC, {_quote(COLMAP['hora'])} DESC
+        LIMIT 1
+    """
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        row = conn.execute(text(sql)).fetchone()
+
+    if not row:
+        return None
+
+    fecha = None if row[0] is None else str(row[0]).strip()
+    hora = None if row[1] is None else str(row[1]).strip()
+    if not fecha or not hora:
+        return None
+    return {"fecha": fecha, "hora": hora}
+
+
 def fetch_topoff_paginated_global_sort(
     *,
     fecha: Optional[str] = None,

@@ -441,6 +441,7 @@ def topoff_heatmap_callbacks(app):
     @app.callback(
         Output("topoff-heatmap-trigger", "data"),
         # Cualquier cambio en filtros/paginado/orden dispara un refresh
+        Input("data-ready-store", "data"),
         Input("f-fecha", "date"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
@@ -830,6 +831,7 @@ def topoff_heatmap_callbacks(app):
     # -------------------------------------------------
     @app.callback(
         Output("topoff-histo-trigger", "data"),
+        Input("data-ready-store", "data"),
         Input("f-fecha", "date"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
