@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objs as go
 from dash import Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
+from src.callbacks.common import purge_expired_cache_entries
 
 # === Componentes TopOff heatmap ===
 from components.topoff.heatmap import (
@@ -44,6 +45,10 @@ _LAST_TOPOFF_HI_KEY = {"PS": None, "CS": None}
 # Orden de “valores” que se muestran en heatmap/histo por dominio
 TOPOFF_PS_VALORES = ("PS_RRC", "PS_DROP", "PS_RAB")
 TOPOFF_CS_VALORES = ("CS_RRC", "CS_DROP", "CS_RAB")
+
+
+def purge_topoff_heatmap_caches(now_ts=None):
+    purge_expired_cache_entries(_DFTS_TOPOFF_CACHE, _DFTS_TOPOFF_TTL, now_ts=now_ts)
 
 
 def _as_list(x):

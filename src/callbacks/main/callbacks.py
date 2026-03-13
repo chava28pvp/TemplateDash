@@ -18,7 +18,9 @@ from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_
 from src.config import PROFILE_MAIN_CALLBACKS
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct, fetch_latest_available_slot_topoff
 from dash.exceptions import PreventUpdate
-from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot
+from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot, purge_expired_cache_entries
+from src.callbacks.main.heatmap_callbacks import purge_main_heatmap_caches
+from src.callbacks.topoff.heatmap_callbacks import purge_topoff_heatmap_caches
 from src.Utils.utils_time import now_local
 
 _DFTS_CACHE = {}
@@ -35,6 +37,11 @@ _LAST_HI_KEY = None
 
 HOLD_SECONDS = 600  # 10 minutos
 logger = logging.getLogger(__name__)
+
+
+def purge_main_callback_caches(now_ts=None):
+    purge_expired_cache_entries(_DFTS_CACHE, _DFTS_TTL, now_ts=now_ts)
+    purge_expired_cache_entries(_MAIN_CTX_CACHE, _MAIN_CTX_TTL, now_ts=now_ts)
 
 
 def _perf_log(callback_name, started_at, marks=None, extra=None):
@@ -305,6 +312,11 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def refresh_data_ready_store(_tick, current_store):
+        now_ts = time.time()
+        purge_main_callback_caches(now_ts=now_ts)
+        purge_main_heatmap_caches(now_ts=now_ts)
+        purge_topoff_heatmap_caches(now_ts=now_ts)
+
         main_slot = fetch_latest_available_slot()
         topoff_slot = fetch_latest_available_slot_topoff()
         common_slot = choose_common_available_slot(main_slot, topoff_slot)
@@ -327,7 +339,7 @@ def register_callbacks(app):
         if current_comp == new_store:
             raise PreventUpdate
 
-        return {**new_store, "updated_at": time.time()}
+        return {**new_store, "updated_at": now_ts}
 
     # -------------------------------------------------
     # 0) Actualiza opciones de Network y Technology

@@ -28,7 +28,7 @@ from components.main.histograma import (
 )
 
 import dash_bootstrap_components as dbc
-from src.callbacks.common import paginate_state, reset_page_state
+from src.callbacks.common import paginate_state, reset_page_state, purge_expired_cache_entries
 
 # Manager de umbrales (config centralizada)
 from src.Utils.umbrales.umbrales_manager import UM_MANAGER
@@ -71,6 +71,15 @@ _HI_FIG_TTL = 120  # seg
 _PREWARM_LOCK = threading.Lock()
 _PREWARM_STARTED = False
 logger = logging.getLogger(__name__)
+
+
+def purge_main_heatmap_caches(now_ts=None):
+    purge_expired_cache_entries(_DFTS_CACHE, _DFTS_TTL, now_ts=now_ts)
+    purge_expired_cache_entries(_ALARM_META_CACHE, _ALARM_META_TTL, now_ts=now_ts)
+    purge_expired_cache_entries(_HM_PAYLOAD_CACHE, _HM_PAYLOAD_TTL, now_ts=now_ts)
+    purge_expired_cache_entries(_HM_RANK_CACHE, _HM_RANK_TTL, now_ts=now_ts)
+    purge_expired_cache_entries(_HI_PAYLOAD_CACHE, _HI_PAYLOAD_TTL, now_ts=now_ts)
+    purge_expired_cache_entries(_HI_FIG_CACHE, _HI_FIG_TTL, now_ts=now_ts)
 
 
 def _perf_log(callback_name, started_at, marks=None, extra=None):

@@ -50,3 +50,28 @@ def choose_common_available_slot(*slots):
 
     _dt, slot = max(valid, key=lambda x: x[0])
     return slot
+
+
+def purge_expired_cache_entries(cache: dict, ttl: int, now_ts: float | None = None) -> int:
+    """
+    Elimina entradas expiradas de un diccionario con esquema:
+      key -> {"ts": <epoch>, ...}
+    """
+    if not cache or ttl is None:
+        return 0
+
+    now_ts = now_ts or datetime.now().timestamp()
+    stale_keys = []
+    for key, value in list(cache.items()):
+        ts = (value or {}).get("ts")
+        try:
+            is_stale = (ts is None) or ((now_ts - float(ts)) >= float(ttl))
+        except Exception:
+            is_stale = True
+        if is_stale:
+            stale_keys.append(key)
+
+    for key in stale_keys:
+        cache.pop(key, None)
+
+    return len(stale_keys)
