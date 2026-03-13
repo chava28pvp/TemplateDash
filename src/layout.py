@@ -920,9 +920,17 @@ def serve_layout():
                                 dbc.Col(
                                     html.Div([
                                         html.H6("%", className="mb-2 text-center"),
-                                        dcc.Loading(
-                                            dcc.Graph(id="topoff-hi-pct-ps", config={"displayModeBar": False}),
-                                            type="default"
+                                        html.Div(
+                                            dcc.Loading(
+                                                dcc.Graph(
+                                                    id="topoff-hi-pct-ps",
+                                                    config={"displayModeBar": False},
+                                                    className="histo-wide",
+                                                    style={"height": "420px", "width": "2200px", "margin": "0"}
+                                                ),
+                                                type="default"
+                                            ),
+                                            className="histo-scroll"
                                         )
                                     ], className="histo-wrap"),
                                     md=6
@@ -932,9 +940,17 @@ def serve_layout():
                                 dbc.Col(
                                     html.Div([
                                         html.H6("UNIT", className="mb-2 text-center"),
-                                        dcc.Loading(
-                                            dcc.Graph(id="topoff-hi-unit-ps", config={"displayModeBar": False}),
-                                            type="default"
+                                        html.Div(
+                                            dcc.Loading(
+                                                dcc.Graph(
+                                                    id="topoff-hi-unit-ps",
+                                                    config={"displayModeBar": False},
+                                                    className="histo-wide",
+                                                    style={"height": "420px", "width": "2200px", "margin": "0"}
+                                                ),
+                                                type="default"
+                                            ),
+                                            className="histo-scroll"
                                         )
                                     ], className="histo-wrap"),
                                     md=6
@@ -950,9 +966,17 @@ def serve_layout():
                                 dbc.Col(
                                     html.Div([
                                         html.H6("%", className="mb-2 text-center"),
-                                        dcc.Loading(
-                                            dcc.Graph(id="topoff-hi-pct-cs", config={"displayModeBar": False}),
-                                            type="default"
+                                        html.Div(
+                                            dcc.Loading(
+                                                dcc.Graph(
+                                                    id="topoff-hi-pct-cs",
+                                                    config={"displayModeBar": False},
+                                                    className="histo-wide",
+                                                    style={"height": "420px", "width": "2200px", "margin": "0"}
+                                                ),
+                                                type="default"
+                                            ),
+                                            className="histo-scroll"
                                         )
                                     ], className="histo-wrap"),
                                     md=6
@@ -962,9 +986,17 @@ def serve_layout():
                                 dbc.Col(
                                     html.Div([
                                         html.H6("UNIT", className="mb-2 text-center"),
-                                        dcc.Loading(
-                                            dcc.Graph(id="topoff-hi-unit-cs", config={"displayModeBar": False}),
-                                            type="default"
+                                        html.Div(
+                                            dcc.Loading(
+                                                dcc.Graph(
+                                                    id="topoff-hi-unit-cs",
+                                                    config={"displayModeBar": False},
+                                                    className="histo-wide",
+                                                    style={"height": "420px", "width": "2200px", "margin": "0"}
+                                                ),
+                                                type="default"
+                                            ),
+                                            className="histo-scroll"
                                         )
                                     ], className="histo-wrap"),
                                     md=6
