@@ -302,6 +302,10 @@ def topoff_heatmap_callbacks(app):
         Output("topoff-hm-page-indicator", "children", allow_duplicate=True),
         Output("topoff-hm-total-rows-banner", "children", allow_duplicate=True),
         Output("topoff-heatmap-page-info", "data"),
+        Output("topoff-hm-pct-dates", "children"),
+        Output("topoff-hm-pct-hours", "children"),
+        Output("topoff-hm-unit-dates", "children"),
+        Output("topoff-hm-unit-hours", "children"),
         Input("topoff-heatmap-trigger", "data"),
         State("f-fecha", "date"),
         State("f-technology", "value"),
@@ -358,7 +362,19 @@ def topoff_heatmap_callbacks(app):
         ) + f"|ord={hm_order_by or 'alarm_bins_pct'}"
 
         if _LAST_TOPOFF_HEATMAP_KEY == state_key:
-            return (no_update, no_update, no_update, no_update, no_update, no_update)
+            dates_children, hours_children = build_time_header_children_by_dates(fecha)
+            return (
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
+            )
 
         # Fechas hoy/ayer
         try:
@@ -442,10 +458,22 @@ def topoff_heatmap_callbacks(app):
 
         hm_indicator = f"Página {page} de {total_pg}"
         hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
+        dates_children, hours_children = build_time_header_children_by_dates(fecha)
 
         _LAST_TOPOFF_HEATMAP_KEY = state_key
 
-        return (table_component, fig_pct, fig_unit, hm_indicator, hm_banner, page_info)
+        return (
+            table_component,
+            fig_pct,
+            fig_unit,
+            hm_indicator,
+            hm_banner,
+            page_info,
+            dates_children,
+            hours_children,
+            dates_children,
+            hours_children,
+        )
 
     # -------------------------------------------------
     # B) Trigger controller heatmap
@@ -521,22 +549,6 @@ def topoff_heatmap_callbacks(app):
             page = page + 1
 
         return {"page": page, "page_size": ps}
-
-    # -------------------------------------------------
-    # E) Time headers heatmap (línea de fechas/horas)
-    # -------------------------------------------------
-    @app.callback(
-        Output("topoff-hm-pct-dates", "children"),
-        Output("topoff-hm-pct-hours", "children"),
-        Output("topoff-hm-unit-dates", "children"),
-        Output("topoff-hm-unit-hours", "children"),
-        Input("f-fecha", "date"),
-        prevent_initial_call=False,  # bootstrap
-    )
-    def topoff_update_time_headers(selected_date):
-        """Actualiza los headers de tiempo para los dos heatmaps (% y UNIT)."""
-        dates_children, hours_children = build_time_header_children_by_dates(selected_date)
-        return dates_children, hours_children, dates_children, hours_children
 
     # =================================================
     # F) Render HISTOGRAMA TopOff PS (2 figs + page_info)

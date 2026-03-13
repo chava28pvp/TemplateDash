@@ -637,6 +637,10 @@ def heatmap_callbacks(app):
         Output("hm-page-indicator", "children", allow_duplicate=True),
         Output("hm-total-rows-banner", "children", allow_duplicate=True),
         Output("heatmap-page-info", "data"),
+        Output("hm-pct-dates", "children"),
+        Output("hm-pct-hours", "children"),
+        Output("hm-unit-dates", "children"),
+        Output("hm-unit-hours", "children"),
         Input("heatmap-trigger", "data"),
         State("f-fecha", "date"),
         State("applied-filters-store", "data"),
@@ -681,7 +685,19 @@ def heatmap_callbacks(app):
                 [("cache_hit", time.perf_counter())],
                 {"cached": True},
             )
-            return (no_update, no_update, no_update, no_update, no_update, no_update)
+            dates_children, hours_children = _build_time_header_children_by_dates(fecha)
+            return (
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
+            )
 
         # -------- Fechas HOY/AYER (sin hora) --------
         try:
@@ -788,6 +804,7 @@ def heatmap_callbacks(app):
 
         hm_indicator = f"Página {page} de {total_pg}"
         hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
+        dates_children, hours_children = _build_time_header_children_by_dates(fecha)
 
         # Marca renderizado
         _LAST_HEATMAP_KEY = state_key
@@ -803,7 +820,11 @@ def heatmap_callbacks(app):
             fig_unit,
             hm_indicator,
             hm_banner,
-            page_info
+            page_info,
+            dates_children,
+            hours_children,
+            dates_children,
+            hours_children,
         )
 
     # -------------------------------------------------
@@ -854,22 +875,6 @@ def heatmap_callbacks(app):
     )
     def hm_paginate(n_prev, n_next, state):
         return paginate_state(state, prev_id="hm-page-prev", next_id="hm-page-next", default_size=50)
-
-    # -------------------------------------------------
-    # Encabezados de tiempo (dates/hours) arriba del heatmap
-    # -------------------------------------------------
-    @app.callback(
-        Output("hm-pct-dates", "children"),
-        Output("hm-pct-hours", "children"),
-        Output("hm-unit-dates", "children"),
-        Output("hm-unit-hours", "children"),
-        Input("f-fecha", "date"),
-        prevent_initial_call=False,  # puebla al inicio
-    )
-    def update_time_headers(selected_date):
-        dates_children, hours_children = _build_time_header_children_by_dates(selected_date)
-        # % y UNIT comparten la misma línea temporal
-        return dates_children, hours_children, dates_children, hours_children
 
     # -------------------------------------------------
     # 8) Histograma PS (figuras + page_info)

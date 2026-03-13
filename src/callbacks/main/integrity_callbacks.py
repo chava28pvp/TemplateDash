@@ -71,6 +71,10 @@ def integrity_callbacks(app):
         Output("hm-int-page-indicator", "children"),
         Output("hm-int-total-rows-banner", "children"),
         Output("heatmap-integrity-page-info", "data"),
+        Output("hm-int-pct-dates", "children"),
+        Output("hm-int-pct-hours", "children"),
+        Output("hm-int-unit-dates", "children"),
+        Output("hm-int-unit-hours", "children"),
         Input("heatmap-integrity-trigger", "data"),
         State("collapse-hm-int", "is_open"),
         State("f-fecha", "date"),
@@ -82,7 +86,20 @@ def integrity_callbacks(app):
     def refresh_integrity_heatmap(_trigger, is_open, fecha, applied_filters, page_state, main_ctx):
         # Si el panel está cerrado, no gastes CPU ni queries
         if not is_open:
-            return no_update, no_update, no_update, no_update, no_update, no_update
+            return (
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+            )
+
+        dates_children, hours_children = _build_time_header_children_by_dates(fecha)
 
         trigger_revision = (
             f"{((_trigger or {}).get('slot') or {}).get('fecha') or ''}|"
@@ -133,6 +150,10 @@ def integrity_callbacks(app):
                 "Página 1 de 1",
                 "Sin filas.",
                 {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0},
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
             )
 
         # ---------- Normaliza llaves para joins/lookup estables ----------
@@ -179,6 +200,10 @@ def integrity_callbacks(app):
                 "Página 1 de 1",
                 "Sin filas.",
                 {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0},
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
             )
 
         # ---------- Networks efectivas ----------
@@ -226,6 +251,10 @@ def integrity_callbacks(app):
                 indicator,
                 banner,
                 page_info,
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
             )
 
         # ---------- Altura del heatmap según número de filas ----------
@@ -252,7 +281,18 @@ def integrity_callbacks(app):
             integrity_baseline_map=integrity_baseline_map,
         )
 
-        return table_component, fig_pct, fig_unit, indicator, banner, page_info
+        return (
+            table_component,
+            fig_pct,
+            fig_unit,
+            indicator,
+            banner,
+            page_info,
+            dates_children,
+            hours_children,
+            dates_children,
+            hours_children,
+        )
 
     # -------------------------------------------------
     # Trigger controller: actualiza "heatmap-integrity-trigger"
@@ -336,23 +376,3 @@ def integrity_callbacks(app):
 
         return {"page": page, "page_size": ps}
 
-    # -------------------------------------------------
-    # Encabezados de tiempo (dates/hours) para integridad
-    # -------------------------------------------------
-    @app.callback(
-        Output("hm-int-pct-dates", "children"),
-        Output("hm-int-pct-hours", "children"),
-        Output("hm-int-unit-dates", "children"),
-        Output("hm-int-unit-hours", "children"),
-        Input("f-fecha", "date"),
-        prevent_initial_call=False,
-    )
-    def update_time_headers_integrity(selected_date):
-        dates_children, hours_children = _build_time_header_children_by_dates(selected_date)
-        # % y UNIT comparten la misma línea temporal
-        return dates_children, hours_children, dates_children, hours_children
-        trigger_revision = (
-            f"{((_trigger or {}).get('slot') or {}).get('fecha') or ''}|"
-            f"{((_trigger or {}).get('slot') or {}).get('hora') or ''}|"
-            f"{(_trigger or {}).get('updated_at') or ''}"
-        )

@@ -312,18 +312,22 @@ def register_callbacks(app):
         if not common_slot:
             raise PreventUpdate
 
-        current_slot = (current_store or {}).get("slot") or {}
-        if current_slot == common_slot:
-            raise PreventUpdate
-
-        return {
+        new_store = {
             "slot": common_slot,
             "sources": {
                 "main": main_slot,
                 "topoff": topoff_slot,
             },
-            "updated_at": time.time(),
         }
+
+        current_comp = {
+            "slot": ((current_store or {}).get("slot") or {}),
+            "sources": ((current_store or {}).get("sources") or {}),
+        }
+        if current_comp == new_store:
+            raise PreventUpdate
+
+        return {**new_store, "updated_at": time.time()}
 
     # -------------------------------------------------
     # 0) Actualiza opciones de Network y Technology
