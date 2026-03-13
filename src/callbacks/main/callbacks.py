@@ -19,6 +19,7 @@ from src.config import PROFILE_MAIN_CALLBACKS
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct, fetch_latest_available_slot_topoff
 from dash.exceptions import PreventUpdate
 from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot
+from src.Utils.utils_time import now_local
 
 _DFTS_CACHE = {}
 _DFTS_TTL = 300
@@ -508,7 +509,7 @@ def register_callbacks(app):
         Output("page-indicator", "children"),
         Output("total-rows-banner", "children"),
         Output("table-page-data", "data"),
-        Input("data-ready-store", "data"),
+        Input("refresh-timer", "n_intervals"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         Input("applied-filters-store", "data"),
@@ -798,22 +799,22 @@ def register_callbacks(app):
     @app.callback(
         Output("f-hora", "value"),
         Output("f-fecha", "date"),
-        Input("data-ready-store", "data"),
+        Input("refresh-timer", "n_intervals"),
         State("f-hora", "value"),
         State("f-fecha", "date"),
         State("f-hora", "options"),
         State("dt-manual-store", "data"),
         prevent_initial_call=False,
     )
-    def sync_datetime_from_data_ready(data_ready, current_hour, current_date, hour_options, manual_store):
+    def sync_datetime_from_clock(_tick, current_hour, current_date, hour_options, manual_store):
         """
            Auto-actualiza fecha/hora a la hora actual, pero con "hold" inteligente:
            - Si el usuario cambió manualmente hace poco, NO lo pisamos
            - El hold dura HOLD_SECONDS o hasta el siguiente cambio de hora (lo que ocurra primero)
            """
-        slot = (data_ready or {}).get("slot") or {}
-        hh = _normalize_hour_to_options(slot.get("hora"), hour_options)
-        today = slot.get("fecha")
+        now = now_local()
+        hh = _normalize_hour_to_options(f"{now.hour:02d}:00:00", hour_options)
+        today = now.strftime("%Y-%m-%d")
         if not hh or not today:
             return no_update, no_update
 

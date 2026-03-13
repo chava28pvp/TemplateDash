@@ -84,6 +84,12 @@ def integrity_callbacks(app):
         if not is_open:
             return no_update, no_update, no_update, no_update, no_update, no_update
 
+        trigger_revision = (
+            f"{((_trigger or {}).get('slot') or {}).get('fecha') or ''}|"
+            f"{((_trigger or {}).get('slot') or {}).get('hora') or ''}|"
+            f"{(_trigger or {}).get('updated_at') or ''}"
+        )
+
         # Normaliza filtros a listas
         applied_filters = applied_filters or {}
         networks = applied_filters.get("network")
