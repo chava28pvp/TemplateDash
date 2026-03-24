@@ -353,7 +353,7 @@ def register_callbacks(app):
         Output("f-vendor", "value"),
         Output("f-cluster", "options"),
         Output("f-cluster", "value"),
-        Input("refresh-timer", "n_intervals"),
+        Input("data-ready-store", "data"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         State("f-network", "value"),
@@ -361,7 +361,7 @@ def register_callbacks(app):
         State("f-vendor", "value"),
         State("f-cluster", "value"),
     )
-    def update_all_filters(_tick, fecha, hora,
+    def update_all_filters(_ready, fecha, hora,
                            net_val_current, tech_val_current,
                            ven_val_current, clu_val_current):
         """
@@ -525,7 +525,7 @@ def register_callbacks(app):
         Output("page-indicator", "children"),
         Output("total-rows-banner", "children"),
         Output("table-page-data", "data"),
-        Input("refresh-timer", "n_intervals"),
+        Input("data-ready-store", "data"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         Input("applied-filters-store", "data"),
@@ -816,28 +816,41 @@ def register_callbacks(app):
         Output("f-hora", "value"),
         Output("f-fecha", "date"),
         Input("refresh-timer", "n_intervals"),
+        Input("data-ready-store", "data"),
         State("f-hora", "value"),
         State("f-fecha", "date"),
         State("f-hora", "options"),
         State("dt-manual-store", "data"),
         prevent_initial_call=False,
     )
-    def sync_datetime_from_clock(_tick, current_hour, current_date, hour_options, manual_store):
+    def sync_datetime_from_clock(_tick, data_ready, current_hour, current_date, hour_options, manual_store):
         """
-           Auto-actualiza fecha/hora a la hora actual, pero con "hold" inteligente:
-           - Si el usuario cambió manualmente hace poco, NO lo pisamos
-           - El hold dura HOLD_SECONDS o hasta el siguiente cambio de hora (lo que ocurra primero)
-           """
+           Auto-actualiza fecha/hora sólo cuando cambia la hora/fecha actual
+           o cuando la BD reporta un slot más reciente.
+        """
         now = now_local()
-        hh = _normalize_hour_to_options(f"{now.hour:02d}:00:00", hour_options)
-        today = now.strftime("%Y-%m-%d")
-        if not hh or not today:
+        clock_hour = _normalize_hour_to_options(f"{now.hour:02d}:00:00", hour_options)
+        clock_date = now.strftime("%Y-%m-%d")
+
+        slot = (data_ready or {}).get("slot") or {}
+        slot_hour = _normalize_hour_to_options(slot.get("hora"), hour_options)
+        slot_date = slot.get("fecha")
+
+        candidates = []
+        if clock_hour and clock_date:
+            candidates.append((f"{clock_date} {clock_hour}", clock_hour, clock_date))
+        if slot_hour and slot_date:
+            candidates.append((f"{slot_date} {slot_hour}", slot_hour, slot_date))
+
+        if not candidates:
             return no_update, no_update
 
-        if current_hour == hh and current_date == today:
+        _target_dt, target_hour, target_date = max(candidates, key=lambda x: x[0])
+
+        if current_hour == target_hour and current_date == target_date:
             return no_update, no_update
 
-        return hh, today
+        return target_hour, target_date
 
     @app.callback(
         Output("filters-collapse", "is_open"),
