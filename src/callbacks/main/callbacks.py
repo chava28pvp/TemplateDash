@@ -1,4 +1,5 @@
 import math
+from datetime import datetime
 import pandas as pd
 from dash import Input, Output, State, ALL, no_update, ctx
 import time
@@ -800,17 +801,32 @@ def register_callbacks(app):
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         State("data-ready-store", "data"),
+        State("f-hora", "options"),
         prevent_initial_call=True,
     )
-    def mark_datetime_manual(_fecha, _hora, data_ready):
+    def mark_datetime_manual(_fecha, _hora, data_ready, hour_options):
         if not ctx.triggered_id:
             raise PreventUpdate
 
+        now = now_local()
+        clock_hour = _normalize_hour_to_options(f"{now.hour:02d}:00:00", hour_options)
+        clock_date = now.strftime("%Y-%m-%d")
         slot = (data_ready or {}).get("slot") or {}
-        if _fecha == slot.get("fecha") and _hora == slot.get("hora"):
-            raise PreventUpdate
+        slot_hour = _normalize_hour_to_options(slot.get("hora"), hour_options)
+        slot_date = slot.get("fecha")
 
-        return {"last_manual_ts": time.time(), "fecha": _fecha, "hora": _hora}
+        candidates = []
+        if clock_hour and clock_date:
+            candidates.append((f"{clock_date} {clock_hour}", clock_hour, clock_date))
+        if slot_hour and slot_date:
+            candidates.append((f"{slot_date} {slot_hour}", slot_hour, slot_date))
+
+        if candidates:
+            _target_dt, target_hour, target_date = max(candidates, key=lambda x: x[0])
+            if _fecha == target_date and _hora == target_hour:
+                return {"mode": "auto", "fecha": _fecha, "hora": _hora, "last_manual_ts": 0}
+
+        return {"mode": "manual", "last_manual_ts": time.time(), "fecha": _fecha, "hora": _hora}
 
     @app.callback(
         Output("f-hora", "value"),
@@ -846,6 +862,25 @@ def register_callbacks(app):
             return no_update, no_update
 
         _target_dt, target_hour, target_date = max(candidates, key=lambda x: x[0])
+
+        manual_store = manual_store or {}
+        manual_mode = manual_store.get("mode") == "manual"
+        manual_hour = _normalize_hour_to_options(manual_store.get("hora"), hour_options)
+        manual_date = manual_store.get("fecha")
+        manual_ts = manual_store.get("last_manual_ts")
+        if manual_mode and manual_hour == current_hour and manual_date == current_date:
+            if ctx.triggered_id == "data-ready-store":
+                pass
+            elif manual_ts:
+                try:
+                    manual_dt = datetime.fromtimestamp(float(manual_ts), tz=now.tzinfo)
+                    same_hour = manual_dt.replace(minute=0, second=0, microsecond=0) == now.replace(minute=0, second=0, microsecond=0)
+                    if same_hour:
+                        return no_update, no_update
+                except Exception:
+                    return no_update, no_update
+            else:
+                return no_update, no_update
 
         if current_hour == target_hour and current_date == target_date:
             return no_update, no_update
