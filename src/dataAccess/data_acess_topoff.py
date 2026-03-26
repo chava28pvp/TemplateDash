@@ -19,8 +19,44 @@ _TABLE_NAME = "dashboard_topoff"
 def get_engine():
     global _engine
     if _engine is None:
-        _engine = create_engine(SQLALCHEMY_URL, pool_pre_ping=True, pool_recycle=1800)
+        engine_kwargs = {}
+        if SQLALCHEMY_URL.startswith("sqlite"):
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kwargs["pool_pre_ping"] = True
+            engine_kwargs["pool_recycle"] = 1800
+        _engine = create_engine(SQLALCHEMY_URL, **engine_kwargs)
     return _engine
+
+
+def _is_sqlite() -> bool:
+    return get_engine().dialect.name == "sqlite"
+
+
+def _time_select_expr(column_name: str) -> str:
+    quoted = _quote(column_name)
+    if _is_sqlite():
+        return (
+            f"CASE "
+            f"WHEN {quoted} IS NULL THEN NULL "
+            f"WHEN length(trim({quoted})) = 5 THEN trim({quoted}) || char(58) || '00' "
+            f"ELSE substr(trim({quoted}), 1, 8) END"
+        )
+    return f"DATE_FORMAT({quoted}, '%H:%i:%s')"
+
+
+def _numeric_cast_expr(column_name: str) -> str:
+    quoted = _quote(column_name)
+    if _is_sqlite():
+        return f"CAST({quoted} AS REAL)"
+    return f"CAST({quoted} AS DECIMAL(20,6))"
+
+
+def _time_filter_expr(column_name: str) -> str:
+    quoted = _quote(column_name)
+    if _is_sqlite():
+        return f"substr(trim({quoted}), 1, 5)"
+    return quoted
 
 
 # =========================================================
@@ -176,15 +212,18 @@ def _fecha_with_prev(fecha: Optional[str]) -> List[str]:
 @lru_cache(maxsize=1)
 def _existing_columns():
     eng = get_engine()
-    sql = """
-        SELECT COLUMN_NAME
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = :tbl
-    """
     with eng.connect() as conn:
+        if _is_sqlite():
+            rows = conn.execute(text(f"PRAGMA table_info({_quote_table(_TABLE_NAME)})")).fetchall()
+            return {r[1] for r in rows}
+        sql = """
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :tbl
+        """
         rows = conn.execute(text(sql), {"tbl": _TABLE_NAME}).fetchall()
-    return {r[0] for r in rows}
+        return {r[0] for r in rows}
 
 
 def _resolve_columns(requested_friendly_cols: List[str]) -> List[str]:
@@ -209,7 +248,7 @@ def _select_list_with_aliases(friendly_cols: List[str]) -> List[str]:
         real = COLMAP[friendly]
 
         if friendly == "hora":
-            parts.append(f"DATE_FORMAT({_quote(real)}, '%H:%i:%s') AS {friendly}")
+            parts.append(f"{_time_select_expr(real)} AS {friendly}")
 
         # ✅ CLAVE: cluster siempre “limpio” y nunca vacío
         elif friendly == "cluster":
@@ -262,8 +301,12 @@ def _filters_where_and_params(
     # Hora
     # ========================
     if hora and str(hora).lower() != "todas":
-        where.append(f"{_quote(COLMAP['hora'])} = :hora")
-        params["hora"] = hora
+        if _is_sqlite():
+            where.append(f"{_time_filter_expr(COLMAP['hora'])} = :hora")
+            params["hora"] = str(hora).strip()[:5]
+        else:
+            where.append(f"{_quote(COLMAP['hora'])} = :hora")
+            params["hora"] = hora
 
     # ========================
     # Normalizar listas
@@ -413,8 +456,7 @@ def _build_severity_expr_from_json_topoff(profile: str = "topoff"):
         params[f"{pfx}_reg"] = def_reg
         params[f"{pfx}_cri"] = def_cri
 
-        col_sql = _quote(COLMAP[kpi])
-        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+        num_col = _numeric_cast_expr(COLMAP[kpi])
         case_default = _build_case(num_col, pfx, orientation_def)
         kpi_terms.append(f"({case_default})")
 
@@ -541,7 +583,7 @@ def fetch_latest_available_slot_topoff():
     sql = f"""
         SELECT
             {_quote(COLMAP['fecha'])} AS fecha,
-            DATE_FORMAT({_quote(COLMAP['hora'])}, '%H:%i:%s') AS hora
+            {_time_select_expr(COLMAP['hora'])} AS hora
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {_quote(COLMAP['fecha'])} IS NOT NULL
           AND {_quote(COLMAP['hora'])} IS NOT NULL
@@ -839,7 +881,7 @@ def fetch_topoff_distinct(
     fechas = _fecha_with_prev(fecha)
 
     where_sql, params, ur, up, um, utech, uvend, uf, *rest = _filters_where_and_params(
-        fecha=fecha,
+        fecha=None,
         fechas=fechas,
         hora=None,
         regions=regions,
@@ -866,7 +908,8 @@ def fetch_topoff_distinct(
             use_provinces=up,
             use_muns=um,
             use_technologies=utech,
-            use_vendors=uvend
+            use_vendors=uvend,
+            use_fechas=uf,
         )
         df = pd.read_sql(stmt, conn, params=params)
 
@@ -953,8 +996,7 @@ def fetch_alarm_meta_for_topoff(
 
     def _flag_expr_for(kpi: str) -> str:
         """CASE=1 si KPI crítico según thresholds del JSON (sin per_network)."""
-        col_sql = _quote(COLMAP[kpi])
-        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+        num_col = _numeric_cast_expr(COLMAP[kpi])
 
         kcfg = sev_cfg.get(kpi) or {}
         default_block = (kcfg.get("default") or kcfg) or {}

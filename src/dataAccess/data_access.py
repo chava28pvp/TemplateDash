@@ -20,8 +20,44 @@ def get_engine():
     """Singleton SQLAlchemy engine."""
     global _engine
     if _engine is None:
-        _engine = create_engine(SQLALCHEMY_URL, pool_pre_ping=True, pool_recycle=1800)
+        engine_kwargs = {}
+        if SQLALCHEMY_URL.startswith("sqlite"):
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kwargs["pool_pre_ping"] = True
+            engine_kwargs["pool_recycle"] = 1800
+        _engine = create_engine(SQLALCHEMY_URL, **engine_kwargs)
     return _engine
+
+
+def _is_sqlite() -> bool:
+    return get_engine().dialect.name == "sqlite"
+
+
+def _time_select_expr(column_name: str) -> str:
+    quoted = _quote(column_name)
+    if _is_sqlite():
+        return (
+            f"CASE "
+            f"WHEN {quoted} IS NULL THEN NULL "
+            f"WHEN length(trim({quoted})) = 5 THEN trim({quoted}) || char(58) || '00' "
+            f"ELSE substr(trim({quoted}), 1, 8) END"
+        )
+    return f"DATE_FORMAT({quoted}, '%H:%i:%s')"
+
+
+def _numeric_cast_expr(column_name: str) -> str:
+    quoted = _quote(column_name)
+    if _is_sqlite():
+        return f"CAST({quoted} AS REAL)"
+    return f"CAST({quoted} AS DECIMAL(20,6))"
+
+
+def _time_filter_expr(column_name: str) -> str:
+    quoted = _quote(column_name)
+    if _is_sqlite():
+        return f"substr(trim({quoted}), 1, 5)"
+    return quoted
 
 
 # =========================================================
@@ -147,15 +183,18 @@ def _existing_columns():
     Cacheado para evitar golpear INFORMATION_SCHEMA en cada request.
     """
     eng = get_engine()
-    sql = """
-        SELECT COLUMN_NAME
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = :tbl
-    """
     with eng.connect() as conn:
+        if _is_sqlite():
+            rows = conn.execute(text(f"PRAGMA table_info({_quote_table(_TABLE_NAME)})")).fetchall()
+            return {r[1] for r in rows}
+        sql = """
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :tbl
+        """
         rows = conn.execute(text(sql), {"tbl": _TABLE_NAME}).fetchall()
-    return {r[0] for r in rows}
+        return {r[0] for r in rows}
 
 def _resolve_columns(requested_friendly_cols):
     """
@@ -189,7 +228,7 @@ def _select_list_with_aliases(friendly_cols):
     for friendly in friendly_cols:
         real = COLMAP[friendly]
         if friendly == "hora":
-            select_parts.append(f"DATE_FORMAT({_quote(real)}, '%H:%i:%s') AS {friendly}")
+            select_parts.append(f"{_time_select_expr(real)} AS {friendly}")
         else:
             select_parts.append(f"{_quote(real)} AS {friendly}")
     return select_parts
@@ -214,8 +253,12 @@ def _filters_where_and_params(
         params["fecha"] = fecha
 
     if hora and str(hora).lower() != "todas":
-        where.append(f"{_quote(COLMAP['hora'])} = :hora")
-        params["hora"] = hora
+        if _is_sqlite():
+            where.append(f"{_time_filter_expr(COLMAP['hora'])} = :hora")
+            params["hora"] = str(hora).strip()[:5]
+        else:
+            where.append(f"{_quote(COLMAP['hora'])} = :hora")
+            params["hora"] = hora
 
     vendors = _as_list(vendors)
     clusters = _as_list(clusters)
@@ -276,24 +319,17 @@ def _build_severity_expressions_from_json(
             continue
 
         kcfg = sev_cfg.get(kpi) or {}
-        # soporta estructuras:
-        # - { "orientation": ..., "thresholds": {...} }
-        # - { "default": {...}, "per_network": {...} }
         base = (kcfg.get("default") or kcfg)
         thresholds = (base.get("thresholds") or {})
 
-        # Umbrales; caen a 0 si falta alguno
         exc = float(thresholds.get("excelente", 0.0))
         bue = float(thresholds.get("bueno", exc))
         reg = float(thresholds.get("regular", bue))
         cri = float(thresholds.get("critico", reg))
 
-        # De momento asumimos orientation = lower_is_better
-        # (es lo que tienes en el JSON)
-        col_sql = _quote(COLMAP[kpi])
-        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+        num_col = _numeric_cast_expr(COLMAP[kpi])
 
-        p_prefix = kpi  # p.ej. "ps_rrc_ia_percent"
+        p_prefix = kpi
         params[f"{p_prefix}_exc"] = exc
         params[f"{p_prefix}_bue"] = bue
         params[f"{p_prefix}_reg"] = reg
@@ -380,17 +416,12 @@ def _build_severity_expr_from_json(profile: str = "main"):
             continue
 
         kcfg = sev_cfg.get(kpi) or {}
-        # puede venir como:
-        #   { "orientation":.., "thresholds":.., "per_network":.. }
-        # o como:
-        #   { "default": {...}, "per_network": {...} }
         default_block = (kcfg.get("default") or kcfg) or {}
         per_net_block = kcfg.get("per_network") or {}
 
         thresholds_def = (default_block.get("thresholds") or {})
         orientation_def = default_block.get("orientation", "lower_is_better")
 
-        # thresholds default
         def_exc = float(thresholds_def.get("excelente", 0.0))
         def_bue = float(thresholds_def.get("bueno", def_exc))
         def_reg = float(thresholds_def.get("regular", def_bue))
@@ -402,8 +433,7 @@ def _build_severity_expr_from_json(profile: str = "main"):
         params[f"{pfx_def}_reg"] = def_reg
         params[f"{pfx_def}_cri"] = def_cri
 
-        col_sql = _quote(COLMAP[kpi])
-        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+        num_col = _numeric_cast_expr(COLMAP[kpi])
 
         case_default = _build_case(num_col, pfx_def, orientation_def)
 
@@ -473,8 +503,7 @@ def _build_critical_flag_expressions_from_json(
         if kpi not in COLMAP:
             continue
 
-        col_sql = _quote(COLMAP[kpi])
-        num_col = f"CAST({col_sql} AS DECIMAL(20,6))"
+        num_col = _numeric_cast_expr(COLMAP[kpi])
         kcfg = sev_cfg.get(kpi) or {}
         default_block = (kcfg.get("default") or kcfg) or {}
         per_net_block = kcfg.get("per_network") or {}
@@ -1069,7 +1098,7 @@ def fetch_integrity_baseline_week(
             {c_vend} AS vendor,
             {c_clus} AS noc_cluster,
             {c_tech} AS technology,
-            AVG(CAST({c_integ} AS DECIMAL(20,6))) AS integrity_week_avg
+            AVG({_numeric_cast_expr(COLMAP['integrity'])}) AS integrity_week_avg
         FROM {tbl}
         WHERE {where_sql}
         GROUP BY {c_net}, {c_vend}, {c_clus}, {c_tech}
@@ -1157,7 +1186,7 @@ def fetch_latest_available_slot():
     sql = f"""
         SELECT
             {_quote(COLMAP['fecha'])} AS fecha,
-            DATE_FORMAT({_quote(COLMAP['hora'])}, '%H:%i:%s') AS hora
+            {_time_select_expr(COLMAP['hora'])} AS hora
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {_quote(COLMAP['fecha'])} IS NOT NULL
           AND {_quote(COLMAP['hora'])} IS NOT NULL
@@ -1202,7 +1231,7 @@ def fetch_progress_max_by_network(
     )
 
     select_max = ", ".join(
-        [f"MAX(CAST({_quote(COLMAP[k])} AS DECIMAL(20,6))) AS {k}" for k in requested]
+        [f"MAX({_numeric_cast_expr(COLMAP[k])}) AS {k}" for k in requested]
     )
     sql = f"""
         SELECT
@@ -1266,7 +1295,7 @@ def fetch_main_alarm_state(
     sql = f"""
         SELECT
             {_quote(COLMAP['fecha'])} AS fecha,
-            DATE_FORMAT({_quote(COLMAP['hora'])}, '%H:%i:%s') AS hora,
+            {_time_select_expr(COLMAP['hora'])} AS hora,
             {_quote(COLMAP['network'])} AS network,
             {_quote(COLMAP['vendor'])} AS vendor,
             {_quote(COLMAP['noc_cluster'])} AS noc_cluster,
