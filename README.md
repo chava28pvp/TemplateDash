@@ -1,24 +1,32 @@
-# Dash Telecom KPIs Monitor (dashboard master)
+# Dash Telecom KPIs Monitor
 
-Template de dashboard en Dash con conexión MySQL, filtros dinámicos y actualización periódica.
+Template de dashboard en Dash con soporte para MySQL o SQLite local.
 
-## Instalación
-1. Crea y activa tu venv (opcional) e instala dependencias:
+## Ejecucion local
+1. Crea y activa tu venv e instala dependencias:
    ```bash
    pip install -r requirements.txt
    ```
-2. Copia `.env.example` a `.env` y ajusta credenciales de MySQL y zona horaria.
-3. Crea la base y tabla con el script de `db/sample.sql`:
-   ```sql
-   SOURCE db/sample.sql;
-   ```
-4. Ejecuta la app:
+2. Si usaras SQLite, ajusta `.env.sqlite` y ejecuta:
    ```bash
    python app.py
    ```
-   Abre http://127.0.0.1:8050
+3. La app abre en `http://127.0.0.1:8050`.
 
-## Notas
-- Intervalo de refresco configurable por `REFRESH_INTERVAL_MS` en `.env`
-- Filtros predeterminados a la **fecha y hora local** definidos por `TZ` (America/Monterrey por defecto)
-- Colores por umbrales y progress bars configurables en `src/utils.py` y `components/kpi_table.py`
+## Empaquetado Windows
+1. Instala PyInstaller en tu entorno:
+   ```bash
+   pip install pyinstaller
+   ```
+2. Edita `.env.sqlite` y define temporalmente `SQLITE_PATH` con la ruta real de la base que quieres usar como semilla del ejecutable.
+3. Construye el ejecutable:
+   ```powershell
+   .\build_windows.ps1
+   ```
+4. El resultado queda en `dist\TemplateDash.exe`.
+
+## Comportamiento del ejecutable
+- La SQLite final se usa desde `%LOCALAPPDATA%\TemplateDash\app.db`.
+- Si `app.db` no existe, el ejecutable copia una base inicial incluida en el paquete.
+- `umbrales.json` se guarda en `%LOCALAPPDATA%\TemplateDash\umbrales.json`.
+- `assets` y `data` se incluyen en el bundle de PyInstaller.

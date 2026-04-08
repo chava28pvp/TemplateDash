@@ -4,6 +4,7 @@ from functools import lru_cache
 import pandas as pd
 from typing import Dict, Any, Optional
 
+from src.config import UMBRAL_JSON_PATH
 from src.Utils.umbrales.utils_umbrales import cell_severity
 
 SEVERITY_METRICS = [
@@ -35,7 +36,7 @@ KEY_COLS = ["network", "vendor", "noc_cluster", "technology"]
 # Columnas de tiempo para ordenar
 TIME_COLS = ["fecha", "hora"]
 
-def load_threshold_cfg(path: str = "data/umbrales.json") -> Dict[str, Any]:
+def load_threshold_cfg(path: str = str(UMBRAL_JSON_PATH)) -> Dict[str, Any]:
     """
     Carga con hot-reload: invalida cache automáticamente si cambia el mtime.
     """

@@ -4,3 +4,8 @@ venv/
 venv_tmp/
 env/
 .venv/
+build/
+dist/
+*.exe
+*.pkg
+*.pyz
