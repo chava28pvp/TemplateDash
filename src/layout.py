@@ -48,10 +48,20 @@ def serve_layout():
             className="filters-sticky-wrapper"
         ),
 
+        dcc.Store(
+            id="table-focus-store",
+            data={"main": False, "topoff": False},
+        ),
+        html.Div(id="table-focus-overlay", className="table-focus-overlay"),
+
         # Contenido principal
         html.Div(id="cards-row", children=[
 
             # Tabla principal + paginación
+            html.Div(
+                id="main-table-panel",
+                className="table-focus-panel",
+                children=[
             dbc.Row([
                 dbc.Col([
                     dbc.Card(dbc.CardBody([
@@ -77,6 +87,16 @@ def serve_layout():
                                 dbc.Button("Exportar Excel", id="export-excel", color="primary", size="sm"),
                                 width="auto"
                             ),
+                            dbc.Col(
+                                dbc.Button(
+                                    "Expandir",
+                                    id="main-focus-toggle",
+                                    color="secondary",
+                                    outline=True,
+                                    size="sm",
+                                ),
+                                width="auto"
+                            ),
                         ], className="g-2 align-items-center"),
                     ]), className="shadow-sm mb-2"),
 
@@ -86,6 +106,8 @@ def serve_layout():
                     ),
                 ], md=12, className="my-3"),
             ]),
+                ],
+            ),
 
             dbc.Row([
                 dbc.Col(
@@ -638,7 +660,7 @@ def serve_layout():
                                 className="mb-2",
                             ),
                             width="auto"
-                        )
+                        ),
                     ], className="align-items-center g-2"),
 
                     # Collapse con filtros mini
@@ -648,6 +670,10 @@ def serve_layout():
                         children=build_topoff_filters()
                     ),
 
+                    html.Div(
+                        id="topoff-table-panel",
+                        className="table-focus-panel",
+                        children=[
                     # Card de paginado + export
                     dbc.Card(
                         dbc.CardBody([
@@ -684,6 +710,17 @@ def serve_layout():
                                     ),
                                     width="auto"
                                 ),
+                                dbc.Col(
+                                    dbc.Button(
+                                        "Expandir",
+                                        id="topoff-focus-toggle",
+                                        size="sm",
+                                        outline=True,
+                                        color="secondary",
+                                        className="mb-0",
+                                    ),
+                                    width="auto"
+                                ),
                             ], className="g-2 align-items-center"),
 
                             # 👇 NUEVO: target de descarga
@@ -697,6 +734,8 @@ def serve_layout():
                         id="topoff-table-container",
                         className="kpi-table-wrap kpi-table-container",
                         style={"overflowX": "auto"},
+                    ),
+                        ],
                     ),
                 ], md=12, className="my-3"),
             ]),

@@ -3,7 +3,7 @@ import logging
 import threading
 import webbrowser
 
-from dash import Dash, Input, Output, ALL
+from dash import Dash, Input, Output, State, ALL, ctx
 import dash_bootstrap_components as dbc
 from flask_caching import Cache
 from src.callbacks.main.export_callback import export_callback
@@ -109,6 +109,67 @@ app.clientside_callback(
     ),
     prevent_initial_call=True,
 )
+
+
+@app.callback(
+    Output("table-focus-store", "data"),
+    Input("main-focus-toggle", "n_clicks"),
+    Input("topoff-focus-toggle", "n_clicks"),
+    Input("table-focus-overlay", "n_clicks"),
+    State("table-focus-store", "data"),
+    prevent_initial_call=True,
+)
+def toggle_table_focus(_main_clicks, _topoff_clicks, _overlay_clicks, focus_state):
+    focus_state = focus_state or {"main": False, "topoff": False}
+    triggered = ctx.triggered_id
+
+    if triggered == "main-focus-toggle":
+        next_main = not bool(focus_state.get("main"))
+        return {"main": next_main, "topoff": False}
+
+    if triggered == "topoff-focus-toggle":
+        next_topoff = not bool(focus_state.get("topoff"))
+        return {"main": False, "topoff": next_topoff}
+
+    if triggered == "table-focus-overlay":
+        if not (focus_state.get("main") or focus_state.get("topoff")):
+            return focus_state
+        return {"main": False, "topoff": False}
+
+    return focus_state
+
+
+@app.callback(
+    Output("main-table-panel", "className"),
+    Output("topoff-table-panel", "className"),
+    Output("table-focus-overlay", "className"),
+    Output("main-focus-toggle", "children"),
+    Output("topoff-focus-toggle", "children"),
+    Input("table-focus-store", "data"),
+)
+def sync_table_focus_ui(focus_state):
+    focus_state = focus_state or {"main": False, "topoff": False}
+    main_on = bool(focus_state.get("main"))
+    topoff_on = bool(focus_state.get("topoff"))
+
+    main_cls = "table-focus-panel"
+    topoff_cls = "table-focus-panel"
+    overlay_cls = "table-focus-overlay"
+
+    if main_on:
+        main_cls += " is-maximized"
+        overlay_cls += " is-visible"
+    if topoff_on:
+        topoff_cls += " is-maximized"
+        overlay_cls += " is-visible"
+
+    return (
+        main_cls,
+        topoff_cls,
+        overlay_cls,
+        "Restaurar" if main_on else "Expandir",
+        "Restaurar" if topoff_on else "Expandir",
+    )
 
 def run_local_server(open_browser: bool = True) -> None:
     host = os.getenv("DASH_HOST", "127.0.0.1")
