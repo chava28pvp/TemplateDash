@@ -32,7 +32,7 @@ app = Dash(
 cache.init_app(app.server)
 server = app.server  # para despliegue (gunicorn, etc.)
 app.config.suppress_callback_exceptions = True
-app.title = "Telecom KPIs Monitor"
+app.title = "Dashboard Master"
 app.layout = serve_layout
 
 file_handler = logging.FileHandler(APP_LOG_PATH, encoding="utf-8")
