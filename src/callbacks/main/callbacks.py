@@ -998,6 +998,16 @@ def register_callbacks(app):
         vendors = _as_list(_applied_value(applied_filters, "vendor"))
         clusters = _as_list(_applied_value(applied_filters, "cluster"))
 
+        if DATA_SOURCE == "api":
+            payload = {
+                "integrity_baseline_map": [],
+                "progress_max_by_col": {},
+                "alarm_map": [],
+                "ts": time.time(),
+            }
+            _set_main_context_cached(fecha, hora, networks, technologies, vendors, clusters, payload)
+            return payload
+
         # -----------------------------
         # 0) Cache
         #    - Para evitar el bug de "hora", el baseline NO debe cachearse por hora

@@ -15,7 +15,7 @@ from src.callbacks.main.callbacks import register_callbacks
 from src.callbacks.umbrales_callbacks import umbral_callbacks
 from src.callbacks.main.heatmap_callbacks import heatmap_callbacks, start_main_prewarm_thread
 from src.callbacks.topoff.topoff_callback import register_topoff_callbacks
-from src.config import APP_LOG_PATH, ASSETS_DIR
+from src.config import APP_LOG_PATH, ASSETS_DIR, DATA_SOURCE
 # Tema Bootstrap (elige otro si quieres: LUX, COSMO, CYBORG, etc.)
 cache = Cache(config={
     "CACHE_TYPE": "SimpleCache",          # para empezar; puedes cambiar a Redis luego
@@ -59,14 +59,15 @@ def log_unhandled_exception(error):
     raise error
 
 register_callbacks(app)
-umbral_callbacks(app)
-export_callback(app)
-heatmap_callbacks(app)
-register_topoff_callbacks(app)
-topoff_heatmap_callbacks(app)
-export_topoff_callback(app)
-integrity_callbacks(app)
-start_main_prewarm_thread()
+if DATA_SOURCE != "api":
+    umbral_callbacks(app)
+    export_callback(app)
+    heatmap_callbacks(app)
+    register_topoff_callbacks(app)
+    topoff_heatmap_callbacks(app)
+    export_topoff_callback(app)
+    integrity_callbacks(app)
+    start_main_prewarm_thread()
 
 app.clientside_callback(
     """
