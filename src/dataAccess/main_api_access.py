@@ -220,6 +220,7 @@ def fetch_kpis_paginated_severity_sort(
             "na_as_empty": na_as_empty,
             "page_size": MAIN_QUERY_API_PAGE_SIZE,
             "max_pages": MAIN_QUERY_API_MAX_PAGES,
+            "allow_in_memory_sort": True,
         },
         thresholds_snapshot=_thresholds_snapshot(),
     )
@@ -259,6 +260,7 @@ def fetch_kpis_paginated_severity_global_sort(
             "na_as_empty": na_as_empty,
             "page_size": MAIN_QUERY_API_PAGE_SIZE,
             "max_pages": MAIN_QUERY_API_MAX_PAGES,
+            "allow_in_memory_sort": True,
         },
         thresholds_snapshot=_thresholds_snapshot(),
     )
