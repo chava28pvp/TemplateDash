@@ -86,6 +86,7 @@ def _debug_log_request(operation, body):
     safe_body = dict(body)
     safe_body.pop("thresholds_snapshot", None)
     logger.warning("[main_api] request operation=%s payload=%s", operation, safe_body)
+    print(f"[main_api][request] operation={operation} payload={safe_body}", flush=True)
 
 
 def _debug_log_response(operation, data):
@@ -101,6 +102,13 @@ def _debug_log_response(operation, data):
         type(data.get("data")).__name__ if isinstance(data, dict) else type(data).__name__,
         rows[:1],
     )
+    if isinstance(data, dict):
+        print(
+            "[main_api][response] "
+            f"operation={operation} success={data.get('success')} total={data.get('total')} "
+            f"rows={len(rows)} data_type={type(data.get('data')).__name__} sample={rows[:1]}",
+            flush=True,
+        )
 
 
 def _unwrap_gateway_response(data):

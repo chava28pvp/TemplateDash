@@ -663,6 +663,13 @@ def register_callbacks(app):
                     sort_net,
                     ascending,
                 )
+                print(
+                    "[main_table][fetch start] "
+                    f"mode={sort_mode} fecha={fecha} hora={hora} page={page} page_size={page_size} "
+                    f"networks={networks} technologies={technologies} vendors={vendors} clusters={clusters} "
+                    f"sort_by={sort_by} sort_net={sort_net} asc={ascending}",
+                    flush=True,
+                )
             if sort_mode == "alarmado":
                 safe_sort_state = sort_state  # si quieres permitir reorder visual
                 df, total = fetch_kpis_paginated_severity_sort(
@@ -696,6 +703,12 @@ def register_callbacks(app):
                     0 if df is None else len(df),
                     [] if df is None else list(df.columns),
                     sample,
+                )
+                print(
+                    "[main_table][fetch done] "
+                    f"mode={sort_mode} total={total} rows={0 if df is None else len(df)} "
+                    f"columns={[] if df is None else list(df.columns)} sample={sample}",
+                    flush=True,
                 )
             perf_marks.append(("page_fetch", time.perf_counter()))
 
