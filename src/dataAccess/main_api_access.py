@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import logging
 
 from src.Utils.alarmados import load_threshold_cfg
 from src.config import (
@@ -19,6 +20,9 @@ from src.dataAccess.data_access import BASE_COLUMNS, COLMAP
 
 class MainApiAccessError(RuntimeError):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 def _headers():
@@ -43,6 +47,7 @@ def _request(operation, **payload):
 
     body = {"view": "main", "operation": operation}
     body.update({k: v for k, v in payload.items() if v is not None})
+    _debug_log_request(operation, body)
 
     response = requests.post(
         MAIN_QUERY_API_URL,
@@ -68,10 +73,34 @@ def _request(operation, **payload):
         raise MainApiAccessError(message)
 
     data = _unwrap_gateway_response(data)
+    _debug_log_response(operation, data)
 
     if MAIN_QUERY_API_DEBUG:
         print(f"[main_api] operation={operation} keys={list(data.keys())}")
     return data
+
+
+def _debug_log_request(operation, body):
+    if not MAIN_QUERY_API_DEBUG:
+        return
+    safe_body = dict(body)
+    safe_body.pop("thresholds_snapshot", None)
+    logger.warning("[main_api] request operation=%s payload=%s", operation, safe_body)
+
+
+def _debug_log_response(operation, data):
+    if not MAIN_QUERY_API_DEBUG:
+        return
+    rows = _extract_rows_from_payload(data)
+    logger.warning(
+        "[main_api] response operation=%s success=%s total=%s rows=%s data_type=%s sample=%s",
+        operation,
+        data.get("success") if isinstance(data, dict) else None,
+        data.get("total") if isinstance(data, dict) else None,
+        len(rows),
+        type(data.get("data")).__name__ if isinstance(data, dict) else type(data).__name__,
+        rows[:1],
+    )
 
 
 def _unwrap_gateway_response(data):
@@ -360,6 +389,12 @@ def fetch_kpis(
 
 
 def _extract_rows(response):
+    return _extract_rows_from_payload(response)
+
+
+def _extract_rows_from_payload(response):
+    if not isinstance(response, dict):
+        return []
     if isinstance(response.get("rows"), list):
         return response.get("rows") or []
     data = response.get("data")

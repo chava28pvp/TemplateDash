@@ -647,6 +647,22 @@ def register_callbacks(app):
 
         # ---------- fuente paginada normal (solo si NO venimos del modo especial) ----------
         if df is None:
+            if DATA_SOURCE == "api":
+                logger.warning(
+                    "[main_table] fetch start mode=%s fecha=%s hora=%s page=%s page_size=%s networks=%s technologies=%s vendors=%s clusters=%s sort_by=%s sort_net=%s asc=%s",
+                    sort_mode,
+                    fecha,
+                    hora,
+                    page,
+                    page_size,
+                    networks,
+                    technologies,
+                    vendors,
+                    clusters,
+                    sort_by,
+                    sort_net,
+                    ascending,
+                )
             if sort_mode == "alarmado":
                 safe_sort_state = sort_state  # si quieres permitir reorder visual
                 df, total = fetch_kpis_paginated_severity_sort(
@@ -666,6 +682,20 @@ def register_callbacks(app):
                     sort_by_friendly=sort_by,
                     sort_net=sort_net,
                     ascending=ascending,
+                )
+            if DATA_SOURCE == "api":
+                sample = []
+                try:
+                    sample = df.head(1).to_dict("records") if isinstance(df, pd.DataFrame) else []
+                except Exception:
+                    sample = []
+                logger.warning(
+                    "[main_table] fetch done mode=%s total=%s rows=%s columns=%s sample=%s",
+                    sort_mode,
+                    total,
+                    0 if df is None else len(df),
+                    [] if df is None else list(df.columns),
+                    sample,
                 )
             perf_marks.append(("page_fetch", time.perf_counter()))
 
