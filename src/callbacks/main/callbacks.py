@@ -12,11 +12,11 @@ from components.main.main_table import (
 )
 import dash_bootstrap_components as dbc
 
-from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, \
+from src.dataAccess.main_data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_severity_global_sort, \
     fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week, fetch_kpis_by_keys, \
     fetch_main_distinct_catalogs, fetch_progress_max_by_network, fetch_main_alarm_state, \
     fetch_latest_available_slot
-from src.config import PROFILE_MAIN_CALLBACKS
+from src.config import DATA_SOURCE, PROFILE_MAIN_CALLBACKS
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct, fetch_latest_available_slot_topoff
 from dash.exceptions import PreventUpdate
 from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot, purge_expired_cache_entries
@@ -605,7 +605,7 @@ def register_callbacks(app):
         safe_sort_state = None
         explicit_page_key_order = None  # para mantener orden al pivotear
 
-        if _is_integrity_pct_sort(sort_state) and (sort_mode != "alarmado"):
+        if DATA_SOURCE != "api" and _is_integrity_pct_sort(sort_state) and (sort_mode != "alarmado"):
             ordered_keys, _sort_net_clicked = _build_global_order_keys_by_integrity_pct(
                 fecha=fecha, hora=hora,
                 networks=networks, technologies=technologies,
