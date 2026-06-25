@@ -67,8 +67,29 @@ def _request(operation, **payload):
             message = err or "Error consultando API main."
         raise MainApiAccessError(message)
 
+    data = _unwrap_gateway_response(data)
+
     if MAIN_QUERY_API_DEBUG:
         print(f"[main_api] operation={operation} keys={list(data.keys())}")
+    return data
+
+
+def _unwrap_gateway_response(data):
+    if not isinstance(data, dict):
+        return data
+    inner = data.get("data")
+    if (
+        isinstance(inner, dict)
+        and ("success" in inner or "ok" in inner or "operation" in inner)
+    ):
+        if inner.get("success") is False or inner.get("ok") is False:
+            err = inner.get("error")
+            if isinstance(err, dict):
+                message = err.get("message") or str(err)
+            else:
+                message = err or "Error consultando API main."
+            raise MainApiAccessError(message)
+        return inner
     return data
 
 
