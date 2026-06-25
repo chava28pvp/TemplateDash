@@ -34,7 +34,7 @@ from src.callbacks.common import paginate_state, reset_page_state, purge_expired
 from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
 # Acceso a datos
-from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap
+from src.dataAccess.main_data_access import fetch_kpis, fetch_alarm_meta_for_heatmap
 from src.config import PROFILE_MAIN_CALLBACKS, PREWARM_MAIN_CACHE, PREWARM_MAIN_PAGE_SIZE
 from src.Utils.utils_time import default_date_str
 

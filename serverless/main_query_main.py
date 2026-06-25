@@ -141,6 +141,8 @@ def serverless_function_handler(params, context):
             return handle_progress_max_by_network(matclient, params)
         if operation == "alarm_state":
             return handle_alarm_state(matclient, params)
+        if operation == "alarm_meta":
+            return handle_alarm_meta(matclient, params)
         if operation == "by_keys":
             return handle_by_keys(matclient, params)
         if operation == "context":
@@ -377,6 +379,53 @@ def handle_alarm_state(matclient, params):
     )
     data = compute_alarm_state(normalize_rows(rows), params)
     return ok_response("alarm_state", data=data, rows=data, total=len(data))
+
+
+def handle_alarm_meta(matclient, params):
+    fecha = params.get("fecha")
+    if not fecha:
+        return error_response("alarm_meta requiere fecha")
+
+    base_dt = datetime.strptime(str(fecha), "%Y-%m-%d")
+    days = [(base_dt - timedelta(days=1)).strftime("%Y-%m-%d"), str(fecha)]
+    p = clone_params(params)
+    p["fecha"] = None
+    p["hora"] = None
+    where = build_where(p, ignore_fecha=True, ignore_hora=True)
+    where["Date"] = {"_in": days}
+
+    rows = fetch_all_rows(
+        matclient,
+        where=where,
+        fields=["Technology", "Vendor", "Noc_Cluster", "Network"] + [COLMAP[m] for m in SEVERITY_METRICS],
+        max_rows=option_int(params.get("options") or {}, "alarm_meta_max_rows", MAX_SCAN_ROWS, MAX_SCAN_ROWS),
+    )
+    rows = normalize_rows(rows)
+
+    grouped = {}
+    alarm_keys = set()
+    for row in rows:
+        if row_crit_count(row, params) <= 0:
+            continue
+        trio = (row.get("technology"), row.get("vendor"), row.get("noc_cluster"))
+        key = (row.get("technology"), row.get("vendor"), row.get("noc_cluster"), row.get("network"))
+        grouped[trio] = grouped.get(trio, 0) + 1
+        alarm_keys.add(key)
+
+    ranked = sorted(
+        grouped.items(),
+        key=lambda item: (-item[1], str(item[0][1]), str(item[0][0]), str(item[0][2])),
+    )
+    meta_rows = [
+        {"technology": key[0], "vendor": key[1], "noc_cluster": key[2], "flag_hits": hits}
+        for key, hits in ranked
+    ]
+    response = ok_response("alarm_meta", data=meta_rows, rows=meta_rows, total=len(meta_rows), meta={"days": days})
+    response["alarm_keys"] = [
+        {"technology": k[0], "vendor": k[1], "noc_cluster": k[2], "network": k[3]}
+        for k in sorted(alarm_keys)
+    ]
+    return response
 
 
 def handle_by_keys(matclient, params):

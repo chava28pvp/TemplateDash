@@ -24,7 +24,7 @@ from components.main.integrity_heatmap import (
 from src.callbacks.main.heatmap_callbacks import _as_list, _fetch_df_ts_cached
 
 # Baseline semanal (fallback si no viene en store)
-from src.dataAccess.data_access import fetch_integrity_baseline_week
+from src.dataAccess.main_data_access import fetch_integrity_baseline_week
 from src.callbacks.common import toggle_bool, reset_page_state
 
 

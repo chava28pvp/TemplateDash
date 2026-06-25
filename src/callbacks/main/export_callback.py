@@ -7,7 +7,7 @@ import math
 
 from xlsxwriter import Workbook  # pip install xlsxwriter
 
-from src.dataAccess.data_access import (
+from src.dataAccess.main_data_access import (
     fetch_kpis_paginated_severity_global_sort,
     fetch_kpis_paginated_severity_sort,
     COLMAP,

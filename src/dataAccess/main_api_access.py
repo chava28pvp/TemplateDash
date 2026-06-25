@@ -259,6 +259,38 @@ def fetch_main_alarm_state(
     return _rows_to_df(_extract_rows(response))
 
 
+def fetch_alarm_meta_for_heatmap(
+    *,
+    fecha,
+    vendors=None,
+    clusters=None,
+    networks=None,
+    technologies=None,
+):
+    response = _request(
+        "alarm_meta",
+        fecha=fecha,
+        filters=_filters(vendors, clusters, networks, technologies),
+        thresholds_snapshot=_thresholds_snapshot(),
+    )
+    rows = _extract_rows(response)
+    df = _rows_to_df(rows)
+    raw_keys = response.get("alarm_keys") or []
+    alarm_keys_set = {
+        (
+            item.get("technology"),
+            item.get("vendor"),
+            item.get("noc_cluster"),
+            item.get("network"),
+        )
+        for item in raw_keys
+        if isinstance(item, dict)
+    }
+    if df.empty:
+        df = pd.DataFrame(columns=["technology", "vendor", "noc_cluster"])
+    return df, alarm_keys_set
+
+
 def fetch_kpis_by_keys(
     *,
     fecha=None,
