@@ -1,5 +1,6 @@
 # src/data_access.py
 from datetime import datetime, timedelta
+import logging
 
 import pandas as pd
 from functools import lru_cache
@@ -7,7 +8,8 @@ from sqlalchemy import create_engine, text, bindparam
 from typing import Dict, Tuple, Optional, List
 
 from src.Utils.alarmados import alarm_threshold_for, load_threshold_cfg, excess_base_for
-from src.config import SQLALCHEMY_URL
+from src.config import DATA_SOURCE, SQLALCHEMY_URL
+from src.dataAccess import main_api_client
 
 # =========================================================
 # Engine / Config
@@ -15,6 +17,11 @@ from src.config import SQLALCHEMY_URL
 
 _engine = None
 _TABLE_NAME = "Dashboard_Master"
+logger = logging.getLogger(__name__)
+
+
+def _use_api() -> bool:
+    return DATA_SOURCE == "api" and main_api_client.is_configured()
 
 def get_engine():
     """Singleton SQLAlchemy engine."""
@@ -566,6 +573,22 @@ def fetch_kpis(
     Consulta no paginada (útil para casos pequeños o descargas).
     Usa filtros y devuelve DataFrame con alias amigables y orden base.
     """
+    if _use_api():
+        df = main_api_client.fetch_rows(
+            fecha=fecha,
+            hora=hora,
+            vendors=vendors,
+            clusters=clusters,
+            networks=networks,
+            technologies=technologies,
+            limit=limit,
+            na_as_empty=na_as_empty,
+            columns=columns or BASE_COLUMNS,
+            thresholds_snapshot=load_threshold_cfg(),
+        )
+        expected_cols = [c for c in (columns or BASE_COLUMNS) if c in df.columns]
+        return df.reindex(columns=expected_cols) if expected_cols else df
+
     # 1) columnas amigables válidas
     requested_cols = columns or BASE_COLUMNS
     friendly_cols = _resolve_columns(requested_cols)
@@ -613,6 +636,14 @@ def fetch_main_distinct_catalogs(
     - networks/technologies: catálogo global del corte fecha/hora.
     - vendors/noc_clusters: catálogo condicionado por network/technology seleccionados.
     """
+    if _use_api():
+        return main_api_client.fetch_distinct_catalogs(
+            fecha=fecha,
+            hora=hora,
+            networks=networks,
+            technologies=technologies,
+        )
+
     # 1) Catálogo base de network/technology (sin filtrar por network/technology).
     where_base, params_base, uvb, ucb, unb, utb = _filters_where_and_params(
         fecha=fecha,
@@ -684,6 +715,26 @@ def fetch_kpis_paginated_severity_global_sort(
     ascending=True,
     na_as_empty=False,
 ):
+    if _use_api():
+        df, total = main_api_client.fetch_page(
+            mode="global",
+            fecha=fecha,
+            hora=hora,
+            vendors=vendors,
+            clusters=clusters,
+            networks=networks,
+            technologies=technologies,
+            page=page,
+            page_size=page_size,
+            sort_by_friendly=sort_by_friendly,
+            sort_net=sort_net,
+            ascending=ascending,
+            na_as_empty=na_as_empty,
+            columns=BASE_COLUMNS,
+            thresholds_snapshot=load_threshold_cfg(),
+        )
+        return df.reindex(columns=[c for c in BASE_COLUMNS if c in df.columns]), int(total)
+
     page = max(1, int(page))
     page_size = max(1, int(page_size))
     offset = (page - 1) * page_size
@@ -802,6 +853,23 @@ def fetch_kpis_paginated_severity_sort(
     Incluye sólo filas con al menos 1 KPI en 'critico' (crit_count > 0),
     replicando el comportamiento de tu query original.
     """
+    if _use_api():
+        df, total = main_api_client.fetch_page(
+            mode="alarmado",
+            fecha=fecha,
+            hora=hora,
+            vendors=vendors,
+            clusters=clusters,
+            networks=networks,
+            technologies=technologies,
+            page=page,
+            page_size=page_size,
+            na_as_empty=na_as_empty,
+            columns=BASE_COLUMNS,
+            thresholds_snapshot=load_threshold_cfg(),
+        )
+        return df.reindex(columns=[c for c in BASE_COLUMNS if c in df.columns]), int(total)
+
     page = max(1, int(page))
     page_size = max(1, int(page_size))
     offset = (page - 1) * page_size
@@ -1049,6 +1117,19 @@ def fetch_integrity_baseline_week(
 
     Agrupa por: network, vendor, noc_cluster, technology.
     """
+    if _use_api():
+        try:
+            return main_api_client.fetch_integrity_baseline_week(
+                fecha=fecha,
+                vendors=vendors,
+                clusters=clusters,
+                networks=networks,
+                technologies=technologies,
+            )
+        except main_api_client.MainApiError as exc:
+            logger.warning("No se pudo cargar baseline semanal via API: %s", exc)
+            return pd.DataFrame()
+
     if not fecha:
         return pd.DataFrame()
 
@@ -1126,6 +1207,21 @@ def fetch_kpis_by_keys(
     Trae filas long completas SOLO para un set de keys (página),
     sin paginar por OFFSET/LIMIT (la paginación la haces por keys).
     """
+    if _use_api():
+        df = main_api_client.fetch_by_keys(
+            fecha=fecha,
+            hora=hora,
+            vendors=vendors,
+            clusters=clusters,
+            networks=networks,
+            technologies=technologies,
+            row_keys=row_keys,
+            na_as_empty=na_as_empty,
+            columns=BASE_COLUMNS,
+            thresholds_snapshot=load_threshold_cfg(),
+        )
+        return df.reindex(columns=[c for c in BASE_COLUMNS if c in df.columns])
+
     row_keys = row_keys or []
     if not row_keys:
         return pd.DataFrame()
@@ -1183,6 +1279,9 @@ def fetch_latest_available_slot():
     Devuelve la última combinación fecha/hora disponible en Dashboard_Master.
     Retorna dict {"fecha": "YYYY-MM-DD", "hora": "HH:MM:SS"} o None.
     """
+    if _use_api():
+        return main_api_client.fetch_latest_slot()
+
     sql = f"""
         SELECT
             {_quote(COLMAP['fecha'])} AS fecha,
@@ -1222,6 +1321,20 @@ def fetch_progress_max_by_network(
     Estructura:
       { "NET__ps_rrc_fail": 123.0, ... }
     """
+    if _use_api():
+        try:
+            return main_api_client.fetch_progress_max_by_network(
+                fecha=fecha,
+                hora=hora,
+                vendors=vendors,
+                clusters=clusters,
+                networks=networks,
+                technologies=technologies,
+            )
+        except main_api_client.MainApiError as exc:
+            logger.warning("No se pudo cargar progress max via API: %s", exc)
+            return {}
+
     requested = [k for k in _PROGRESS_MAIN_KPIS if k in COLMAP]
     if not requested:
         return {}
@@ -1273,6 +1386,20 @@ def fetch_main_alarm_state(
     Devuelve filas mínimas para calcular la racha de alarmas en Python sin bajar todo el dataset.
     Incluye solo keys, tiempo y un flag `has_alarm`.
     """
+    if _use_api():
+        try:
+            return main_api_client.fetch_alarm_state(
+                fecha=fecha,
+                vendors=vendors,
+                clusters=clusters,
+                networks=networks,
+                technologies=technologies,
+                thresholds_snapshot=load_threshold_cfg(),
+            )
+        except main_api_client.MainApiError as exc:
+            logger.warning("No se pudo cargar alarm_state via API: %s", exc)
+            return pd.DataFrame()
+
     if not fecha:
         return pd.DataFrame()
 

@@ -4,6 +4,7 @@ venv/
 venv_tmp/
 env/
 .venv/
+.env.api
 build/
 dist/
 *.exe
