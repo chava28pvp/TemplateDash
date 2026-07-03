@@ -108,7 +108,7 @@ COLMAP = {
 # Orden “deseado” para el DataFrame expuesto al resto de la app.
 BASE_COLUMNS = [
     "fecha", "hora", "vendor", "noc_cluster", "network", "technology",
-    "integrity",
+    "integrity", "integrity_deg_pct",
     "ps_traff_delta", "ps_traff_gb",
     "ps_rrc_ia_percent", "ps_rrc_fail",
     "ps_rab_ia_percent", "ps_rab_fail",

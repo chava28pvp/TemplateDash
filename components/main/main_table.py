@@ -144,6 +144,27 @@ def _fmt_number(v, colname=None):
     return str(v)
 
 
+def _as_finite_float(value):
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(out) or math.isinf(out):
+        return None
+    return out
+
+
+def _integrity_health_pct_from_row(row, integrity_col, getter=None):
+    pct_col = integrity_col.replace("integrity", "integrity_deg_pct")
+    if getter is not None:
+        value = getter(row, pct_col)
+    elif hasattr(row, "get"):
+        value = row.get(pct_col)
+    else:
+        value = None
+    return _as_finite_float(value)
+
+
 def _progress_cell(
     value,
     *,
@@ -616,26 +637,29 @@ def render_kpi_table_multinet(
 
                 # Caso: % “health” vs baseline (solo muestra número, sin colores)
                 if base_name == "integrity_deg_pct":
-                    vendor_val = _safe_get(row, "vendor")
-                    cluster_val = _safe_get(row, "noc_cluster")
-                    tech_val = _safe_get(row, "technology")
-
-                    key = (net, vendor_val, cluster_val, tech_val)
-                    baseline = integrity_baseline_map.get(key) if integrity_baseline_map else None
-
-                    integ_col = col.replace("integrity_deg_pct", "integrity")
-                    integ_val = _safe_get(row, integ_col)
-
                     txt = ""
-                    if (
-                        baseline is not None
-                        and isinstance(integ_val, (int, float))
-                        and not pd.isna(integ_val)
-                        and baseline > 0
-                    ):
-                        ratio = float(integ_val) / float(baseline)
-                        health_pct = max(0.0, min(100.0, ratio * 100.0))
-                        txt = f"{health_pct:.1f}"
+                    if isinstance(num_val, (int, float)) and not pd.isna(num_val):
+                        txt = f"{float(num_val):.1f}"
+                    else:
+                        vendor_val = _safe_get(row, "vendor")
+                        cluster_val = _safe_get(row, "noc_cluster")
+                        tech_val = _safe_get(row, "technology")
+
+                        key = (net, vendor_val, cluster_val, tech_val)
+                        baseline = integrity_baseline_map.get(key) if integrity_baseline_map else None
+
+                        integ_col = col.replace("integrity_deg_pct", "integrity")
+                        integ_val = _safe_get(row, integ_col)
+
+                        if (
+                            baseline is not None
+                            and isinstance(integ_val, (int, float))
+                            and not pd.isna(integ_val)
+                            and baseline > 0
+                        ):
+                            ratio = float(integ_val) / float(baseline)
+                            health_pct = max(0.0, min(100.0, ratio * 100.0))
+                            txt = f"{health_pct:.1f}"
 
                     cell = html.Div(txt, className="cell-neutral")
 
@@ -648,9 +672,12 @@ def render_kpi_table_multinet(
 
                     baseline = integrity_baseline_map.get(key) if integrity_baseline_map else None
 
+                    health_pct = _integrity_health_pct_from_row(row, col, getter=_safe_get)
                     if baseline is not None and baseline > 0:
                         ratio = float(num_val) / float(baseline)
                         cls = "cell-integrity-degraded" if ratio <= 0.799 else "cell-neutral"
+                    elif health_pct is not None:
+                        cls = "cell-integrity-degraded" if health_pct <= 79.9 else "cell-neutral"
                     else:
                         cls = "cell-neutral"
 

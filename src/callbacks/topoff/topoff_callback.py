@@ -11,6 +11,7 @@ from src.dataAccess.data_acess_topoff import (
     fetch_topoff_distinct_options,
 )
 from components.topoff.topoff import render_topoff_table
+from src.config import DATA_SOURCE
 
 DEFAULT_PAGE_SIZE = 50
 DEFAULT_SORT_STATE = {"column": None, "ascending": True}
@@ -45,6 +46,9 @@ def register_topoff_callbacks(app):
         prevent_initial_call=False,
     )
     def load_topoff_options(fecha, technologies, vendors, clusters):
+        if DATA_SOURCE == "api":
+            return [], [], []
+
         sites, rncs, nodebs = fetch_topoff_distinct_options(
             fecha=fecha,
             technologies=technologies,
@@ -174,6 +178,13 @@ def register_topoff_callbacks(app):
         link_state,
         cluster_mode,
     ):
+        if DATA_SOURCE == "api":
+            return (
+                dbc.Alert("TopOff deshabilitado en modo API.", color="secondary"),
+                "Pagina 1 de 1",
+                "Sin resultados.",
+            )
+
         page = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
 

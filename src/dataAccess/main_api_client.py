@@ -8,8 +8,10 @@ import urllib3
 from src.config import (
     MAIN_QUERY_API_CA_BUNDLE,
     MAIN_QUERY_API_DEBUG,
+    MAIN_QUERY_API_FORCE_RUNTIME_SORT,
     MAIN_QUERY_API_MAX_PAGES,
     MAIN_QUERY_API_PAGE_SIZE,
+    MAIN_QUERY_API_SCAN_MAX_ROWS,
     MAIN_QUERY_API_TIMEOUT,
     MAIN_QUERY_API_TOKEN,
     MAIN_QUERY_API_TOKEN_HEADER,
@@ -104,10 +106,128 @@ def fetch_page(
         "sort_net": sort_net,
         "ascending": bool(ascending),
     }
-    payload["options"] = {"na_as_empty": bool(na_as_empty)}
+    payload["options"] = {
+        "na_as_empty": bool(na_as_empty),
+        "force_in_memory_sort": bool(thresholds_snapshot and MAIN_QUERY_API_FORCE_RUNTIME_SORT),
+        "max_rows": int(MAIN_QUERY_API_SCAN_MAX_ROWS or 200000),
+    }
+    if not MAIN_QUERY_API_FORCE_RUNTIME_SORT:
+        payload.pop("thresholds_snapshot", None)
 
     data = call_operation("table_page", payload)
-    return rows_to_frame(data.get("rows") or []), int(data.get("total") or 0)
+    df = rows_to_frame(data.get("rows") or [])
+    df = enrich_integrity_health_pct(df, fecha=fecha)
+    return df, int(data.get("total") or 0)
+
+
+def enrich_integrity_health_pct(df: pd.DataFrame, *, fecha=None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    if "integrity_deg_pct" in df.columns and df["integrity_deg_pct"].notna().any():
+        return df
+    required = {"fecha", "hora", "vendor", "noc_cluster", "technology", "network", "integrity"}
+    if not required.issubset(df.columns):
+        return df
+
+    row_keys = (
+        df[["fecha", "hora", "vendor", "noc_cluster", "technology", "network"]]
+        .drop_duplicates()
+        .to_dict("records")
+    )
+    if not row_keys:
+        return df
+
+    baseline_map = fetch_integrity_baseline_for_keys(fecha=fecha or df["fecha"].max(), row_keys=row_keys)
+    if not baseline_map:
+        return df
+
+    out = df.copy()
+
+    def _pct(row):
+        key = (row.get("network"), row.get("vendor"), row.get("noc_cluster"), row.get("technology"))
+        baseline = baseline_map.get(key)
+        integrity = row.get("integrity")
+        try:
+            if baseline is None or float(baseline) <= 0 or pd.isna(integrity):
+                return None
+            return max(0.0, min(100.0, (float(integrity) / float(baseline)) * 100.0))
+        except Exception:
+            return None
+
+    out["integrity_deg_pct"] = out.apply(_pct, axis=1)
+    return out
+
+
+def fetch_integrity_baseline_for_keys(*, fecha, row_keys):
+    if not fecha or not row_keys:
+        return {}
+    narrowed = _filters_from_row_keys(row_keys)
+    narrowed_payload = _base_payload(
+        fecha=fecha,
+        vendors=narrowed.get("vendors"),
+        clusters=narrowed.get("clusters"),
+        networks=narrowed.get("networks"),
+        technologies=narrowed.get("technologies"),
+    )
+    narrowed_payload["options"] = {"baseline_max_rows": 50000}
+    try:
+        data = call_operation("integrity_baseline_week", narrowed_payload)
+        rows = data.get("rows") or data.get("data") or []
+        out = {}
+        for item in rows:
+            key = (item.get("network"), item.get("vendor"), item.get("noc_cluster"), item.get("technology"))
+            baseline = item.get("integrity_week_avg")
+            if baseline is not None:
+                out[key] = baseline
+        if out:
+            return out
+    except MainApiError as exc:
+        logger.warning("No se pudo cargar baseline semanal acotado via API: %s", exc)
+
+    payload = {
+        "view": "main",
+        "fecha": fecha,
+        "row_keys": list(row_keys),
+        "pagination": {"page": 1, "page_size": max(1, len(row_keys))},
+        "options": {
+            "include_total": False,
+            "include_integrity_baseline": True,
+            "preview_baseline_max_rows": 50000,
+        },
+    }
+    try:
+        data = call_operation("computed_preview", payload)
+    except MainApiError as exc:
+        logger.warning("No se pudo cargar baseline por pagina via API: %s", exc)
+        return {}
+
+    out = {}
+    for row in data.get("rows") or []:
+        key = (row.get("network"), row.get("vendor"), row.get("noc_cluster"), row.get("technology"))
+        baseline = row.get("Integrity_Baseline_Debug")
+        if baseline is not None:
+            out[key] = baseline
+    return out
+
+
+def _filters_from_row_keys(row_keys):
+    out = {"vendors": set(), "clusters": set(), "technologies": set(), "networks": set()}
+    # row_keys do not include network, so the caller may pass only key columns.
+    # The fallback query is still much smaller when constrained by vendor/cluster/technology.
+    for key in row_keys or []:
+        vendor = key.get("vendor")
+        cluster = key.get("noc_cluster")
+        tech = key.get("technology")
+        network = key.get("network")
+        if vendor:
+            out["vendors"].add(vendor)
+        if cluster:
+            out["clusters"].add(cluster)
+        if tech:
+            out["technologies"].add(tech)
+        if network:
+            out["networks"].add(network)
+    return {k: sorted(v) for k, v in out.items() if v}
 
 
 def fetch_rows(
@@ -195,6 +315,24 @@ def fetch_distinct_catalogs(*, fecha=None, hora=None, networks=None, technologie
 
 def fetch_latest_slot():
     data = call_operation("latest_slot", {})
+    return data.get("data")
+
+
+def sync_thresholds(*, thresholds, profile="main", config_hash=None, updated_at=None):
+    payload = {
+        "profile": profile,
+        "thresholds": thresholds,
+    }
+    if config_hash:
+        payload["config_hash"] = config_hash
+    if updated_at:
+        payload["updated_at"] = updated_at
+    data = call_operation("sync_thresholds", payload)
+    return data.get("data") or {}
+
+
+def fetch_thresholds(*, profile="main"):
+    data = call_operation("get_thresholds", {"profile": profile})
     return data.get("data")
 
 

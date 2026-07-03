@@ -1,11 +1,14 @@
 from mat import *
+import hashlib
+import json
 from datetime import datetime, timedelta
 
 
 TABLE = "Resources_dashboardMaster"
+THRESHOLD_TABLE = "Resources_DashboardThresholdConfig"
 VIEW = "main"
 
-API_CONTRACT_VERSION = "main-table-v1"
+API_CONTRACT_VERSION = "main-table-v1-runtime-scoring"
 MAX_PAGE_SIZE = 1000
 MAX_SCAN_ROWS = 200000
 DEFAULT_PAGE_SIZE = 50
@@ -24,6 +27,15 @@ COMPUTED_FIELDS = [
     SERVER_SORT_FIELDS["crit_count"],
     SERVER_SORT_FIELDS["complete_flag"],
     SERVER_SORT_FIELDS["integrity_health_pct"],
+]
+
+STABLE_SCAN_ORDER = [
+    {"Date": "desc"},
+    {"Time": "desc"},
+    {"Vendor": "asc"},
+    {"Noc_Cluster": "asc"},
+    {"Network": "asc"},
+    {"Technology": "asc"},
 ]
 
 
@@ -99,32 +111,32 @@ PROGRESS_METRICS = [
 
 DEFAULT_THRESHOLDS = {
     "ps_rrc_ia_percent": {
-        "orientation": "higher_is_better",
-        "thresholds": {"excelente": 99.0, "bueno": 98.5, "regular": 98.0, "critico": 97.5},
+        "orientation": "lower_is_better",
+        "thresholds": {"excelente": 1.5, "bueno": 2.0, "regular": 3.0, "critico": 5.0},
     },
     "ps_rab_ia_percent": {
-        "orientation": "higher_is_better",
-        "thresholds": {"excelente": 99.0, "bueno": 98.5, "regular": 98.0, "critico": 97.5},
+        "orientation": "lower_is_better",
+        "thresholds": {"excelente": 1.5, "bueno": 2.0, "regular": 3.0, "critico": 5.0},
     },
     "ps_s1_ia_percent": {
-        "orientation": "higher_is_better",
-        "thresholds": {"excelente": 99.0, "bueno": 98.5, "regular": 98.0, "critico": 97.5},
+        "orientation": "lower_is_better",
+        "thresholds": {"excelente": 1.5, "bueno": 2.0, "regular": 3.0, "critico": 5.0},
     },
     "ps_drop_dc_percent": {
         "orientation": "lower_is_better",
-        "thresholds": {"excelente": 1.0, "bueno": 2.0, "regular": 2.5, "critico": 3.0},
+        "thresholds": {"excelente": 1.5, "bueno": 2.0, "regular": 3.0, "critico": 5.0},
     },
     "cs_rrc_ia_percent": {
-        "orientation": "higher_is_better",
-        "thresholds": {"excelente": 99.0, "bueno": 98.5, "regular": 98.0, "critico": 97.5},
+        "orientation": "lower_is_better",
+        "thresholds": {"excelente": 1.5, "bueno": 2.0, "regular": 3.0, "critico": 5.0},
     },
     "cs_rab_ia_percent": {
-        "orientation": "higher_is_better",
-        "thresholds": {"excelente": 99.0, "bueno": 98.5, "regular": 98.0, "critico": 97.5},
+        "orientation": "lower_is_better",
+        "thresholds": {"excelente": 1.5, "bueno": 2.0, "regular": 3.0, "critico": 5.0},
     },
     "cs_drop_dc_percent": {
         "orientation": "lower_is_better",
-        "thresholds": {"excelente": 1.0, "bueno": 2.0, "regular": 2.5, "critico": 3.0},
+        "thresholds": {"excelente": 1.5, "bueno": 2.0, "regular": 3.0, "critico": 5.0},
     },
 }
 
@@ -159,6 +171,12 @@ def serverless_function_handler(params, context):
             return handle_context(matclient, params)
         if operation in ("contract", "table_contract", "main_table_contract"):
             return handle_table_contract()
+        if operation in ("sync_thresholds", "threshold_sync"):
+            return handle_sync_thresholds(matclient, params)
+        if operation in ("get_thresholds", "thresholds", "threshold_config"):
+            return handle_get_thresholds(matclient, params)
+        if operation == "threshold_write_test":
+            return handle_threshold_write_test(matclient, params)
         if operation == "computed_preview":
             return handle_computed_preview(matclient, params)
         if operation == "computed_columns_check":
@@ -179,7 +197,7 @@ def handle_page(matclient, params):
 
     if mode in ("alarmado", "global", "severity") or is_integrity_pct_sort(sort):
         options = params.get("options") or {}
-        use_in_memory_sort = bool(options.get(FORCE_IN_MEMORY_SORT_OPTION, ALLOW_IN_MEMORY_SORT_FALLBACK))
+        use_in_memory_sort = should_use_runtime_scoring(params)
 
         if not use_in_memory_sort:
             data = execute_rows_query(
@@ -206,11 +224,12 @@ def handle_page(matclient, params):
         raw_rows = fetch_all_rows(
             matclient,
             where=where,
-            order_by=[{"Date": "desc"}, {"Time": "desc"}],
+            order_by=STABLE_SCAN_ORDER,
             fields=fields,
             max_rows=option_int(params.get("options") or {}, "max_rows", MAX_SCAN_ROWS, MAX_SCAN_ROWS),
         )
         rows = normalize_rows(raw_rows, na_as_empty=get_na_as_empty(params))
+        rows = dedupe_rows(rows, columns)
         scored = score_and_sort_rows(rows, params, mode)
         page_rows = trim_columns([item["row"] for item in scored[offset:offset + page_size]], columns)
         return ok_response(
@@ -250,15 +269,25 @@ def build_backend_page_where(base_where, mode):
     return where
 
 
+def should_use_runtime_scoring(params):
+    options = params.get("options") or {}
+    if FORCE_IN_MEMORY_SORT_OPTION in options:
+        return bool(options.get(FORCE_IN_MEMORY_SORT_OPTION))
+    if params.get("thresholds_snapshot") or options.get("thresholds_snapshot"):
+        return True
+    return bool(ALLOW_IN_MEMORY_SORT_FALLBACK)
+
+
 def build_backend_page_order_by(params, mode):
     sort = params.get("sort") or {}
     sort_column = strip_network_prefix(sort.get("column"))
     ascending = bool(sort.get("ascending", True))
     direction = "asc" if ascending else "desc"
+    nulls_last_direction = "asc_nulls_last" if ascending else "desc_nulls_last"
 
     if is_integrity_pct_sort(sort):
         return [
-            {SERVER_SORT_FIELDS["integrity_health_pct"]: direction},
+            {SERVER_SORT_FIELDS["integrity_health_pct"]: nulls_last_direction},
             {"Date": "desc"},
             {"Time": "desc"},
         ]
@@ -266,7 +295,7 @@ def build_backend_page_order_by(params, mode):
     real_column = COLMAP.get(sort_column)
     if real_column:
         return [
-            {real_column: direction},
+            {real_column: nulls_last_direction},
             {SERVER_SORT_FIELDS["severity_score"]: "desc"},
             {"Date": "desc"},
             {"Time": "desc"},
@@ -274,12 +303,9 @@ def build_backend_page_order_by(params, mode):
 
     if mode == "alarmado":
         return [
-            {SERVER_SORT_FIELDS["crit_count"]: "desc"},
             {SERVER_SORT_FIELDS["complete_flag"]: "asc"},
             {"INTEGRITY": "desc"},
             {SERVER_SORT_FIELDS["severity_score"]: "desc"},
-            {"Date": "desc"},
-            {"Time": "desc"},
             {"Noc_Cluster": "asc"},
         ]
 
@@ -504,6 +530,97 @@ def handle_context(matclient, params):
     return ok_response("context", data=data)
 
 
+def handle_sync_thresholds(matclient, params):
+    profile = str(params.get("profile") or "main").strip() or "main"
+    thresholds = params.get("thresholds") or params.get("config") or params.get("thresholds_snapshot")
+    if not thresholds:
+        return error_response("sync_thresholds requiere thresholds/config.")
+
+    config_json = json.dumps(thresholds, sort_keys=True, separators=(",", ":"))
+    config_hash = params.get("config_hash") or hashlib.sha256(config_json.encode("utf-8")).hexdigest()
+    updated_at = params.get("updated_at") or datetime.utcnow().isoformat()
+    active = str(params.get("active", "true")).lower()
+    mat_pk = params.get("mat_pk") or ("%s-%s" % (profile, config_hash[:24]))
+
+    mutation = """
+    mutation syncThresholdConfig($objects: [Resources_DashboardThresholdConfig_insert_input!]!) {
+      insert_Resources_DashboardThresholdConfig(objects: $objects) {
+        affected_rows
+      }
+    }
+    """
+    obj = {
+        "mat_pk": mat_pk,
+        "profile": profile,
+        "config_json": config_json,
+        "config_hash": config_hash,
+        "active": active,
+        "updated_at": updated_at,
+    }
+    result = matclient.graphQL.execute(operation=mutation, variables={"objects": [obj]})
+    if result.get("errors"):
+        return error_response("Error insertando thresholds: %s" % result.get("errors"))
+
+    affected_rows = (((result.get("data") or {}).get("insert_%s" % THRESHOLD_TABLE) or {}).get("affected_rows") or 0)
+    return ok_response(
+        "sync_thresholds",
+        data={"profile": profile, "config_hash": config_hash, "updated_at": updated_at, "affected_rows": affected_rows},
+    )
+
+
+def handle_get_thresholds(matclient, params):
+    profile = str(params.get("profile") or "main").strip() or "main"
+    row = fetch_active_threshold_config(matclient, profile)
+    return ok_response("get_thresholds", data=row)
+
+
+def handle_threshold_write_test(matclient, params):
+    test_config = {"test": True, "created_by": "threshold_write_test"}
+    p = clone_params(params)
+    p["profile"] = str(params.get("profile") or "write_test")
+    p["thresholds"] = test_config
+    return handle_sync_thresholds(matclient, p)
+
+
+def fetch_active_threshold_config(matclient, profile="main"):
+    query = """
+    query getThresholdConfig($where: Resources_DashboardThresholdConfig_bool_exp!, $limit: Int!) {
+      Resources_DashboardThresholdConfig(
+        where: $where,
+        limit: $limit,
+        order_by: [{updated_at: desc}, {metadata_created: desc}]
+      ) {
+        mat_pk
+        profile
+        config_json
+        config_hash
+        active
+        updated_at
+      }
+    }
+    """
+    where = {
+        "_and": [
+            {"profile": {"_eq": profile}},
+            {"active": {"_in": ["true", "1", "TRUE", "True", "yes", "YES"]}},
+        ]
+    }
+    result = matclient.graphQL.execute(operation=query, variables={"where": where, "limit": 1})
+    if result.get("errors"):
+        raise Exception("Error GraphQL consultando %s: %s" % (THRESHOLD_TABLE, result.get("errors")))
+
+    rows = ((result.get("data") or {}).get(THRESHOLD_TABLE) or [])
+    if not rows:
+        return None
+
+    row = rows[0]
+    try:
+        row["config"] = json.loads(row.get("config_json") or "{}")
+    except Exception:
+        row["config"] = {}
+    return row
+
+
 def handle_table_contract():
     """
     Machine-readable contract for the Dash main table adapter.
@@ -545,7 +662,8 @@ def handle_computed_preview(matclient, params):
     options = params.get("options") or {}
     include_total = bool(options.get("include_total", False))
     include_integrity_baseline = bool(options.get("include_integrity_baseline", False))
-    where = build_where(params)
+    row_keys = params.get("row_keys") or params.get("keys") or []
+    where = build_where_for_row_keys(params, row_keys) if row_keys else build_where(params)
     fields = columns_to_fields(unique(BASE_COLUMNS + SEVERITY_METRICS + ["integrity"]))
     data = execute_rows_query(
         matclient,
@@ -715,6 +833,27 @@ def fetch_integrity_baseline_map_for_keys(matclient, fecha, key_rows, params):
     return baseline_map
 
 
+def build_where_for_row_keys(params, row_keys):
+    base_where = build_where(params)
+    key_or = []
+    for raw_key in row_keys[:MAX_PAGE_SIZE]:
+        key = normalize_row_key(raw_key)
+        if not key:
+            continue
+        key_or.append({
+            "_and": [
+                {"Date": {"_eq": key["fecha"]}},
+                {"Time": {"_eq": normalize_hour_in(key["hora"])}},
+                {"Vendor": {"_eq": key["vendor"]}},
+                {"Noc_Cluster": {"_eq": key["noc_cluster"]}},
+                {"Technology": {"_eq": key["technology"]}},
+            ]
+        })
+    if not key_or:
+        return {"_and": [base_where, {"Date": {"_eq": "__no_rows__"}}]} if base_where else {"Date": {"_eq": "__no_rows__"}}
+    return {"_and": [base_where, {"_or": key_or}]} if base_where else {"_or": key_or}
+
+
 def compute_dashboard_master_fields(row, params=None, integrity_baseline_map=None):
     """
     Pure calculation to reuse in the load DAG.
@@ -877,7 +1016,7 @@ def fetch_all_rows(matclient, where, order_by=None, fields=None, max_rows=MAX_SC
     max_rows = max(1, min(int(max_rows or MAX_SCAN_ROWS), MAX_SCAN_ROWS))
     page_size = min(MAX_PAGE_SIZE, max_rows)
     offset = 0
-    order_by = order_by or [{"Date": "asc"}, {"Time": "asc"}]
+    order_by = order_by or STABLE_SCAN_ORDER
 
     while len(rows) < max_rows:
         data = execute_rows_query(
@@ -947,23 +1086,14 @@ def score_and_sort_rows(rows, params, mode):
             "integrity": integrity,
         })
 
-    def base_key(item):
-        row = item["row"]
-        return (
-            str(row.get("fecha") or ""),
-            str(row.get("hora") or ""),
-            str(row.get("vendor") or ""),
-            str(row.get("noc_cluster") or ""),
-            str(row.get("technology") or ""),
-        )
-
     if sort_column:
         scored.sort(
             key=lambda item: (
                 item["metric_value"] is None,
                 item["metric_value"] if ascending else -(item["metric_value"] or 0),
                 -item["severity_score"],
-                tuple(reversed(base_key(item))),
+                _desc_text(item["row"].get("fecha")),
+                _desc_text(item["row"].get("hora")),
             )
         )
     elif mode == "alarmado":
@@ -979,12 +1109,17 @@ def score_and_sort_rows(rows, params, mode):
         scored.sort(
             key=lambda item: (
                 -item["severity_score"],
-                str(item["row"].get("fecha") or ""),
-                str(item["row"].get("hora") or ""),
+                _desc_text(item["row"].get("fecha")),
+                _desc_text(item["row"].get("hora")),
             )
         )
 
     return scored
+
+
+def _desc_text(value):
+    text = str(value or "")
+    return tuple(-ord(ch) for ch in text)
 
 
 def row_severity_score(row, params):
@@ -1158,6 +1293,19 @@ def error_response(message):
 def trim_columns(rows, columns):
     allowed = set(columns)
     return [{k: v for k, v in row.items() if k in allowed} for row in rows]
+
+
+def dedupe_rows(rows, columns=None):
+    key_columns = columns or BASE_COLUMNS
+    seen = set()
+    out = []
+    for row in rows or []:
+        key = tuple(row.get(col) for col in key_columns if col in row)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
 
 
 def normalize_row_key(raw_key):

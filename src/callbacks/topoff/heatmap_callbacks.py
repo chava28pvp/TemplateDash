@@ -1,4 +1,4 @@
-import os
+﻿import os
 import math
 import time
 import json
@@ -30,6 +30,7 @@ from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 # === Data access TopOff ===
 from src.dataAccess.data_acess_topoff import fetch_topoff_paginated
 from src.dataAccess.data_acess_topoff import fetch_alarm_meta_for_topoff
+from src.config import DATA_SOURCE
 
 
 # ======================================================
@@ -38,11 +39,11 @@ from src.dataAccess.data_acess_topoff import fetch_alarm_meta_for_topoff
 _DFTS_TOPOFF_CACHE = {}
 _DFTS_TOPOFF_TTL = 300  # seg (5 min)
 
-# Última llave renderizada (evita re-render idéntico)
+# Ãšltima llave renderizada (evita re-render idÃ©ntico)
 _LAST_TOPOFF_HEATMAP_KEY = None
 _LAST_TOPOFF_HI_KEY = {"PS": None, "CS": None}
 
-# Orden de “valores” que se muestran en heatmap/histo por dominio
+# Orden de â€œvaloresâ€ que se muestran en heatmap/histo por dominio
 TOPOFF_PS_VALORES = ("PS_RRC", "PS_DROP", "PS_RAB")
 TOPOFF_CS_VALORES = ("CS_RRC", "CS_DROP", "CS_RAB")
 
@@ -62,8 +63,8 @@ def _as_list(x):
 
 def _hm_key_topoff(fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit, revision=None):
     """
-    Crea una llave hash (md5) que representa el “estado” actual del heatmap TopOff.
-    Si el estado no cambia, no re-renderizamos (optimización).
+    Crea una llave hash (md5) que representa el â€œestadoâ€ actual del heatmap TopOff.
+    Si el estado no cambia, no re-renderizamos (optimizaciÃ³n).
     """
     def _norm(x):
         # Normaliza: siempre lista, elimina None/"" y castea a string
@@ -86,14 +87,14 @@ def _hm_key_topoff(fecha, technologies, vendors, clusters, sites, rncs, nodebs, 
 
 
 def _ensure_df(x):
-    """Garantiza un DataFrame válido aunque la función de data access regrese otra cosa."""
+    """Garantiza un DataFrame vÃ¡lido aunque la funciÃ³n de data access regrese otra cosa."""
     return x if isinstance(x, pd.DataFrame) else pd.DataFrame()
 
 
 def _fetch_topoff_all(fecha, technologies, vendors, clusters, sites, rncs, nodebs):
     """
-    Trae “muchas” filas para series de tiempo (hoy/ayer) usando page_size grande.
-    Luego aplica filtros finos (site/rnc/nodeb) aquí mismo.
+    Trae â€œmuchasâ€ filas para series de tiempo (hoy/ayer) usando page_size grande.
+    Luego aplica filtros finos (site/rnc/nodeb) aquÃ­ mismo.
     """
     df, _total = fetch_topoff_paginated(
         fecha=fecha,
@@ -152,7 +153,7 @@ def _fetch_df_ts_topoff_cached(today_str, yday_str, technologies, vendors, clust
 
 
 def _valores_by_domain_topoff(domain: str):
-    """Selecciona el orden de KPIs (valores) según dominio PS/CS."""
+    """Selecciona el orden de KPIs (valores) segÃºn dominio PS/CS."""
     return TOPOFF_CS_VALORES if str(domain).upper() == "CS" else TOPOFF_PS_VALORES
 
 
@@ -178,7 +179,7 @@ def _run_topoff_histo_for_domain(
     Construye y regresa:
       - fig_pct  (modo severidad)
       - fig_unit (modo progress)
-      - page_info (paginación)
+      - page_info (paginaciÃ³n)
       - is_cache_hit (si evitamos recomputar)
     """
     global _LAST_TOPOFF_HI_KEY
@@ -195,7 +196,7 @@ def _run_topoff_histo_for_domain(
     rncs = _as_list(rncs)
     nodebs = _as_list(nodebs)
 
-    # Paginado (usa el mismo state que el heatmap en tu código)
+    # Paginado (usa el mismo state que el heatmap en tu cÃ³digo)
     page = int((hi_page_state or {}).get("page", 1))
     page_sz = int((hi_page_state or {}).get("page_size", 50))
     offset = max(0, (page - 1) * page_sz)
@@ -208,7 +209,7 @@ def _run_topoff_histo_for_domain(
         fecha, technologies, vendors, clusters, sites, rncs, nodebs, offset, limit, revision=trigger_revision
     ) + f"|selw={selected_wave}|dom={dom}"
 
-    # Evita re-render idéntico (excepto si el trigger fue click a wave)
+    # Evita re-render idÃ©ntico (excepto si el trigger fue click a wave)
     if _LAST_TOPOFF_HI_KEY.get(dom) == state_key and ctx.triggered_id != "topoff-histo-selected-wave":
         return None, None, None, True  # cache hit
 
@@ -335,6 +336,21 @@ def topoff_heatmap_callbacks(app):
         hm_page_state,
         hm_order_by,
     ):
+        if DATA_SOURCE == "api":
+            dates_children, hours_children = build_time_header_children_by_dates(fecha)
+            return (
+                dbc.Alert("TopOff deshabilitado en modo API.", color="secondary", className="mb-0"),
+                go.Figure(),
+                go.Figure(),
+                "Pagina 1 de 1",
+                "Sin resultados.",
+                {"total_rows": 0, "offset": 0, "limit": 50, "showing": 0},
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
+            )
+
         """
         Renderiza:
           - tabla resumen
@@ -433,7 +449,7 @@ def topoff_heatmap_callbacks(app):
                 "height": 300,
             }
 
-        # Altura alineada a la cantidad de filas de la página
+        # Altura alineada a la cantidad de filas de la pÃ¡gina
         hm_height = int(page_info.get("height") or 300)
 
         # Figuras
@@ -461,8 +477,8 @@ def topoff_heatmap_callbacks(app):
         end_i = start_i + showing - 1 if showing else 0
         total_pg = max(1, math.ceil(total / max(1, page_sz)))
 
-        hm_indicator = f"Página {page} de {total_pg}"
-        hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
+        hm_indicator = f"PÃ¡gina {page} de {total_pg}"
+        hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}â€“{end_i} de {total} filas"
         dates_children, hours_children = build_time_header_children_by_dates(fecha)
 
         _LAST_TOPOFF_HEATMAP_KEY = state_key
@@ -499,7 +515,10 @@ def topoff_heatmap_callbacks(app):
         prevent_initial_call=False,  # bootstrap
     )
     def topoff_heatmap_trigger_controller(*args):
-        """Store “dummy” para disparar el callback grande sin loops raros."""
+        """Store â€œdummyâ€ para disparar el callback grande sin loops raros."""
+        if DATA_SOURCE == "api":
+            return no_update
+
         ready = args[0] if args else None
         return {
             "ts": time.time(),
@@ -513,7 +532,7 @@ def topoff_heatmap_callbacks(app):
     # -------------------------------------------------
     @app.callback(
         Output("topoff-heatmap-page-state", "data"),
-        # Si cambia cualquier filtro o el tamaño de página, regresamos a página 1
+        # Si cambia cualquier filtro o el tamaÃ±o de pÃ¡gina, regresamos a pÃ¡gina 1
         Input("f-fecha", "date"),
         Input("f-technology", "value"),
         Input("f-vendor", "value"),
@@ -526,8 +545,8 @@ def topoff_heatmap_callbacks(app):
         prevent_initial_call=False,  # bootstrap
     )
     def topoff_hm_reset_page_on_filters(*args):
-        """Resetea a página 1 y guarda page_size actual."""
-        hm_page_size = args[-2]  # penúltimo input
+        """Resetea a pÃ¡gina 1 y guarda page_size actual."""
+        hm_page_size = args[-2]  # penÃºltimo input
         ps = max(1, int(hm_page_size or 50))
         return {"page": 1, "page_size": ps}
 
@@ -586,7 +605,10 @@ def topoff_heatmap_callbacks(app):
         nodebs,
         hi_page_state,
     ):
-        """Construye histo PS (pct y unit) usando la misma paginación."""
+        """Construye histo PS (pct y unit) usando la misma paginaciÃ³n."""
+        if DATA_SOURCE == "api":
+            return no_update, no_update, no_update
+
         fig_pct, fig_unit, page_info, is_cache = _run_topoff_histo_for_domain(
             "PS",
             sel_wave,
@@ -635,6 +657,9 @@ def topoff_heatmap_callbacks(app):
         hi_page_state,
     ):
         """Construye histo CS (pct y unit)."""
+        if DATA_SOURCE == "api":
+            return no_update, no_update
+
         fig_pct, fig_unit, _page_info, is_cache = _run_topoff_histo_for_domain(
             "CS",
             sel_wave,
@@ -749,7 +774,7 @@ def topoff_heatmap_callbacks(app):
         return {"series_key": series_key}
 
     # -------------------------------------------------
-    # L) Double-click (autosize) -> limpia selección
+    # L) Double-click (autosize) -> limpia selecciÃ³n
     # -------------------------------------------------
     @app.callback(
         Output("topoff-histo-selected-wave", "data", allow_duplicate=True),
@@ -774,7 +799,7 @@ def topoff_heatmap_callbacks(app):
 
     # -------------------------------------------------
     # Sync leyenda PS: si ocultas/mostrar una curva en %,
-    # también la ocultamos/mostramos en UNIT.
+    # tambiÃ©n la ocultamos/mostramos en UNIT.
     # -------------------------------------------------
     @app.callback(
         Output("topoff-hi-unit-ps", "figure", allow_duplicate=True),
@@ -881,6 +906,9 @@ def topoff_heatmap_callbacks(app):
     )
     def topoff_histo_trigger_controller(*args):
         """Store dummy que dispara el refresh de histogramas."""
+        if DATA_SOURCE == "api":
+            return no_update
+
         ready = args[0] if args else None
         return {
             "ts": time.time(),

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import math
 import pandas as pd
 from dash import Input, Output, State, no_update, ctx
@@ -35,7 +35,13 @@ from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
 # Acceso a datos
 from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap
-from src.config import PROFILE_MAIN_CALLBACKS, PREWARM_MAIN_CACHE, PREWARM_MAIN_PAGE_SIZE
+from src.config import (
+    DATA_SOURCE,
+    MAIN_QUERY_API_HEATMAP_MAX_ROWS,
+    PROFILE_MAIN_CALLBACKS,
+    PREWARM_MAIN_CACHE,
+    PREWARM_MAIN_PAGE_SIZE,
+)
 from src.Utils.utils_time import default_date_str
 
 
@@ -47,10 +53,10 @@ from src.Utils.utils_time import default_date_str
 _DFTS_CACHE = {}
 _DFTS_TTL = 300  # segundos
 
-# Última clave renderizada para evitar re-render idéntico (heatmap)
+# Ãšltima clave renderizada para evitar re-render idÃ©ntico (heatmap)
 _LAST_HEATMAP_KEY = None
 
-# Última clave renderizada para evitar re-render idéntico (histograma PS/CS)
+# Ãšltima clave renderizada para evitar re-render idÃ©ntico (histograma PS/CS)
 _LAST_HI_KEY = {"PS": None, "CS": None}
 
 # Cache simple en memoria para meta de alarmados (df_meta + keys)
@@ -102,7 +108,7 @@ def _perf_log(callback_name, started_at, marks=None, extra=None):
 
 
 # =========================================================
-# MÉTRICAS POR DOMINIO
+# MÃ‰TRICAS POR DOMINIO
 # =========================================================
 PS_VALORES = ("PS_RRC", "PS_S1", "PS_DROP", "PS_RAB")
 CS_VALORES = ("CS_RRC", "CS_DROP", "CS_RAB")
@@ -116,8 +122,8 @@ def _hm_key(fecha, networks, technologies, vendors, clusters, offset, limit, rev
     """
     Genera una "firma" (hash md5) del estado actual del heatmap:
     - filtros
-    - paginación (offset/limit)
-    Esto permite cachear y también evitar renders duplicados.
+    - paginaciÃ³n (offset/limit)
+    Esto permite cachear y tambiÃ©n evitar renders duplicados.
     """
     def _norm(x):
         # Normaliza a lista de strings ordenada (estable)
@@ -144,11 +150,11 @@ def _ensure_df(x):
 
 def _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, clusters, revision=None):
     """
-    Trae el dataset de serie de tiempo (TS) del día de HOY y AYER:
+    Trae el dataset de serie de tiempo (TS) del dÃ­a de HOY y AYER:
     - fetch_kpis(... hoy ...)
     - fetch_kpis(... ayer ...)
     - concatena ambos
-    Se cachea por filtros para ahorrar consultas/cálculo.
+    Se cachea por filtros para ahorrar consultas/cÃ¡lculo.
     """
     key = (
         "df_ts",
@@ -164,8 +170,16 @@ def _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, cl
     hit = _DFTS_CACHE.get(key)
     if hit and (now - hit["ts"] < _DFTS_TTL):
         return hit["df"]
+    api_limit = None
+    if DATA_SOURCE == "api":
+        api_limit = max(0, int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0))
+        if api_limit <= 0:
+            empty = pd.DataFrame()
+            _DFTS_CACHE[key] = {"df": empty, "ts": now}
+            return empty
 
-    # Hoy (día completo: hora=None)
+
+    # Hoy (dÃ­a completo: hora=None)
     df_today = fetch_kpis(
         fecha=today_str,
         hora=None,
@@ -173,11 +187,11 @@ def _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, cl
         clusters=clusters or None,
         networks=networks or None,
         technologies=technologies or None,
-        limit=None
+        limit=api_limit
     )
     df_today = _ensure_df(df_today)
 
-    # Ayer (día completo: hora=None)
+    # Ayer (dÃ­a completo: hora=None)
     df_yday = fetch_kpis(
         fecha=yday_str,
         hora=None,
@@ -185,7 +199,7 @@ def _fetch_df_ts_cached(today_str, yday_str, networks, technologies, vendors, cl
         clusters=clusters or None,
         networks=networks or None,
         technologies=technologies or None,
-        limit=None
+        limit=api_limit
     )
     df_yday = _ensure_df(df_yday)
 
@@ -232,7 +246,7 @@ def _fetch_alarm_meta_cached(today_str, vendors, clusters, networks, technologie
     """
     Trae (df_meta, keys) para alarmados en el heatmap:
     - df_meta: metadata para filas (sitio/rnc/nodeb/etc)
-    - keys: set/keys para saber cuáles están alarmados
+    - keys: set/keys para saber cuÃ¡les estÃ¡n alarmados
     Cacheado por filtros.
     """
     key = (
@@ -281,22 +295,26 @@ def prewarm_main_cache(
     if not PREWARM_MAIN_CACHE:
         return
 
-    target_date = fecha or default_date_str()
-    limit = int(page_size or PREWARM_MAIN_PAGE_SIZE or 50)
-
-    perf_start = time.perf_counter()
-    perf_marks = []
     try:
-        today_dt = datetime.strptime(target_date, "%Y-%m-%d")
-    except Exception:
-        today_dt = datetime.utcnow()
-        target_date = today_dt.strftime("%Y-%m-%d")
-    yday_str = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        target_date = fecha or default_date_str()
+        limit = int(page_size or PREWARM_MAIN_PAGE_SIZE or 50)
 
-    networks = technologies = vendors = clusters = None
+        perf_start = time.perf_counter()
+        perf_marks = []
+        try:
+            today_dt = datetime.strptime(target_date, "%Y-%m-%d")
+        except Exception:
+            today_dt = datetime.utcnow()
+            target_date = today_dt.strftime("%Y-%m-%d")
+        yday_str = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    df_ts = _fetch_df_ts_cached(target_date, yday_str, networks, technologies, vendors, clusters)
-    perf_marks.append(("df_ts", time.perf_counter()))
+        networks = technologies = vendors = clusters = None
+
+        df_ts = _fetch_df_ts_cached(target_date, yday_str, networks, technologies, vendors, clusters)
+        perf_marks.append(("df_ts", time.perf_counter()))
+    except Exception as exc:
+        logger.warning("prewarm_main_cache omitido por error inicial: %s", exc)
+        return
 
     nets_heat = sorted(df_ts["network"].dropna().unique().tolist()) if (
         df_ts is not None and not df_ts.empty and "network" in df_ts.columns
@@ -418,9 +436,14 @@ def start_main_prewarm_thread():
             return
         _PREWARM_STARTED = True
 
+    def _safe_prewarm():
+        try:
+            prewarm_main_cache(fecha=default_date_str(), page_size=PREWARM_MAIN_PAGE_SIZE)
+        except Exception as exc:
+            logger.warning("prewarm_main_cache omitido por error: %s", exc)
+
     t = threading.Thread(
-        target=prewarm_main_cache,
-        kwargs={"fecha": default_date_str(), "page_size": PREWARM_MAIN_PAGE_SIZE},
+        target=_safe_prewarm,
         daemon=True,
         name="main-cache-prewarm",
     )
@@ -428,7 +451,7 @@ def start_main_prewarm_thread():
 
 
 def _valores_by_domain(domain: str):
-    """Devuelve qué métricas se usan según dominio PS o CS."""
+    """Devuelve quÃ© mÃ©tricas se usan segÃºn dominio PS o CS."""
     return CS_VALORES if str(domain).upper() == "CS" else PS_VALORES
 
 
@@ -479,7 +502,7 @@ def _build_histograma_for_domain(
         ven = sel.get("vendor")
         tech = sel.get("technology")
 
-        # Si viene alguno, “fija” ese filtro
+        # Si viene alguno, â€œfijaâ€ ese filtro
         if clus:
             clusters_effective = [clus]
         if ven:
@@ -493,7 +516,7 @@ def _build_histograma_for_domain(
     offset = max(0, (page - 1) * page_sz)
     limit = max(1, page_sz)
 
-    # -------- Clave de estado: cambia si cambia filtro/página/selección/dominio --------
+    # -------- Clave de estado: cambia si cambia filtro/pÃ¡gina/selecciÃ³n/dominio --------
     base_state_key = (
         _hm_key(
             fecha,
@@ -549,7 +572,7 @@ def _build_histograma_for_domain(
         ) else []
 
     # -------- Meta para heat/histo (alarmados) --------
-    # Nota: aquí usas fetch directo (si quieres, puedes cambiarlo por _fetch_alarm_meta_cached)
+    # Nota: aquÃ­ usas fetch directo (si quieres, puedes cambiarlo por _fetch_alarm_meta_cached)
     df_meta_heat, alarm_keys_set = _fetch_alarm_meta_cached(
         today_str,
         vendors_effective,
@@ -623,7 +646,7 @@ def _build_histograma_for_domain(
         _cache_set(_HI_FIG_CACHE, state_key, (fig_pct, fig_unit))
     perf_marks.append(("figures", time.perf_counter()))
 
-    # Marca el estado como “ya renderizado”
+    # Marca el estado como â€œya renderizadoâ€
     _LAST_HI_KEY[domain] = state_key
     _perf_log(
         f"histograma_{domain.lower()}",
@@ -658,6 +681,21 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def refresh_heatmaps(_trigger, fecha, applied_filters, hm_page_state, hm_order_by):
+        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
+            dates_children, hours_children = _build_time_header_children_by_dates(fecha)
+            return (
+                dbc.Alert("Heatmap deshabilitado en modo API.", color="secondary", className="mb-0"),
+                go.Figure(),
+                go.Figure(),
+                "Pagina 1 de 1",
+                "Sin resultados.",
+                {"total_rows": 0, "offset": 0, "limit": 50, "showing": 0},
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
+            )
+
         global _LAST_HEATMAP_KEY
         perf_start = time.perf_counter()
         perf_marks = []
@@ -671,7 +709,7 @@ def heatmap_callbacks(app):
         vendors = _as_list(_applied_value(applied_filters, "vendor"))
         clusters = _as_list(_applied_value(applied_filters, "cluster"))
 
-        # -------- Paginación HEATMAP --------
+        # -------- PaginaciÃ³n HEATMAP --------
         page = int((hm_page_state or {}).get("page", 1))
         page_sz = int((hm_page_state or {}).get("page_size", 50))
         offset = max(0, (page - 1) * page_sz)
@@ -681,12 +719,12 @@ def heatmap_callbacks(app):
         hm_order_by_norm = (hm_order_by or "alarm_hours")
         hm_order_by_norm = str(hm_order_by_norm).strip().lower()
 
-        # State key incluye filtros + página + orden
+        # State key incluye filtros + pÃ¡gina + orden
         state_key = _hm_key(
             fecha, networks, technologies, vendors, clusters, offset, limit, revision=trigger_revision
         ) + f"|ord={hm_order_by_norm}"
 
-        # Si no cambió nada, no re-renderiza
+        # Si no cambiÃ³ nada, no re-renderiza
         if _LAST_HEATMAP_KEY == state_key:
             _perf_log(
                 "refresh_heatmaps",
@@ -719,9 +757,13 @@ def heatmap_callbacks(app):
         yday_str = yday_dt.strftime("%Y-%m-%d")
 
         # -------- Datos TS (cacheados) --------
-        df_ts = _fetch_df_ts_cached(
-            today_str, yday_str, networks, technologies, vendors, clusters, revision=trigger_revision
-        )
+        try:
+            df_ts = _fetch_df_ts_cached(
+                today_str, yday_str, networks, technologies, vendors, clusters, revision=trigger_revision
+            )
+        except Exception as exc:
+            logger.warning("No se pudo cargar heatmap principal via data access: %s", exc)
+            df_ts = pd.DataFrame()
         perf_marks.append(("df_ts", time.perf_counter()))
 
         # -------- Redes efectivas --------
@@ -804,15 +846,15 @@ def heatmap_callbacks(app):
             table_component = dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
         perf_marks.append(("summary_table", time.perf_counter()))
 
-        # -------- Indicadores de paginación --------
+        # -------- Indicadores de paginaciÃ³n --------
         total = int(page_info.get("total_rows", 0))
         showing = int(page_info.get("showing", 0))
         start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
         end_i = start_i + showing - 1 if showing else 0
         total_pg = max(1, math.ceil(total / max(1, page_sz)))
 
-        hm_indicator = f"Página {page} de {total_pg}"
-        hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}–{end_i} de {total} filas"
+        hm_indicator = f"PÃ¡gina {page} de {total_pg}"
+        hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}â€“{end_i} de {total} filas"
         dates_children, hours_children = _build_time_header_children_by_dates(fecha)
 
         # Marca renderizado
@@ -837,8 +879,8 @@ def heatmap_callbacks(app):
         )
 
     # -------------------------------------------------
-    # Controlador: dispara el “trigger” cuando cambian filtros/página/orden
-    # (así el callback pesado solo depende de heatmap-trigger)
+    # Controlador: dispara el â€œtriggerâ€ cuando cambian filtros/pÃ¡gina/orden
+    # (asÃ­ el callback pesado solo depende de heatmap-trigger)
     # -------------------------------------------------
     @app.callback(
         Output("heatmap-trigger", "data"),
@@ -850,7 +892,10 @@ def heatmap_callbacks(app):
         prevent_initial_call=False,  # bootstrap al cargar
     )
     def heatmap_trigger_controller(_ready, _fecha, _applied_filters, _page_state, _ord):
-        # Un timestamp basta para “forzar” la actualización
+        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
+            return no_update
+
+        # Un timestamp basta para â€œforzarâ€ la actualizaciÃ³n
         return {
             "ts": time.time(),
             "source": "data_ready" if ctx.triggered_id == "data-ready-store" else "ui",
@@ -859,7 +904,7 @@ def heatmap_callbacks(app):
         }
 
     # -------------------------------------------------
-    # Reset de paginación del heatmap cuando cambian filtros/tamaño/orden
+    # Reset de paginaciÃ³n del heatmap cuando cambian filtros/tamaÃ±o/orden
     # -------------------------------------------------
     @app.callback(
         Output("heatmap-page-state", "data"),
@@ -901,6 +946,9 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def refresh_histograma_ps(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state):
+        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
+            return no_update, no_update, no_update
+
         applied_filters = applied_filters or {}
         networks = _as_list(_applied_value(applied_filters, "network"))
         technologies = _as_list(_applied_value(applied_filters, "technology"))
@@ -909,7 +957,7 @@ def heatmap_callbacks(app):
         fig_pct, fig_unit, page_info, is_cache_hit = _build_histograma_for_domain(
             "PS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state, _trigger
         )
-        # Si fue “cache hit” no actualizamos nada
+        # Si fue â€œcache hitâ€ no actualizamos nada
         if is_cache_hit:
             return no_update, no_update, no_update
         return fig_pct, fig_unit, page_info
@@ -929,6 +977,9 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def refresh_histograma_cs(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state):
+        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
+            return no_update, no_update
+
         applied_filters = applied_filters or {}
         networks = _as_list(_applied_value(applied_filters, "network"))
         technologies = _as_list(_applied_value(applied_filters, "technology"))
@@ -942,7 +993,7 @@ def heatmap_callbacks(app):
         return fig_pct, fig_unit
 
     # -------------------------------------------------
-    # Trigger del histograma (para re-render cuando cambian filtros/página/link)
+    # Trigger del histograma (para re-render cuando cambian filtros/pÃ¡gina/link)
     # -------------------------------------------------
     @app.callback(
         Output("histo-trigger", "data"),
@@ -952,6 +1003,9 @@ def heatmap_callbacks(app):
         prevent_initial_call=False,
     )
     def histo_trigger_controller(_ready, _heatmap_page_info, _link_state):
+        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
+            return no_update
+
         if not _heatmap_page_info:
             return no_update
         return {
@@ -962,8 +1016,8 @@ def heatmap_callbacks(app):
         }
 
     # -------------------------------------------------
-    # Reset de paginación de histograma cuando cambian filtros/tamaño/link
-    # (OJO: aquí usas hm-page-size y botones hm-page-prev/next)
+    # Reset de paginaciÃ³n de histograma cuando cambian filtros/tamaÃ±o/link
+    # (OJO: aquÃ­ usas hm-page-size y botones hm-page-prev/next)
     # -------------------------------------------------
     @app.callback(
         Output("histo-page-state", "data"),
@@ -977,7 +1031,7 @@ def heatmap_callbacks(app):
         return reset_page_state(hm_page_size, default_size=50)
 
     # -------------------------------------------------
-    # Paginación del histograma (usa botones del heatmap)
+    # PaginaciÃ³n del histograma (usa botones del heatmap)
     # -------------------------------------------------
     @app.callback(
         Output("histo-page-state", "data", allow_duplicate=True),
@@ -1082,7 +1136,7 @@ def heatmap_callbacks(app):
         return {"series_key": series_key}
 
     # -------------------------------------------------
-    # Doble click / autoscale: limpiar selección de wave
+    # Doble click / autoscale: limpiar selecciÃ³n de wave
     # -------------------------------------------------
     @app.callback(
         Output("histo-selected-wave", "data", allow_duplicate=True),
@@ -1100,13 +1154,13 @@ def heatmap_callbacks(app):
                 or r.get("yaxis.autorange") is True
             )
 
-        # Si alguno hizo autoscale -> limpiamos selección
+        # Si alguno hizo autoscale -> limpiamos selecciÃ³n
         if any(is_autosize(r) for r in [r_ps_pct, r_ps_unit, r_cs_pct, r_cs_unit]):
             return {}
         return no_update
 
     # -------------------------------------------------
-    # Sync de legend: PS (lo que ocultas en % también se oculta en UNIT)
+    # Sync de legend: PS (lo que ocultas en % tambiÃ©n se oculta en UNIT)
     # -------------------------------------------------
     @app.callback(
         Output("hi-unit-ps", "figure", allow_duplicate=True),

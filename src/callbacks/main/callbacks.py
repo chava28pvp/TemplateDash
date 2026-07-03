@@ -16,7 +16,7 @@ from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_
     fetch_kpis_paginated_severity_sort, fetch_integrity_baseline_week, fetch_kpis_by_keys, \
     fetch_main_distinct_catalogs, fetch_progress_max_by_network, fetch_main_alarm_state, \
     fetch_latest_available_slot
-from src.config import PROFILE_MAIN_CALLBACKS
+from src.config import DATA_SOURCE, PROFILE_MAIN_CALLBACKS
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct, fetch_latest_available_slot_topoff
 from dash.exceptions import PreventUpdate
 from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot, purge_expired_cache_entries
@@ -137,6 +137,9 @@ def _compute_progress_max_for_filters(fecha, hora, networks, technologies, vendo
         - Para que las barras (progress bars) se escalen al máximo real del dataset filtrado.
         - Se calcula con el dataset COMPLETO (sin paginación) para que el máximo sea correcto.
         """
+    if DATA_SOURCE == "api":
+        return {}
+
     networks = _as_list(networks)
     technologies = _as_list(technologies)
     vendors = _as_list(vendors)
@@ -319,7 +322,7 @@ def register_callbacks(app):
         purge_topoff_heatmap_caches(now_ts=now_ts)
 
         main_slot = fetch_latest_available_slot()
-        topoff_slot = fetch_latest_available_slot_topoff()
+        topoff_slot = None if DATA_SOURCE == "api" else fetch_latest_available_slot_topoff()
         common_slot = choose_common_available_slot(main_slot, topoff_slot)
 
         if not common_slot:
@@ -389,11 +392,13 @@ def register_callbacks(app):
         clusters_main = main_opts.get("clusters", []) or []
 
         # -------- 2) Merge con TOPOFF (para tech y vendors) --------
-        top_opts = fetch_topoff_distinct(
-            fecha=fecha,
-            technologies=techs_sel or None,
-            vendors=None,
-        ) or {}
+        top_opts = {}
+        if DATA_SOURCE != "api":
+            top_opts = fetch_topoff_distinct(
+                fecha=fecha,
+                technologies=techs_sel or None,
+                vendors=None,
+            ) or {}
 
         techs_top = top_opts.get("technologies", []) or []
         vendors_top = top_opts.get("vendors", []) or []
@@ -676,6 +681,12 @@ def register_callbacks(app):
         # ---------- Reordenar GLOBAL por bucket de completitud (solo modo global) ----------
         if (sort_mode != "alarmado") and (not _is_integrity_pct_sort(sort_state)):
             def _health_pct_row(row):
+                if "integrity_deg_pct" in row and pd.notna(row.get("integrity_deg_pct")):
+                    try:
+                        return float(row.get("integrity_deg_pct"))
+                    except Exception:
+                        pass
+
                 net = row.get("network")
                 vendor_val = row.get("vendor")
                 cluster_val = row.get("noc_cluster")
@@ -1005,78 +1016,80 @@ def register_callbacks(app):
             )
             return cached
 
-        # ============================================================
-        # 1) BASELINE semanal de integridad (NO depende de hora)
-        # ============================================================
-        df_baseline = fetch_integrity_baseline_week(
-            fecha=fecha,
-            vendors=vendors or None,
-            clusters=clusters or None,
-            networks=networks or None,
-            technologies=technologies or None,
-        )
-        df_baseline = df_baseline if isinstance(df_baseline, pd.DataFrame) else pd.DataFrame()
-        perf_marks.append(("baseline", time.perf_counter()))
-
         integrity_baseline_list = []
-
-        if not df_baseline.empty:
-            # normaliza floats y strings (evita NaN)
-            integrity_baseline_list = [
-                {
-                    "network": (None if pd.isna(r.get("network")) else str(r.get("network")).strip()),
-                    "vendor": (None if pd.isna(r.get("vendor")) else str(r.get("vendor")).strip()),
-                    "noc_cluster": (None if pd.isna(r.get("noc_cluster")) else str(r.get("noc_cluster")).strip()),
-                    "technology": (None if pd.isna(r.get("technology")) else str(r.get("technology")).strip()),
-                    "integrity_week_avg": (
-                        None if pd.isna(r.get("integrity_week_avg")) else float(r.get("integrity_week_avg"))
-                    ),
-                }
-                for _, r in df_baseline.iterrows()
-            ]
-
-        # ============================================================
-        # 1.1) MOCK (si NO hay baseline real)
-        # ============================================================
-        elif MOCK_INTEGRITY_BASELINE:
-            df_now = fetch_kpis(
+        if DATA_SOURCE == "api":
+            perf_marks.append(("baseline_skipped_api", time.perf_counter()))
+        else:
+            # ============================================================
+            # 1) BASELINE semanal de integridad (NO depende de hora)
+            # ============================================================
+            df_baseline = fetch_integrity_baseline_week(
                 fecha=fecha,
-                hora=None,
                 vendors=vendors or None,
                 clusters=clusters or None,
                 networks=networks or None,
                 technologies=technologies or None,
-                limit=None,
             )
-            df_now = _ensure_df(df_now)
+            df_baseline = df_baseline if isinstance(df_baseline, pd.DataFrame) else pd.DataFrame()
+            perf_marks.append(("baseline", time.perf_counter()))
 
-            if not df_now.empty and "integrity" in df_now.columns:
-                if "network" in df_now.columns and MOCK_ONLY_NETWORKS:
-                    df_now = df_now[df_now["network"].isin(MOCK_ONLY_NETWORKS)]
+            if not df_baseline.empty:
+                # normaliza floats y strings (evita NaN)
+                integrity_baseline_list = [
+                    {
+                        "network": (None if pd.isna(r.get("network")) else str(r.get("network")).strip()),
+                        "vendor": (None if pd.isna(r.get("vendor")) else str(r.get("vendor")).strip()),
+                        "noc_cluster": (None if pd.isna(r.get("noc_cluster")) else str(r.get("noc_cluster")).strip()),
+                        "technology": (None if pd.isna(r.get("technology")) else str(r.get("technology")).strip()),
+                        "integrity_week_avg": (
+                            None if pd.isna(r.get("integrity_week_avg")) else float(r.get("integrity_week_avg"))
+                        ),
+                    }
+                    for _, r in df_baseline.iterrows()
+                ]
 
-                gcols = ["network", "vendor", "noc_cluster", "technology"]
-                if all(c in df_now.columns for c in gcols):
-                    df_g = (
-                        df_now
-                        .dropna(subset=["integrity"])
-                        .groupby(gcols, dropna=False)["integrity"]
-                        .mean()
-                        .reset_index()
-                    )
+            # ============================================================
+            # 1.1) MOCK (si NO hay baseline real)
+            # ============================================================
+            elif MOCK_INTEGRITY_BASELINE:
+                df_now = fetch_kpis(
+                    fecha=fecha,
+                    hora=None,
+                    vendors=vendors or None,
+                    clusters=clusters or None,
+                    networks=networks or None,
+                    technologies=technologies or None,
+                    limit=None,
+                )
+                df_now = _ensure_df(df_now)
 
-                    integrity_baseline_list = []
-                    for _, r in df_g.iterrows():
-                        cur = r.get("integrity")
-                        if cur is None or (isinstance(cur, float) and pd.isna(cur)):
-                            continue
+                if not df_now.empty and "integrity" in df_now.columns:
+                    if "network" in df_now.columns and MOCK_ONLY_NETWORKS:
+                        df_now = df_now[df_now["network"].isin(MOCK_ONLY_NETWORKS)]
 
-                        integrity_baseline_list.append({
-                            "network": r.get("network"),
-                            "vendor": r.get("vendor"),
-                            "noc_cluster": r.get("noc_cluster"),
-                            "technology": r.get("technology"),
-                            "integrity_week_avg": float(cur) * MOCK_BASELINE_MULT,
-                        })
+                    gcols = ["network", "vendor", "noc_cluster", "technology"]
+                    if all(c in df_now.columns for c in gcols):
+                        df_g = (
+                            df_now
+                            .dropna(subset=["integrity"])
+                            .groupby(gcols, dropna=False)["integrity"]
+                            .mean()
+                            .reset_index()
+                        )
+
+                        integrity_baseline_list = []
+                        for _, r in df_g.iterrows():
+                            cur = r.get("integrity")
+                            if cur is None or (isinstance(cur, float) and pd.isna(cur)):
+                                continue
+
+                            integrity_baseline_list.append({
+                                "network": r.get("network"),
+                                "vendor": r.get("vendor"),
+                                "noc_cluster": r.get("noc_cluster"),
+                                "technology": r.get("technology"),
+                                "integrity_week_avg": float(cur) * MOCK_BASELINE_MULT,
+                            })
 
         # ============================================================
         # 2) Progress max
@@ -1094,16 +1107,20 @@ def register_callbacks(app):
         # ============================================================
         # 3) Alarm map para el día completo
         # ============================================================
-        df_alarm_state = fetch_main_alarm_state(
-            fecha=fecha,
-            vendors=vendors or None,
-            clusters=clusters or None,
-            networks=networks or None,
-            technologies=technologies or None,
-        )
-        perf_marks.append(("alarm_fetch", time.perf_counter()))
-        alarm_list = _build_alarm_list(df_alarm_state if isinstance(df_alarm_state, pd.DataFrame) else pd.DataFrame())
-        perf_marks.append(("alarm_streak", time.perf_counter()))
+        if DATA_SOURCE == "api":
+            alarm_list = []
+            perf_marks.append(("alarm_skipped_api", time.perf_counter()))
+        else:
+            df_alarm_state = fetch_main_alarm_state(
+                fecha=fecha,
+                vendors=vendors or None,
+                clusters=clusters or None,
+                networks=networks or None,
+                technologies=technologies or None,
+            )
+            perf_marks.append(("alarm_fetch", time.perf_counter()))
+            alarm_list = _build_alarm_list(df_alarm_state if isinstance(df_alarm_state, pd.DataFrame) else pd.DataFrame())
+            perf_marks.append(("alarm_streak", time.perf_counter()))
 
         payload = {
             "integrity_baseline_map": integrity_baseline_list,
