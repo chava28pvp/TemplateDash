@@ -23,6 +23,7 @@ from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, 
 from src.callbacks.main.heatmap_callbacks import purge_main_heatmap_caches
 from src.callbacks.topoff.heatmap_callbacks import purge_topoff_heatmap_caches
 from src.Utils.utils_time import now_local
+from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
 _DFTS_CACHE = {}
 _DFTS_TTL = 300
@@ -33,6 +34,15 @@ MOCK_INTEGRITY_BASELINE = False
 MOCK_BASELINE_MULT = 1.25
 MOCK_ONLY_NETWORKS = {"NET", "ATT", "TEF"}
 PREFERRED_NET_ORDER = ["NET", "ATT", "TEF"]
+SEVERITY_KPIS = [
+    "ps_rrc_ia_percent",
+    "ps_rab_ia_percent",
+    "ps_s1_ia_percent",
+    "ps_drop_dc_percent",
+    "cs_rrc_ia_percent",
+    "cs_rab_ia_percent",
+    "cs_drop_dc_percent",
+]
 _LAST_HEATMAP_KEY = None
 _LAST_HI_KEY = None
 
@@ -128,6 +138,90 @@ def _normalize_hour_to_options(hour_value, hour_options):
         return None
 
     return normalized if normalized in opt_values else None
+
+
+def _target_slot_or_clock(data_ready, hour_options):
+    now = now_local()
+    candidates = []
+
+    slot = (data_ready or {}).get("slot") or {}
+    slot_hour = _normalize_hour_to_options(slot.get("hora"), hour_options)
+    slot_date = slot.get("fecha")
+    if slot_hour and slot_date:
+        candidates.append((f"{slot_date} {slot_hour}", slot_hour, slot_date))
+
+    clock_hour = _normalize_hour_to_options(f"{now.hour:02d}:00:00", hour_options)
+    clock_date = now.strftime("%Y-%m-%d")
+    if clock_hour and clock_date:
+        candidates.append((f"{clock_date} {clock_hour}", clock_hour, clock_date))
+
+    if candidates:
+        _target_dt, target_hour, target_date = max(candidates, key=lambda x: x[0])
+        return target_hour, target_date
+
+    return None, None
+
+
+def _metric_severity_level(metric, raw_value, network):
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return 0
+    if pd.isna(value) or math.isinf(value):
+        return 0
+
+    cfg = (
+        UM_MANAGER.get_severity(metric, network=network, profile="main")
+        or UM_MANAGER.get_severity(metric, profile="main")
+        or UM_MANAGER.get_severity(metric)
+        or {}
+    )
+    thresholds = cfg.get("thresholds") or {}
+    orientation = cfg.get("orientation", "lower_is_better")
+
+    def _thr(name):
+        try:
+            return float(thresholds.get(name))
+        except (TypeError, ValueError):
+            return None
+
+    exc = _thr("excelente")
+    bue = _thr("bueno")
+    reg = _thr("regular")
+    cri = _thr("critico")
+    if cri is None:
+        return 0
+
+    if orientation == "higher_is_better":
+        if value <= cri:
+            return 4
+        if reg is not None and value <= reg:
+            return 3
+        if bue is not None and value <= bue:
+            return 2
+        if exc is not None and value <= exc:
+            return 1
+        return 0
+
+    if value >= cri:
+        return 4
+    if reg is not None and value >= reg:
+        return 3
+    if bue is not None and value >= bue:
+        return 2
+    if exc is not None and value >= exc:
+        return 1
+    return 0
+
+
+def _global_rank_fields(row):
+    network = row.get("network")
+    levels = [_metric_severity_level(metric, row.get(metric), network) for metric in SEVERITY_KPIS]
+    return pd.Series({
+        "crit_count_local": sum(1 for level in levels if level >= 4),
+        "severity_score_local": sum(levels),
+    })
+
 
 def _compute_progress_max_for_filters(fecha, hora, networks, technologies, vendors, clusters):
     """
@@ -716,10 +810,11 @@ def register_callbacks(app):
             df["complete_bucket"] = df["integrity_health_pct"].apply(
                 lambda x: 0 if isinstance(x, (int, float)) and x >= 80.0 else 1
             )
+            df[["crit_count_local", "severity_score_local"]] = df.apply(_global_rank_fields, axis=1)
 
             df = df.sort_values(
-                by=["complete_bucket"],
-                ascending=[True],
+                by=["complete_bucket", "crit_count_local", "severity_score_local"],
+                ascending=[True, False, False],
                 kind="mergesort",
             )
         perf_marks.append(("row_enrichment", time.perf_counter()))
@@ -819,23 +914,9 @@ def register_callbacks(app):
         if not ctx.triggered_id:
             raise PreventUpdate
 
-        now = now_local()
-        clock_hour = _normalize_hour_to_options(f"{now.hour:02d}:00:00", hour_options)
-        clock_date = now.strftime("%Y-%m-%d")
-        slot = (data_ready or {}).get("slot") or {}
-        slot_hour = _normalize_hour_to_options(slot.get("hora"), hour_options)
-        slot_date = slot.get("fecha")
-
-        candidates = []
-        if clock_hour and clock_date:
-            candidates.append((f"{clock_date} {clock_hour}", clock_hour, clock_date))
-        if slot_hour and slot_date:
-            candidates.append((f"{slot_date} {slot_hour}", slot_hour, slot_date))
-
-        if candidates:
-            _target_dt, target_hour, target_date = max(candidates, key=lambda x: x[0])
-            if _fecha == target_date and _hora == target_hour:
-                return {"mode": "auto", "fecha": _fecha, "hora": _hora, "last_manual_ts": 0}
+        target_hour, target_date = _target_slot_or_clock(data_ready, hour_options)
+        if target_hour and target_date and _fecha == target_date and _hora == target_hour:
+            return {"mode": "auto", "fecha": _fecha, "hora": _hora, "last_manual_ts": 0}
 
         return {"mode": "manual", "last_manual_ts": time.time(), "fecha": _fecha, "hora": _hora}
 
@@ -856,23 +937,9 @@ def register_callbacks(app):
            o cuando la BD reporta un slot más reciente.
         """
         now = now_local()
-        clock_hour = _normalize_hour_to_options(f"{now.hour:02d}:00:00", hour_options)
-        clock_date = now.strftime("%Y-%m-%d")
-
-        slot = (data_ready or {}).get("slot") or {}
-        slot_hour = _normalize_hour_to_options(slot.get("hora"), hour_options)
-        slot_date = slot.get("fecha")
-
-        candidates = []
-        if clock_hour and clock_date:
-            candidates.append((f"{clock_date} {clock_hour}", clock_hour, clock_date))
-        if slot_hour and slot_date:
-            candidates.append((f"{slot_date} {slot_hour}", slot_hour, slot_date))
-
-        if not candidates:
+        target_hour, target_date = _target_slot_or_clock(data_ready, hour_options)
+        if not (target_hour and target_date):
             return no_update, no_update
-
-        _target_dt, target_hour, target_date = max(candidates, key=lambda x: x[0])
 
         manual_store = manual_store or {}
         manual_mode = manual_store.get("mode") == "manual"

@@ -745,7 +745,14 @@ def fetch_kpis_paginated_severity_global_sort(
     )
 
     # Expresión de severidad desde el JSON
-    severity_expr, thr_params = _build_severity_expr_from_json(profile="main")
+    cfg = load_threshold_cfg()
+    severity_expr, crit_expr, thr_params = _build_severity_expressions_from_json(cfg, profile="main")
+    c_integ = _quote(COLMAP["integrity"])
+    complete_flag_expr = (
+        f"CASE "
+        f"WHEN {c_integ} >= 80 THEN 0 "
+        f"ELSE 1 END"
+    )
 
     # COUNT total
     count_sql = f"""
@@ -783,6 +790,7 @@ def fetch_kpis_paginated_severity_global_sort(
             ORDER BY
                 {nulls_last_expr} ASC,          -- primero no-nulos
                 {metric_expr} {order_dir},      -- métrica clickeada
+                crit_count DESC,                -- desempate: mÃ¡s KPIs crÃ­ticos
                 severity_score DESC,            -- desempate global
                 {_quote(COLMAP['fecha'])} DESC,
                 {_quote(COLMAP['hora'])} DESC
@@ -791,6 +799,8 @@ def fetch_kpis_paginated_severity_global_sort(
         # MODO POR DEFECTO: EXACTO y estable, sin depender de ascending
         order_clause = f"""
             ORDER BY
+                complete_flag ASC,
+                crit_count DESC,
                 severity_score DESC,
                 {_quote(COLMAP['fecha'])} DESC,
                 {_quote(COLMAP['hora'])} DESC
@@ -799,7 +809,9 @@ def fetch_kpis_paginated_severity_global_sort(
     sel_sql = f"""
         SELECT
             {", ".join(select_cols)},
-            ({severity_expr}) AS severity_score
+            ({severity_expr}) AS severity_score,
+            ({crit_expr}) AS crit_count,
+            {complete_flag_expr} AS complete_flag
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
         {order_clause}

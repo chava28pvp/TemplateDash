@@ -46,6 +46,23 @@ def _parse_col(col):
     """
     return col.split("__", 1) if "__" in col else (None, col)
 
+
+def _network_order_from_columns(cols, fallback=None):
+    if fallback:
+        return list(fallback)
+
+    seen = []
+    for col in cols or []:
+        if "__" not in str(col):
+            continue
+        net = str(col).split("__", 1)[0]
+        if net and net not in seen:
+            seen.append(net)
+
+    preferred = ["NET", "ATT", "TEF"]
+    return [n for n in preferred if n in seen] + [n for n in seen if n not in preferred]
+
+
 def _severity_cfg_for(kpi, net, cfg):
     """Obtiene (orientation, thresholds) de severidad para una KPI y network.
     Soporta:
@@ -152,9 +169,10 @@ def export_callback(app):
         State("applied-filters-store", "data"),
         State("sort-state", "data"),
         State("page-state", "data"),
+        State("table-page-data", "data"),
         prevent_initial_call=True,
     )
-    def do_export(_, fecha, hora, applied_filters, sort_state, page_state):
+    def do_export(_, fecha, hora, applied_filters, sort_state, page_state, table_page_data):
 
         # 1) Exporta LA MISMA PÁGINA que está viendo el usuario en la tabla
         applied_filters = applied_filters or {}
@@ -269,6 +287,23 @@ def export_callback(app):
 
         # DF final a exportar
         df_out = df_wide[cols_final].copy()
+        visible_rows = (table_page_data or {}).get("rows") or []
+        visible_cols = (table_page_data or {}).get("columns") or []
+        if visible_rows:
+            df_visible = pd.DataFrame(visible_rows)
+            visible_cols = [c for c in visible_cols if c in df_visible.columns]
+            if visible_cols:
+                visible_nets = _network_order_from_columns(visible_cols, fallback=networks)
+                _, visible_metric_order, _ = expand_groups_for_networks(visible_nets)
+                ordered_visible_cols = [
+                    c for c in (KEY_COLS + visible_metric_order)
+                    if c in df_visible.columns
+                ]
+                remaining_cols = [
+                    c for c in visible_cols
+                    if c not in ordered_visible_cols and c != "_ord"
+                ]
+                df_out = df_visible[ordered_visible_cols + remaining_cols].copy()
 
         # 6) NO tocar keys; normaliza SOLO KPIs a numérico (para que Excel las reconozca)
         ID_KEYS = {"fecha", "hora", "vendor", "noc_cluster", "technology", "network"}

@@ -310,6 +310,8 @@ def build_backend_page_order_by(params, mode):
         ]
 
     return [
+        {SERVER_SORT_FIELDS["complete_flag"]: "asc"},
+        {SERVER_SORT_FIELDS["crit_count"]: "desc"},
         {SERVER_SORT_FIELDS["severity_score"]: "desc"},
         {"Date": "desc"},
         {"Time": "desc"},
@@ -1108,6 +1110,8 @@ def score_and_sort_rows(rows, params, mode):
     else:
         scored.sort(
             key=lambda item: (
+                item["complete_flag"],
+                -item["crit_count"],
                 -item["severity_score"],
                 _desc_text(item["row"].get("fecha")),
                 _desc_text(item["row"].get("hora")),
