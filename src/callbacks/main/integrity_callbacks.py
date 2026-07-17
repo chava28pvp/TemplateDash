@@ -1,5 +1,5 @@
 import pandas as pd
-from dash import Input, Output, State, no_update, ctx
+from dash import Input, Output, State, no_update, ctx, html
 import time
 import plotly.graph_objs as go
 import math
@@ -26,6 +26,8 @@ from src.callbacks.main.heatmap_callbacks import _as_list, _fetch_df_ts_cached
 # Baseline semanal (fallback si no viene en store)
 from src.dataAccess.data_access import fetch_integrity_baseline_week
 from src.callbacks.common import toggle_bool, reset_page_state
+from src.config import DATA_SOURCE
+from src.dataAccess import main_visuals_api_client
 
 
 # =========================================================
@@ -53,6 +55,73 @@ def _baseline_map_from_df(df_bl: pd.DataFrame) -> dict:
         ): r.integrity_week_avg
         for r in df_bl.itertuples(index=False)
     }
+
+
+def _baseline_from_payload_values(last_unit_val, last_pct_val):
+    try:
+        unit = float(last_unit_val)
+        pct = float(last_pct_val)
+    except Exception:
+        return None
+    if pd.isna(unit) or pd.isna(pct) or pct <= 0:
+        return None
+    return unit / (pct / 100.0)
+
+
+def _render_integrity_summary_from_payload(pct_payload, unit_payload, integrity_baseline_map=None):
+    detail = (pct_payload or {}).get("row_detail") or (pct_payload or {}).get("y") or []
+    x_dt = (pct_payload or {}).get("x_dt") or []
+    pct_raw = (pct_payload or {}).get("z_raw") or []
+    unit_raw = (unit_payload or {}).get("z_raw") or []
+    if not detail:
+        return dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
+
+    rows = []
+    for idx, y_id in enumerate(detail):
+        parts = str(y_id).split("/", 4)
+        tech = parts[0] if len(parts) > 0 else ""
+        vend = parts[1] if len(parts) > 1 else ""
+        clus = parts[2] if len(parts) > 2 else ""
+        net = parts[3] if len(parts) > 3 else ""
+        pvals = pct_raw[idx] if idx < len(pct_raw) else []
+        uvals = unit_raw[idx] if idx < len(unit_raw) else []
+        valid_idx = [i for i, v in enumerate(uvals) if v is not None] or [i for i, v in enumerate(pvals) if v is not None]
+        last_pct_val = None
+        last_unit_val = None
+        if valid_idx:
+            last_i = valid_idx[-1]
+            last_str = str(x_dt[last_i]).replace("T", " ")[:16] if last_i < len(x_dt) else ""
+            last_pct_val = pvals[last_i] if last_i < len(pvals) else None
+            last_unit_val = uvals[last_i] if last_i < len(uvals) else None
+            last_pct = "" if last_pct_val is None else f"{float(last_pct_val):.2f}"
+            last_unit = "" if last_unit_val is None else f"{float(last_unit_val):.0f}"
+        else:
+            last_str = last_pct = last_unit = ""
+        integrity_baseline_map = integrity_baseline_map or {}
+        base_val = integrity_baseline_map.get(
+            (str(net).strip(), str(vend).strip(), str(clus).strip(), str(tech).strip())
+        )
+        if base_val is None:
+            base_val = _baseline_from_payload_values(last_unit_val, last_pct_val)
+        trend = "" if base_val is None or pd.isna(base_val) else f"{float(base_val):.0f}"
+        rows.append(html.Tr([
+            html.Td(clus, className="w-cluster"),
+            html.Td(tech, className="w-tech"),
+            html.Td(vend[:1].upper() if vend else "", title=vend, className="w-vendor"),
+            html.Td(last_str, className="w-ultima"),
+            html.Td(last_pct, className="w-num ta-right"),
+            html.Td(trend, className="w-num ta-right"),
+            html.Td(last_unit, className="w-num ta-right"),
+        ]))
+
+    return dbc.Table(
+        [html.Tbody(rows)],
+        striped=True,
+        bordered=False,
+        hover=True,
+        size="sm",
+        className="mb-0 table table-dark table-hover kpi-table kpi-table-summary compact",
+    )
 
 
 # =========================================================
@@ -133,6 +202,58 @@ def integrity_callbacks(app):
         yday_dt = today_dt - timedelta(days=1)
         today_str = today_dt.strftime("%Y-%m-%d")
         yday_str = yday_dt.strftime("%Y-%m-%d")
+
+        if DATA_SOURCE == "api":
+            try:
+                data = main_visuals_api_client.fetch_integrity_heatmap(
+                    fecha=today_str,
+                    vendors=vendors or None,
+                    clusters=clusters or None,
+                    networks=networks or None,
+                    technologies=technologies or None,
+                    page=page,
+                    page_size=page_sz,
+                )
+                pct_payload = data.get("pct_payload")
+                unit_payload = data.get("unit_payload")
+                page_info = data.get("page_info") or {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+            except Exception as exc:
+                return (
+                    dbc.Alert(f"No se pudo cargar integridad desde API: {exc}", color="warning", className="mb-0"),
+                    go.Figure(),
+                    go.Figure(),
+                    "Pagina 1 de 1",
+                    "Sin filas.",
+                    {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0},
+                    dates_children,
+                    hours_children,
+                    dates_children,
+                    hours_children,
+                )
+
+            nrows = len((pct_payload or {}).get("y") or [])
+            hm_height = _hm_height(nrows)
+            fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
+            fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
+            total = int(page_info.get("total_rows", 0))
+            total_pg = max(1, math.ceil(total / max(1, page_sz)))
+            indicator = f"Pagina {page} de {total_pg}"
+            start_i = int(page_info.get("offset", 0)) + 1 if page_info.get("showing") else 0
+            end_i = int(page_info.get("offset", 0)) + int(page_info.get("showing", 0)) if page_info.get("showing") else 0
+            banner = "Sin filas." if total == 0 else f"Mostrando {start_i}-{end_i} de {total} filas"
+            table_component = _render_integrity_summary_from_payload(pct_payload, unit_payload)
+            return (
+                table_component,
+                fig_pct,
+                fig_unit,
+                indicator,
+                banner,
+                page_info,
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
+            )
 
         # ---------- df_ts (ayer+hoy) SIN hora ----------
         # Reutiliza cache para no volver a consultar cada vez

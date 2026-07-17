@@ -1,4 +1,4 @@
-# Dash Telecom KPIs Monitor
+# Dashboard Master
 
 Template de dashboard en Dash con soporte para MySQL o SQLite local.
 

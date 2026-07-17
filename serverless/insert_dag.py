@@ -1047,6 +1047,45 @@ THRESHOLD_KEY_BY_DB_FIELD = {
     "CS_DROP__DC": "cs_drop_dc_percent",
 }
 
+VISUAL_SERIES_TABLE = "Resources_DashboardVisualSeries"
+VISUAL_RANK_TABLE = "Resources_DashboardVisualRank"
+VISUAL_SCALE = 10000
+VISUAL_INSERT_BATCH_SIZE = int(os.environ.get("VISUAL_INSERT_BATCH_SIZE", "2000"))
+VISUAL_SNAPSHOT_BUILD_ALL_DATES = str(os.environ.get("VISUAL_SNAPSHOT_BUILD_ALL_DATES", "0")).strip().lower() in ("1", "true", "yes", "y")
+VISUAL_SNAPSHOT_FORCE_REBUILD = str(os.environ.get("VISUAL_SNAPSHOT_FORCE_REBUILD", "0")).strip().lower() in ("1", "true", "yes", "y")
+VISUAL_SNAPSHOT_SKIP_EXISTING = str(os.environ.get("VISUAL_SNAPSHOT_SKIP_EXISTING", "0")).strip().lower() in ("1", "true", "yes", "y")
+
+VISUAL_INPUT_FIELDS = {
+    "Resources_DashboardVisualSeries_insert_input": {
+        "fecha", "is_alarm", "mat_pk", "network", "noc_cluster", "offset48",
+        "pct_raw", "pct_score", "severity_level", "source_date", "source_hour",
+        "technology", "unit_raw", "unit_score", "updated_at", "valores", "vendor",
+    },
+    "Resources_DashboardVisualRank_insert_input": {
+        "alarm_hours", "crit_hours", "fecha", "last_bad_offset", "mat_pk",
+        "max_pct_score", "max_unit_raw", "min_integrity_pct", "network",
+        "noc_cluster", "rank_order", "technology", "updated_at", "valores",
+        "vendor", "view_type",
+    },
+}
+
+VISUAL_VALORES_MAP = {
+    "PS_RRC": ("PS_RRC__IA", "PS_RRC_FAIL"),
+    "PS_S1": ("PS_S1__IA", "PS_S1_FAIL"),
+    "PS_DROP": ("PS_DROP__DC", "PS_DROP_ABNREL"),
+    "PS_RAB": ("PS_RAB__IA", "PS_RAB_FAIL"),
+    "CS_RRC": ("CS_RRC__IA", "CS_RRC_FAIL"),
+    "CS_DROP": ("CS_DROP__DC", "CS_DROP_ABNREL"),
+    "CS_RAB": ("CS_RAB__IA", "CS_RAB_FAIL"),
+    "INTEGRITY": ("Integrity_Health_Pct", "INTEGRITY"),
+    "PS_TRAFF": (None, "PS_TRAFF_GB"),
+    "CS_TRAFF": (None, "CS_TRAFF_ERL"),
+}
+
+VISUAL_MAIN_ORDER = ("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB")
+VISUAL_HISTO_PS_ORDER = ("PS_RRC", "PS_S1", "PS_DROP", "PS_RAB")
+VISUAL_HISTO_CS_ORDER = ("CS_RRC", "CS_DROP", "CS_RAB")
+
 
 def to_float(value):
     if value is None or value == "":
@@ -1112,6 +1151,52 @@ def row_crit_count(row, thresholds_snapshot=None):
         if metric_severity_level(metric, row.get(metric), network, thresholds_snapshot) >= 4:
             count += 1
     return count
+
+
+def scaled_bigint(value, scale=VISUAL_SCALE):
+    value = to_float(value)
+    if value is None:
+        return None
+    try:
+        return int(round(value * scale))
+    except Exception:
+        return None
+
+
+def unscaled(value, scale=VISUAL_SCALE):
+    value = to_float(value)
+    if value is None:
+        return None
+    return value / float(scale)
+
+
+def metric_severity_score(metric, raw_value, network=None, thresholds_snapshot=None):
+    value = to_float(raw_value)
+    if value is None:
+        return None
+
+    cfg = metric_threshold_config(metric, network, thresholds_snapshot)
+    thresholds = cfg.get("thresholds") or {}
+    orientation = cfg.get("orientation", "lower_is_better")
+    exc = to_float(thresholds.get("excelente"))
+    cri = to_float(thresholds.get("critico") or cfg.get("critical"))
+    if exc is None or cri is None or cri == exc:
+        return None
+
+    if orientation == "higher_is_better":
+        score = 1.0 - ((cri - value) / (cri - exc))
+    else:
+        score = (value - exc) / (cri - exc)
+    return max(0.0, min(score, 2.0))
+
+
+def progress_score(metric, raw_value):
+    value = to_float(raw_value)
+    if value is None:
+        return None
+    # Los recursos visuales guardan unit_score solo para intensidad relativa.
+    # El heatmap puede recalcular normalizacion fina si despues se agregan min/max por red.
+    return max(0.0, min(1.0, value / 10000.0))
 
 
 def metric_threshold_config(metric, network=None, thresholds_snapshot=None):
@@ -1365,6 +1450,549 @@ def add_dashboard_master_computed_columns(df_insert, mat, job):
         f"{list(SERVER_SORT_FIELDS.values())}"
     )
     return out
+
+
+def visual_pk(*parts):
+    return "||".join("" if part is None else str(part).strip() for part in parts)
+
+
+def get_graphql_input_fields(mat, type_name, job):
+    query = """
+    query getInputType($typeName: String!) {
+      __type(name: $typeName) {
+        inputFields { name }
+      }
+    }
+    """
+    result = mat.graphQL.execute(operation=query, variables={"typeName": type_name})
+    if result.get("errors"):
+        raise Exception(f"Error consultando schema {type_name}: {result.get('errors')}")
+    fields = (
+        result
+        .get("data", {})
+        .get("__type", {})
+        .get("inputFields", [])
+    )
+    out = [field.get("name") for field in fields if field.get("name")]
+    job.log.info(f"Campos validos {type_name}: {out}")
+    return out
+
+
+def fetch_dashboard_rows_for_visual_snapshot(mat, fecha, job):
+    selected_dt = datetime.strptime(str(fecha), "%Y-%m-%d")
+    yday = (selected_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+    today = selected_dt.strftime("%Y-%m-%d")
+
+    query = """
+    query getDashboardVisualSource(
+      $where: Resources_dashboardMaster_bool_exp!,
+      $limit: Int!,
+      $offset: Int!
+    ) {
+      Resources_dashboardMaster(
+        where: $where,
+        limit: $limit,
+        offset: $offset,
+        order_by: [
+          {Date: asc},
+          {Time: asc},
+          {Network: asc},
+          {Technology: asc},
+          {Vendor: asc},
+          {Noc_Cluster: asc},
+          {mat_pk: asc}
+        ]
+      ) {
+        mat_pk
+        Network
+        Technology
+        Vendor
+        Noc_Cluster
+        Date
+        Time
+        INTEGRITY
+        Integrity_Health_Pct
+        PS_TRAFF_GB
+        CS_TRAFF_ERL
+        PS_RRC__IA
+        PS_RRC_FAIL
+        PS_RAB__IA
+        PS_RAB_FAIL
+        PS_S1__IA
+        PS_S1_FAIL
+        PS_DROP__DC
+        PS_DROP_ABNREL
+        CS_RRC__IA
+        CS_RRC_FAIL
+        CS_RAB__IA
+        CS_RAB_FAIL
+        CS_DROP__DC
+        CS_DROP_ABNREL
+      }
+    }
+    """
+    where = {"Date": {"_in": [yday, today]}}
+    rows = []
+    limit = 1000
+    offset = 0
+    while True:
+        result = mat.graphQL.execute(
+            operation=query,
+            variables={"where": where, "limit": limit, "offset": offset},
+        )
+        if result.get("errors"):
+            raise Exception(f"Error consultando DashboardMaster para snapshot visual: {result.get('errors')}")
+        chunk = (
+            result
+            .get("data", {})
+            .get("Resources_dashboardMaster", [])
+        )
+        if not chunk:
+            break
+        rows.extend(chunk)
+        if len(chunk) < limit:
+            break
+        offset += limit
+
+    job.log.info(f"Filas fuente visual fecha={today} yday={yday}: {len(rows)}")
+    return rows, today, yday
+
+
+def row_offset48(row, today, yday):
+    source_date = str(row.get("Date") or "")
+    source_hour = str(row.get("Time") or "")
+    try:
+        hour = int(source_hour[:2])
+    except Exception:
+        return None
+    if source_date == yday:
+        return hour
+    if source_date == today:
+        return hour + 24
+    return None
+
+
+def build_visual_series_records(rows, fecha, yday, thresholds_snapshot, updated_at):
+    records = []
+    for row in rows:
+        offset48 = row_offset48(row, fecha, yday)
+        if offset48 is None:
+            continue
+        network = row.get("Network")
+        vendor = row.get("Vendor")
+        cluster = row.get("Noc_Cluster")
+        technology = row.get("Technology")
+        source_date = row.get("Date")
+        source_hour = row.get("Time")
+
+        for valores, (pct_col, unit_col) in VISUAL_VALORES_MAP.items():
+            pct_raw = to_float(row.get(pct_col)) if pct_col else None
+            unit_raw = to_float(row.get(unit_col))
+            if pct_raw is None and unit_raw is None:
+                continue
+
+            if valores == "INTEGRITY":
+                severity_level = 4 if pct_raw is not None and pct_raw < 80 else 0
+                pct_score = None if pct_raw is None else max(0.0, min(1.0, pct_raw / 100.0))
+                is_alarm = 1 if severity_level >= 4 else 0
+            else:
+                severity_level = metric_severity_level(pct_col, pct_raw, network, thresholds_snapshot)
+                pct_score = metric_severity_score(pct_col, pct_raw, network, thresholds_snapshot)
+                is_alarm = 1 if severity_level >= 4 else 0
+
+            unit_score = progress_score(unit_col, unit_raw)
+            records.append({
+                "mat_pk": visual_pk(fecha, offset48, network, vendor, cluster, technology, valores),
+                "fecha": fecha,
+                "source_date": source_date,
+                "source_hour": source_hour,
+                "offset48": int(offset48),
+                "network": network,
+                "vendor": vendor,
+                "noc_cluster": cluster,
+                "technology": technology,
+                "valores": valores,
+                "pct_raw": scaled_bigint(pct_raw),
+                "unit_raw": scaled_bigint(unit_raw),
+                "pct_score": scaled_bigint(pct_score),
+                "unit_score": scaled_bigint(unit_score),
+                "severity_level": int(severity_level or 0),
+                "is_alarm": int(is_alarm),
+                "updated_at": updated_at,
+            })
+    return records
+
+
+def dedupe_records_by_pk(records, table_name, job):
+    if not records:
+        return records
+
+    deduped = {}
+    duplicate_examples = []
+    duplicate_count = 0
+    for row in records:
+        pk = row.get("mat_pk")
+        if not pk:
+            continue
+        if pk in deduped:
+            duplicate_count += 1
+            if len(duplicate_examples) < 5:
+                duplicate_examples.append(pk)
+        deduped[pk] = row
+
+    if duplicate_count:
+        job.log.warning(
+            f"{table_name}: registros duplicados por mat_pk compactados: "
+            f"{duplicate_count}. Ejemplos={duplicate_examples}"
+        )
+    return list(deduped.values())
+
+
+def build_visual_rank_records(series_records, fecha, updated_at):
+    grouped = {}
+    for rec in series_records:
+        key = (
+            rec.get("network"),
+            rec.get("vendor"),
+            rec.get("noc_cluster"),
+            rec.get("technology"),
+            rec.get("valores"),
+        )
+        grouped.setdefault(key, []).append(rec)
+
+    rows = []
+    for (network, vendor, cluster, technology, valores), items in grouped.items():
+        pct_scores = [unscaled(i.get("pct_score")) for i in items if i.get("pct_score") is not None]
+        unit_raws = [unscaled(i.get("unit_raw")) for i in items if i.get("unit_raw") is not None]
+        pct_raws = [unscaled(i.get("pct_raw")) for i in items if i.get("pct_raw") is not None]
+        crit_hours = sum(1 for i in items if int(i.get("severity_level") or 0) >= 4)
+        alarm_hours = sum(1 for i in items if int(i.get("severity_level") or 0) >= 1)
+        score_by_offset = {}
+        for item in items:
+            if item.get("offset48") is None or item.get("pct_score") is None:
+                continue
+            if int(item.get("severity_level") or 0) < 1:
+                continue
+            off = int(item.get("offset48"))
+            score = int(item.get("pct_score") or 0)
+            score_by_offset[off] = max(score_by_offset.get(off, -1), score)
+        integrity_bad_offsets = [
+            int(i.get("offset48"))
+            for i in items
+            if valores == "INTEGRITY" and i.get("pct_raw") is not None and unscaled(i.get("pct_raw")) < 80
+        ]
+        last_interest_offset = max(score_by_offset.keys()) if score_by_offset else None
+        last_interest_score = score_by_offset.get(last_interest_offset, -1) if last_interest_offset is not None else -1
+        rows.append({
+            "network": network,
+            "vendor": vendor,
+            "noc_cluster": cluster,
+            "technology": technology,
+            "valores": valores,
+            "crit_hours": int(crit_hours),
+            "alarm_hours": int(alarm_hours),
+            "max_pct_score": scaled_bigint(max(pct_scores) if pct_scores else None),
+            "max_unit_raw": scaled_bigint(max(unit_raws) if unit_raws else None),
+            "min_integrity_pct": scaled_bigint(min(pct_raws) if valores == "INTEGRITY" and pct_raws else None),
+            "last_bad_offset": (
+                max(integrity_bad_offsets)
+                if valores == "INTEGRITY" and integrity_bad_offsets
+                else last_interest_offset
+            ),
+            "_last_interest_score": last_interest_score,
+            "_score_by_offset": score_by_offset,
+        })
+
+    def make_rank(view_type, source_rows, sort_key):
+        ranked = sorted(source_rows, key=sort_key)
+        out = []
+        for idx, row in enumerate(ranked, start=1):
+            item = dict(row)
+            item["fecha"] = fecha
+            item["view_type"] = view_type
+            item["rank_order"] = idx
+            item["updated_at"] = updated_at
+            item["mat_pk"] = visual_pk(fecha, view_type, idx, row.get("network"), row.get("vendor"), row.get("noc_cluster"), row.get("technology"), row.get("valores"))
+            out.append(item)
+        return out
+
+    non_integrity = [r for r in rows if r["valores"] not in ("INTEGRITY", "PS_TRAFF", "CS_TRAFF")]
+    main_rows = [r for r in non_integrity if r.get("alarm_hours", 0) > 0]
+    ps_rows = [r for r in non_integrity if str(r["valores"]).startswith("PS_")]
+    cs_rows = [r for r in non_integrity if str(r["valores"]).startswith("CS_")]
+    integrity_rows = [r for r in rows if r["valores"] == "INTEGRITY"]
+
+    rank_records = []
+    rank_records += make_rank(
+        "main_heatmap",
+        main_rows,
+        lambda r: (
+            -(int(r.get("last_bad_offset")) if r.get("last_bad_offset") is not None else -1),
+            -int(r.get("_last_interest_score") or -1),
+            *[-int((r.get("_score_by_offset") or {}).get(off, -1)) for off in range(47, -1, -1)],
+            str(r.get("vendor")),
+            str(r.get("technology")),
+            str(r.get("noc_cluster")),
+            str(r.get("network")),
+            str(r.get("valores")),
+        ),
+    )
+    rank_records += make_rank(
+        "histo_ps",
+        ps_rows,
+        lambda r: (-int(r.get("max_unit_raw") or -1), str(r.get("noc_cluster")), str(r.get("valores"))),
+    )
+    rank_records += make_rank(
+        "histo_cs",
+        cs_rows,
+        lambda r: (-int(r.get("max_unit_raw") or -1), str(r.get("noc_cluster")), str(r.get("valores"))),
+    )
+    rank_records += make_rank(
+        "integrity",
+        integrity_rows,
+        lambda r: (-(int(r.get("last_bad_offset")) if r.get("last_bad_offset") is not None else -1), int(r.get("min_integrity_pct") or 10**12), -int(r.get("max_unit_raw") or -1), str(r.get("noc_cluster"))),
+    )
+    return rank_records
+
+
+def clean_record_for_insert(row, valid_fields):
+    return {
+        key: clean_value(value)
+        for key, value in row.items()
+        if key in valid_fields
+    }
+
+
+def insert_graphql_records(mat, table_name, input_type, records, job, batch_size=500, check_existing=True):
+    if not records:
+        job.log.info(f"No hay registros para insertar en {table_name}.")
+        return 0
+
+    records = dedupe_records_by_pk(records, table_name, job)
+    if not records:
+        job.log.info(f"No hay registros con mat_pk valido para insertar en {table_name}.")
+        return 0
+
+    valid_fields = VISUAL_INPUT_FIELDS.get(input_type)
+    if not valid_fields:
+        valid_fields = set(get_graphql_input_fields(mat, input_type, job))
+    else:
+        job.log.info(f"Campos validos {input_type}: {sorted(valid_fields)}")
+
+    mutation = f"""
+    mutation insertVisual($objects: [{input_type}!]!) {{
+      insert_{table_name}(objects: $objects) {{
+        affected_rows
+      }}
+    }}
+    """
+
+    total = 0
+    skipped = 0
+    total_records = len(records)
+    for i in range(0, total_records, batch_size):
+        batch_rows = records[i:i + batch_size]
+        if check_existing:
+            existing_pks = fetch_existing_visual_pks(mat, table_name, [row.get("mat_pk") for row in batch_rows], job)
+            if existing_pks:
+                before = len(batch_rows)
+                batch_rows = [row for row in batch_rows if row.get("mat_pk") not in existing_pks]
+                skipped += before - len(batch_rows)
+            if not batch_rows:
+                if skipped and skipped % 10000 < batch_size:
+                    job.log.info(f"{table_name}: omitidos existentes {skipped}/{total_records}")
+                continue
+        batch = [clean_record_for_insert(row, valid_fields) for row in batch_rows]
+        result = mat.graphQL.execute(operation=mutation, variables={"objects": batch})
+        if result.get("errors"):
+            raise Exception(f"Error insertando {table_name} batch {i}-{i + len(batch)}: {result.get('errors')}")
+        affected = (
+            result
+            .get("data", {})
+            .get(f"insert_{table_name}", {})
+            .get("affected_rows", 0)
+        )
+        total += affected
+        if total == affected or total % 10000 < batch_size:
+            job.log.info(f"{table_name}: insertados {total}, omitidos existentes {skipped}, total objetivo {total_records}")
+    job.log.info(f"Total insertado en {table_name}: {total}. Omitidos existentes: {skipped}")
+    return total
+
+
+def fetch_existing_visual_pks(mat, table_name, pks, job):
+    pks = [pk for pk in pks if pk]
+    if not pks:
+        return set()
+    query = f"""
+    query getExistingVisualPks($where: {table_name}_bool_exp!) {{
+      {table_name}(where: $where) {{
+        mat_pk
+      }}
+    }}
+    """
+    existing = set()
+    chunk_size = 500
+    for i in range(0, len(pks), chunk_size):
+        chunk = pks[i:i + chunk_size]
+        result = mat.graphQL.execute(
+            operation=query,
+            variables={"where": {"mat_pk": {"_in": chunk}}},
+        )
+        if result.get("errors"):
+            job.log.warning(f"No se pudieron consultar PKs existentes en {table_name}: {result.get('errors')}")
+            return set()
+        rows = (
+            result
+            .get("data", {})
+            .get(table_name, [])
+        )
+        existing.update(row.get("mat_pk") for row in rows if row.get("mat_pk"))
+    return existing
+
+
+def visual_snapshot_counts(mat, fecha, job):
+    query = """
+    query getVisualSnapshotCounts(
+      $series_where: Resources_DashboardVisualSeries_bool_exp!,
+      $rank_where: Resources_DashboardVisualRank_bool_exp!
+    ) {
+      Resources_DashboardVisualSeries_aggregate(where: $series_where) {
+        aggregate { count }
+      }
+      Resources_DashboardVisualRank_aggregate(where: $rank_where) {
+        aggregate { count }
+      }
+    }
+    """
+    result = mat.graphQL.execute(
+        operation=query,
+        variables={
+            "series_where": {"fecha": {"_eq": fecha}},
+            "rank_where": {"fecha": {"_eq": fecha}},
+        },
+    )
+    if result.get("errors"):
+        job.log.warning(f"No se pudieron consultar conteos snapshot fecha={fecha}: {result.get('errors')}")
+        return 0, 0
+    data = result.get("data") or {}
+    series_count = (
+        ((data.get(f"{VISUAL_SERIES_TABLE}_aggregate") or {}).get("aggregate") or {}).get("count") or 0
+    )
+    rank_count = (
+        ((data.get(f"{VISUAL_RANK_TABLE}_aggregate") or {}).get("aggregate") or {}).get("count") or 0
+    )
+    return int(series_count), int(rank_count)
+
+
+def delete_visual_snapshot_for_date(mat, fecha, job):
+    for table_name in (VISUAL_SERIES_TABLE, VISUAL_RANK_TABLE):
+        mutation = f"""
+        mutation deleteVisual($where: {table_name}_bool_exp!) {{
+          delete_{table_name}(where: $where) {{
+            affected_rows
+          }}
+        }}
+        """
+        result = mat.graphQL.execute(
+            operation=mutation,
+            variables={"where": {"fecha": {"_eq": fecha}}},
+        )
+        if result.get("errors"):
+            job.log.warning(f"No se pudo limpiar {table_name} fecha={fecha}: {result.get('errors')}")
+            continue
+        affected = (
+            result
+            .get("data", {})
+            .get(f"delete_{table_name}", {})
+            .get("affected_rows", 0)
+        )
+        job.log.info(f"Registros eliminados en {table_name} fecha={fecha}: {affected}")
+
+
+def build_dashboard_visual_snapshots(**kwargs):
+    job = kwargs.get("job")
+    mat = MATClient()
+    current_dir = get_work_base_dir(kwargs)
+    file_path = os.path.join(current_dir, "DF_Consolidado", "df_resultante.csv")
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"No existe el archivo consolidado: {file_path}")
+
+    df = pd.read_csv(file_path)
+    if df.empty or "Date" not in df.columns:
+        job.log.info("Sin fechas para snapshots visuales.")
+        return
+
+    thresholds_snapshot = fetch_active_threshold_config_for_insert(mat, job, profile="main")
+    updated_at = datetime.utcnow().isoformat()
+    task_instance = kwargs.get("task_instance") or kwargs.get("ti")
+    try_number = int(getattr(task_instance, "try_number", 1) or 1)
+    skip_existing = (try_number > 1 or VISUAL_SNAPSHOT_SKIP_EXISTING) and not VISUAL_SNAPSHOT_FORCE_REBUILD
+    fechas_disponibles = sorted([str(v) for v in df["Date"].dropna().unique()])
+    if VISUAL_SNAPSHOT_BUILD_ALL_DATES:
+        fechas = fechas_disponibles
+    else:
+        fechas = fechas_disponibles[-1:] if fechas_disponibles else []
+    job.log.info(
+        f"Construyendo snapshots visuales para fechas: {fechas} "
+        f"(disponibles={fechas_disponibles}, build_all={VISUAL_SNAPSHOT_BUILD_ALL_DATES}, "
+        f"force_rebuild={VISUAL_SNAPSHOT_FORCE_REBUILD}, skip_existing={skip_existing}, "
+        f"try_number={try_number})"
+    )
+
+    for fecha in fechas:
+        series_count, rank_count = visual_snapshot_counts(mat, fecha, job)
+        if series_count and rank_count and skip_existing:
+            job.log.info(
+                f"Snapshot visual fecha={fecha} ya existe: "
+                f"series={series_count}, rank={rank_count}. Se omite rebuild."
+            )
+            continue
+
+        rows, today, yday = fetch_dashboard_rows_for_visual_snapshot(mat, fecha, job)
+        if not rows:
+            job.log.warning(f"No hay filas fuente para snapshot visual fecha={fecha}.")
+            continue
+        partial_snapshot = bool(series_count and not rank_count)
+        rebuild_from_zero = (
+            (try_number <= 1 or VISUAL_SNAPSHOT_FORCE_REBUILD)
+            and not VISUAL_SNAPSHOT_SKIP_EXISTING
+            and not partial_snapshot
+        )
+        if rebuild_from_zero:
+            delete_visual_snapshot_for_date(mat, today, job)
+        else:
+            job.log.info(
+                f"Reintentando snapshot visual fecha={today} sin borrar progreso parcial "
+                f"(series_existentes={series_count}, rank_existentes={rank_count}, "
+                f"partial_snapshot={partial_snapshot})."
+            )
+        series_records = build_visual_series_records(rows, today, yday, thresholds_snapshot, updated_at)
+        series_records = dedupe_records_by_pk(series_records, VISUAL_SERIES_TABLE, job)
+        series_records = sorted(series_records, key=lambda row: row.get("mat_pk") or "")
+        rank_records = build_visual_rank_records(series_records, today, updated_at)
+        rank_records = dedupe_records_by_pk(rank_records, VISUAL_RANK_TABLE, job)
+        rank_records = sorted(rank_records, key=lambda row: row.get("mat_pk") or "")
+        job.log.info(
+            f"Snapshot fecha={today}: series={len(series_records)} rank={len(rank_records)}"
+        )
+        insert_graphql_records(
+            mat,
+            VISUAL_SERIES_TABLE,
+            "Resources_DashboardVisualSeries_insert_input",
+            series_records,
+            job,
+            batch_size=VISUAL_INSERT_BATCH_SIZE,
+            check_existing=not rebuild_from_zero,
+        )
+        insert_graphql_records(
+            mat,
+            VISUAL_RANK_TABLE,
+            "Resources_DashboardVisualRank_insert_input",
+            rank_records,
+            job,
+            batch_size=VISUAL_INSERT_BATCH_SIZE,
+            check_existing=not rebuild_from_zero,
+        )
 
 
 def insert_dashboard_master_graphql(**kwargs):
@@ -1808,6 +2436,11 @@ df_insert_graphql = MATPythonOperator(
     python_callable=insert_dashboard_master_graphql,
     dag=dag
 )
+df_build_visual_snapshots = MATPythonOperator(
+    task_id="construir_snapshots_visuales",
+    python_callable=build_dashboard_visual_snapshots,
+    dag=dag
+)
 
 end = MATInstanceExitOperator(task_id= 'MAT_Finalizar', dag=dag)
 
@@ -1818,7 +2451,7 @@ end = MATInstanceExitOperator(task_id= 'MAT_Finalizar', dag=dag)
 ################################################                  ######################################################
 ########################################################################################################################
 
-init >> download_sftp_files >> extract_sftp_files >> df_ericsson3g >> df_consolidado >> df_insert_graphql >> df_send_mail >> end
+init >> download_sftp_files >> extract_sftp_files >> df_ericsson3g >> df_consolidado >> df_insert_graphql >> df_build_visual_snapshots >> df_send_mail >> end
 extract_sftp_files >> df_ericsson4g >> df_consolidado
 extract_sftp_files >> df_huawei3g >> df_consolidado
 extract_sftp_files >> df_huawei4g >> df_consolidado

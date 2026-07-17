@@ -35,6 +35,7 @@ from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 
 # Acceso a datos
 from src.dataAccess.data_access import fetch_kpis, fetch_alarm_meta_for_heatmap
+from src.dataAccess import main_visuals_api_client
 from src.config import (
     DATA_SOURCE,
     MAIN_QUERY_API_HEATMAP_MAX_ROWS,
@@ -42,6 +43,7 @@ from src.config import (
     PREWARM_MAIN_CACHE,
     PREWARM_MAIN_PAGE_SIZE,
 )
+from src.Utils.alarmados import load_threshold_cfg
 from src.Utils.utils_time import default_date_str
 
 
@@ -657,6 +659,82 @@ def _build_histograma_for_domain(
     return fig_pct, fig_unit, page_info, False
 
 
+def _render_api_main_heatmap(fecha, networks, technologies, vendors, clusters, page, page_sz, order_by):
+    data = main_visuals_api_client.fetch_main_heatmap(
+        fecha=fecha,
+        vendors=vendors or None,
+        clusters=clusters or None,
+        networks=networks or None,
+        technologies=technologies or None,
+        page=page,
+        page_size=page_sz,
+        order_by=order_by,
+        thresholds_snapshot=load_threshold_cfg(),
+    )
+    pct_payload = data.get("pct_payload")
+    unit_payload = data.get("unit_payload")
+    page_info = data.get("page_info") or {"total_rows": 0, "offset": 0, "limit": page_sz, "showing": 0}
+
+    nrows = len((pct_payload or unit_payload or {}).get("y") or [])
+    hm_height = _hm_height(nrows)
+    fig_pct = build_heatmap_figure(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure()
+    fig_unit = build_heatmap_figure(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure()
+    table_component = (
+        render_heatmap_summary_table(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
+        if (pct_payload or unit_payload)
+        else dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
+    )
+    return table_component, fig_pct, fig_unit, page_info
+
+
+def _render_api_histogram(domain, fecha, networks, technologies, vendors, clusters, page, page_sz, selected_wave=None):
+    data = main_visuals_api_client.fetch_histogram(
+        fecha=fecha,
+        domain=domain,
+        vendors=vendors or None,
+        clusters=clusters or None,
+        networks=networks or None,
+        technologies=technologies or None,
+        page=page,
+        page_size=page_sz,
+        thresholds_snapshot=load_threshold_cfg(),
+    )
+    pct_payload = data.get("pct_payload")
+    unit_payload = data.get("unit_payload")
+    page_info = data.get("page_info") or {"total_rows": 0, "offset": 0, "limit": page_sz, "showing": 0}
+    has_traffic = bool((pct_payload or {}).get("traffic_raw"))
+    fig_pct = build_overlay_waves_figure(
+        pct_payload,
+        UMBRAL_CFG=UM_MANAGER.config(),
+        mode="severity",
+        height=420,
+        smooth_win=3,
+        opacity=0.28,
+        line_width=1.2,
+        decimals=2,
+        show_yaxis_ticks=True,
+        selected_wave=selected_wave,
+        show_traffic_bars=has_traffic,
+        traffic_agg="mean",
+        traffic_decimals=1,
+    ) if pct_payload else go.Figure()
+
+    fig_unit = build_overlay_waves_figure(
+        unit_payload,
+        UMBRAL_CFG=UM_MANAGER.config(),
+        mode="progress",
+        height=420,
+        smooth_win=3,
+        opacity=0.25,
+        line_width=1.2,
+        decimals=0,
+        show_yaxis_ticks=True,
+        selected_wave=selected_wave,
+        show_traffic_bars=False,
+    ) if unit_payload else go.Figure()
+    return fig_pct, fig_unit, page_info
+
+
 def heatmap_callbacks(app):
 
     # -------------------------------------------------
@@ -681,21 +759,6 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def refresh_heatmaps(_trigger, fecha, applied_filters, hm_page_state, hm_order_by):
-        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
-            dates_children, hours_children = _build_time_header_children_by_dates(fecha)
-            return (
-                dbc.Alert("Heatmap deshabilitado en modo API.", color="secondary", className="mb-0"),
-                go.Figure(),
-                go.Figure(),
-                "Pagina 1 de 1",
-                "Sin resultados.",
-                {"total_rows": 0, "offset": 0, "limit": 50, "showing": 0},
-                dates_children,
-                hours_children,
-                dates_children,
-                hours_children,
-            )
-
         global _LAST_HEATMAP_KEY
         perf_start = time.perf_counter()
         perf_marks = []
@@ -718,6 +781,56 @@ def heatmap_callbacks(app):
         # Normaliza modo de orden
         hm_order_by_norm = (hm_order_by or "alarm_hours")
         hm_order_by_norm = str(hm_order_by_norm).strip().lower()
+
+        if DATA_SOURCE == "api":
+            dates_children, hours_children = _build_time_header_children_by_dates(fecha)
+            try:
+                table_component, fig_pct, fig_unit, page_info = _render_api_main_heatmap(
+                    fecha,
+                    networks,
+                    technologies,
+                    vendors,
+                    clusters,
+                    page,
+                    page_sz,
+                    hm_order_by_norm,
+                )
+            except Exception as exc:
+                logger.warning("No se pudo cargar heatmap principal via heatmap_query: %s", exc)
+                page_info = {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
+                return (
+                    dbc.Alert(f"No se pudo cargar heatmap desde API: {exc}", color="warning", className="mb-0"),
+                    go.Figure(),
+                    go.Figure(),
+                    "Pagina 1 de 1",
+                    "Sin resultados.",
+                    page_info,
+                    dates_children,
+                    hours_children,
+                    dates_children,
+                    hours_children,
+                )
+
+            total = int(page_info.get("total_rows", 0))
+            showing = int(page_info.get("showing", 0))
+            start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
+            end_i = start_i + showing - 1 if showing else 0
+            total_pg = max(1, math.ceil(total / max(1, page_sz)))
+            hm_indicator = f"Pagina {page} de {total_pg}"
+            hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}-{end_i} de {total} filas"
+            _perf_log("refresh_heatmaps_api", perf_start, [("api_payload", time.perf_counter())], {"rows": showing})
+            return (
+                table_component,
+                fig_pct,
+                fig_unit,
+                hm_indicator,
+                hm_banner,
+                page_info,
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
+            )
 
         # State key incluye filtros + pÃ¡gina + orden
         state_key = _hm_key(
@@ -892,9 +1005,6 @@ def heatmap_callbacks(app):
         prevent_initial_call=False,  # bootstrap al cargar
     )
     def heatmap_trigger_controller(_ready, _fecha, _applied_filters, _page_state, _ord):
-        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
-            return no_update
-
         # Un timestamp basta para â€œforzarâ€ la actualizaciÃ³n
         return {
             "ts": time.time(),
@@ -946,14 +1056,22 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def refresh_histograma_ps(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state):
-        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
-            return no_update, no_update, no_update
-
         applied_filters = applied_filters or {}
         networks = _as_list(_applied_value(applied_filters, "network"))
         technologies = _as_list(_applied_value(applied_filters, "technology"))
         vendors = _as_list(_applied_value(applied_filters, "vendor"))
         clusters = _as_list(_applied_value(applied_filters, "cluster"))
+        page = int((hm_page_state or {}).get("page", 1))
+        page_sz = int((hm_page_state or {}).get("page_size", 50))
+        if DATA_SOURCE == "api":
+            try:
+                fig_pct, fig_unit, page_info = _render_api_histogram(
+                    "PS", fecha, networks, technologies, vendors, clusters, page, page_sz, selected_wave=sel_wave
+                )
+                return fig_pct, fig_unit, page_info
+            except Exception as exc:
+                logger.warning("No se pudo cargar histograma PS via heatmap_query: %s", exc)
+                return go.Figure(), go.Figure(), {"total_rows": 0, "offset": 0, "limit": page_sz, "showing": 0}
         fig_pct, fig_unit, page_info, is_cache_hit = _build_histograma_for_domain(
             "PS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state, _trigger
         )
@@ -977,14 +1095,22 @@ def heatmap_callbacks(app):
         prevent_initial_call=True,
     )
     def refresh_histograma_cs(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state):
-        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
-            return no_update, no_update
-
         applied_filters = applied_filters or {}
         networks = _as_list(_applied_value(applied_filters, "network"))
         technologies = _as_list(_applied_value(applied_filters, "technology"))
         vendors = _as_list(_applied_value(applied_filters, "vendor"))
         clusters = _as_list(_applied_value(applied_filters, "cluster"))
+        page = int((hm_page_state or {}).get("page", 1))
+        page_sz = int((hm_page_state or {}).get("page_size", 50))
+        if DATA_SOURCE == "api":
+            try:
+                fig_pct, fig_unit, _page_info = _render_api_histogram(
+                    "CS", fecha, networks, technologies, vendors, clusters, page, page_sz, selected_wave=sel_wave
+                )
+                return fig_pct, fig_unit
+            except Exception as exc:
+                logger.warning("No se pudo cargar histograma CS via heatmap_query: %s", exc)
+                return go.Figure(), go.Figure()
         fig_pct, fig_unit, _page_info, is_cache_hit = _build_histograma_for_domain(
             "CS", sel_wave, fecha, networks, technologies, vendors, clusters, hm_page_state, link_state, _trigger
         )
@@ -1003,9 +1129,6 @@ def heatmap_callbacks(app):
         prevent_initial_call=False,
     )
     def histo_trigger_controller(_ready, _heatmap_page_info, _link_state):
-        if DATA_SOURCE == "api" and int(MAIN_QUERY_API_HEATMAP_MAX_ROWS or 0) <= 0:
-            return no_update
-
         if not _heatmap_page_info:
             return no_update
         return {

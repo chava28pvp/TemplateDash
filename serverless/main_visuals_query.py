@@ -3,10 +3,13 @@ from datetime import datetime, timedelta
 
 
 TABLE = "Resources_dashboardMaster"
+VISUAL_SERIES_TABLE = "Resources_DashboardVisualSeries"
+VISUAL_RANK_TABLE = "Resources_DashboardVisualRank"
 VIEW = "main_visuals"
 MAX_SCAN_ROWS = 200000
 MAX_PAGE_SIZE = 2000
 DEFAULT_PAGE_SIZE = 50
+VISUAL_SCALE = 10000.0
 
 
 COLMAP = {
@@ -105,6 +108,8 @@ def serverless_function_handler(params, context):
             return handle_histogram(matclient, params)
         if operation in ("integrity_heatmap", "heatmap_integrity"):
             return handle_integrity_heatmap(matclient, params)
+        if operation in ("snapshot_status", "visual_snapshot_status"):
+            return handle_snapshot_status(matclient, params)
 
         return error_response("Operacion no soportada: %s" % operation)
     except Exception as exc:
@@ -136,6 +141,23 @@ def handle_main_heatmap(matclient, params):
     page, page_size, offset = parse_pagination(params)
     thresholds = threshold_snapshot(params)
     order_by = str(params.get("order_by") or ((params.get("options") or {}).get("order_by")) or "alarm_hours")
+    snap = fetch_snapshot_payload(
+        matclient,
+        params,
+        fecha=today,
+        view_type="main_heatmap",
+        page_size=page_size,
+        offset=offset,
+        yday=yday,
+        payload_mode="main",
+    )
+    if snap:
+        return ok_response(
+            "main_heatmap",
+            data=snap,
+            pagination={"page": page, "page_size": page_size, "offset": offset},
+            meta={"source": "visual_snapshot", "order_by": order_by},
+        )
     rows = fetch_48h_rows(matclient, params, today, yday)
     networks = requested_networks(params, rows)
     df_meta, alarm_keys = build_alarm_meta(rows, thresholds)
@@ -167,9 +189,30 @@ def handle_histogram(matclient, params):
     if domain == "CS":
         valores_order = ("CS_RRC", "CS_DROP", "CS_RAB")
         traffic_metric = "cs_traff_erl"
+        view_type = "histo_cs"
     else:
         valores_order = ("PS_RRC", "PS_S1", "PS_DROP", "PS_RAB")
         traffic_metric = "ps_traff_gb"
+        view_type = "histo_ps"
+
+    snap = fetch_snapshot_payload(
+        matclient,
+        params,
+        fecha=today,
+        view_type=view_type,
+        page_size=page_size,
+        offset=offset,
+        yday=yday,
+        payload_mode="histogram",
+        traffic_metric=traffic_metric,
+    )
+    if snap:
+        return ok_response(
+            "histogram",
+            data=snap,
+            pagination={"page": page, "page_size": page_size, "offset": offset},
+            meta={"source": "visual_snapshot", "domain": domain},
+        )
 
     rows = fetch_48h_rows(matclient, params, today, yday)
     networks = requested_networks(params, rows)
@@ -198,6 +241,23 @@ def handle_histogram(matclient, params):
 def handle_integrity_heatmap(matclient, params):
     today, yday = resolve_dates(params)
     page, page_size, offset = parse_pagination(params)
+    snap = fetch_snapshot_payload(
+        matclient,
+        params,
+        fecha=today,
+        view_type="integrity",
+        page_size=page_size,
+        offset=offset,
+        yday=yday,
+        payload_mode="integrity",
+    )
+    if snap:
+        return ok_response(
+            "integrity_heatmap",
+            data=snap,
+            pagination={"page": page, "page_size": page_size, "offset": offset},
+            meta={"source": "visual_snapshot"},
+        )
     rows = fetch_48h_rows(matclient, params, today, yday)
     networks = requested_networks(params, rows)
     pct_payload, unit_payload, page_info = build_integrity_payloads(
@@ -213,6 +273,49 @@ def handle_integrity_heatmap(matclient, params):
         data={"pct_payload": pct_payload, "unit_payload": unit_payload, "page_info": page_info},
         pagination={"page": page, "page_size": page_size, "offset": offset},
         meta={"rows_scanned": len(rows), "networks": networks},
+    )
+
+
+def handle_snapshot_status(matclient, params):
+    fecha = filter_value(params, "fecha")
+    if not fecha:
+        today, _yday = resolve_dates(params)
+        fecha = today
+    view_types = as_list(params.get("view_types") or (params.get("filters") or {}).get("view_types"))
+    if not view_types:
+        view_types = ["main_heatmap", "histo_ps", "histo_cs", "integrity"]
+
+    query = """
+    query getVisualSnapshotStatus($rank_where: Resources_DashboardVisualRank_bool_exp, $series_where: Resources_DashboardVisualSeries_bool_exp) {
+      Resources_DashboardVisualRank_aggregate(where: $rank_where) {
+        aggregate { count }
+      }
+      Resources_DashboardVisualSeries_aggregate(where: $series_where) {
+        aggregate { count }
+      }
+    }
+    """
+    out = []
+    total_series = None
+    for view_type in view_types:
+        rank_where = {"fecha": {"_eq": fecha}, "view_type": {"_eq": view_type}}
+        series_where = {"fecha": {"_eq": fecha}}
+        result = matclient.graphQL.execute(
+            operation=query,
+            variables={"rank_where": rank_where, "series_where": series_where},
+        )
+        if result.get("errors"):
+            raise Exception("Error GraphQL snapshot_status: %s" % result.get("errors"))
+        data = result.get("data") or {}
+        rank_count = (((data.get("%s_aggregate" % VISUAL_RANK_TABLE) or {}).get("aggregate") or {}).get("count") or 0)
+        if total_series is None:
+            total_series = (((data.get("%s_aggregate" % VISUAL_SERIES_TABLE) or {}).get("aggregate") or {}).get("count") or 0)
+        out.append({"fecha": fecha, "view_type": view_type, "rank_count": int(rank_count)})
+
+    return ok_response(
+        "snapshot_status",
+        data={"fecha": fecha, "series_count": int(total_series or 0), "rank": out},
+        meta={"source": "visual_snapshot_status"},
     )
 
 
@@ -266,6 +369,332 @@ def execute_rows_query(matclient, where, limit, offset, order_by, fields):
     if result.get("errors"):
         raise Exception("Error GraphQL consultando %s: %s" % (TABLE, result.get("errors")))
     return ((result.get("data") or {}).get(TABLE) or [])
+
+
+def fetch_snapshot_payload(
+    matclient,
+    params,
+    *,
+    fecha,
+    view_type,
+    page_size,
+    offset,
+    yday,
+    payload_mode,
+    traffic_metric=None,
+):
+    rank_data = fetch_visual_rank_page(
+        matclient,
+        params,
+        fecha=fecha,
+        view_type=view_type,
+        limit=page_size,
+        offset=offset,
+    )
+    rank_rows = rank_data.get("rows") or []
+    total = int(rank_data.get("total") or 0)
+    if not rank_rows:
+        return None
+
+    traffic_valores = None
+    if traffic_metric == "ps_traff_gb":
+        traffic_valores = "PS_TRAFF"
+    elif traffic_metric == "cs_traff_erl":
+        traffic_valores = "CS_TRAFF"
+    series_rows = fetch_visual_series_for_rank_rows(
+        matclient,
+        fecha,
+        rank_rows,
+        traffic_valores=traffic_valores,
+    )
+    pct_payload, unit_payload, page_info = payloads_from_snapshot_rows(
+        rank_rows,
+        series_rows,
+        fecha=fecha,
+        yday=yday,
+        total=total,
+        offset=offset,
+        limit=page_size,
+        payload_mode=payload_mode,
+        traffic_metric=traffic_metric,
+    )
+    return {"pct_payload": pct_payload, "unit_payload": unit_payload, "page_info": page_info}
+
+
+def fetch_visual_rank_page(matclient, params, *, fecha, view_type, limit, offset):
+    where = build_visual_rank_where(params, fecha, view_type)
+    query = """
+    query getVisualRank(
+      $where: Resources_DashboardVisualRank_bool_exp,
+      $limit: Int!,
+      $offset: Int!
+    ) {
+      Resources_DashboardVisualRank(
+        where: $where,
+        limit: $limit,
+        offset: $offset,
+        order_by: [{rank_order: asc}]
+      ) {
+        fecha
+        view_type
+        rank_order
+        network
+        vendor
+        noc_cluster
+        technology
+        valores
+      }
+      Resources_DashboardVisualRank_aggregate(where: $where) {
+        aggregate { count }
+      }
+    }
+    """
+    result = matclient.graphQL.execute(
+        operation=query,
+        variables={"where": where, "limit": int(limit), "offset": int(offset)},
+    )
+    if result.get("errors"):
+        raise Exception("Error GraphQL consultando VisualRank: %s" % result.get("errors"))
+    data = result.get("data") or {}
+    return {
+        "rows": data.get(VISUAL_RANK_TABLE) or [],
+        "total": (((data.get("%s_aggregate" % VISUAL_RANK_TABLE) or {}).get("aggregate") or {}).get("count") or 0),
+    }
+
+
+def fetch_visual_series_for_rank_rows(matclient, fecha, rank_rows, traffic_valores=None):
+    key_or = []
+    for row in rank_rows:
+        valores = [row.get("valores")]
+        if traffic_valores:
+            valores.append(traffic_valores)
+        for val in valores:
+            key_or.append({
+                "_and": [
+                    {"network": {"_eq": row.get("network")}},
+                    {"vendor": {"_eq": row.get("vendor")}},
+                    {"noc_cluster": {"_eq": row.get("noc_cluster")}},
+                    {"technology": {"_eq": row.get("technology")}},
+                    {"valores": {"_eq": val}},
+                ]
+            })
+    if not key_or:
+        return []
+
+    query = """
+    query getVisualSeries($where: Resources_DashboardVisualSeries_bool_exp, $limit: Int!, $offset: Int!) {
+      Resources_DashboardVisualSeries(
+        where: $where,
+        limit: $limit,
+        offset: $offset,
+        order_by: [{network: asc}, {vendor: asc}, {noc_cluster: asc}, {technology: asc}, {valores: asc}, {offset48: asc}]
+      ) {
+        fecha
+        source_date
+        source_hour
+        offset48
+        network
+        vendor
+        noc_cluster
+        technology
+        valores
+        pct_raw
+        unit_raw
+        pct_score
+        unit_score
+        severity_level
+        is_alarm
+      }
+    }
+    """
+    where = {
+        "_and": [
+            {"fecha": {"_eq": fecha}},
+            {"_or": key_or},
+        ]
+    }
+    out = []
+    limit = 1000
+    offset = 0
+    while True:
+        result = matclient.graphQL.execute(
+            operation=query,
+            variables={"where": where, "limit": limit, "offset": offset},
+        )
+        if result.get("errors"):
+            raise Exception("Error GraphQL consultando VisualSeries: %s" % result.get("errors"))
+        rows = (result.get("data") or {}).get(VISUAL_SERIES_TABLE) or []
+        if not rows:
+            break
+        out.extend(rows)
+        if len(rows) < limit:
+            break
+        offset += limit
+    return out
+
+
+def payloads_from_snapshot_rows(rank_rows, series_rows, *, fecha, yday, total, offset, limit, payload_mode, traffic_metric=None):
+    x_dt = x_axis(fecha, yday)
+    by_key = {}
+    for row in series_rows:
+        key = snapshot_key(row)
+        by_key.setdefault(key, {})[int(row.get("offset48") or 0)] = row
+
+    z_pct, z_unit, z_pct_raw, z_unit_raw = [], [], [], []
+    y_labels, row_detail, row_last_ts, row_max_pct, row_max_unit = [], [], [], [], []
+    traffic_rows_raw, traffic_by_key = [], {}
+    unit_scores = []
+
+    for rank in rank_rows:
+        key = snapshot_key(rank)
+        detail = "%s/%s/%s/%s/%s" % (
+            rank.get("technology"),
+            rank.get("vendor"),
+            rank.get("noc_cluster"),
+            rank.get("network"),
+            rank.get("valores"),
+        )
+        y_labels.append(str(rank.get("noc_cluster")) if payload_mode == "histogram" else detail)
+        row_detail.append(detail)
+
+        pct_raw = []
+        unit_raw = []
+        pct_z = []
+        unit_z = []
+        for off in range(48):
+            item = (by_key.get(key) or {}).get(off) or {}
+            pr = unscale_value(item.get("pct_raw"))
+            ur = unscale_value(item.get("unit_raw"))
+            ps = unscale_value(item.get("pct_score"))
+            us = unscale_value(item.get("unit_score"))
+            lvl = item.get("severity_level")
+            pct_raw.append(pr)
+            unit_raw.append(ur)
+
+            if payload_mode == "histogram":
+                pct_z.append(None if lvl is None else int(lvl))
+            elif payload_mode == "integrity":
+                pct_z.append(pr)
+            else:
+                if ps is None:
+                    pct_z.append(None)
+                elif int(lvl or 0) >= 4:
+                    pct_z.append(1.0)
+                else:
+                    pct_z.append(min(float(ps), 0.999))
+
+            unit_z.append(us)
+            if us is not None:
+                unit_scores.append(us)
+
+        z_pct.append(pct_z)
+        z_unit.append(unit_z)
+        z_pct_raw.append(pct_raw)
+        z_unit_raw.append(unit_raw)
+
+        valid = [i for i, v in enumerate(unit_raw) if v is not None] or [i for i, v in enumerate(pct_raw) if v is not None]
+        row_last_ts.append(str(x_dt[valid[-1]]).replace("T", " ")[:16] if valid else "")
+        row_max_pct.append(max([v for v in pct_raw if v is not None] or [None]))
+        row_max_unit.append(max([v for v in unit_raw if v is not None] or [None]))
+
+        if traffic_metric:
+            traffic_valores = "PS_TRAFF" if traffic_metric == "ps_traff_gb" else "CS_TRAFF"
+            traffic_key = (
+                rank.get("technology"),
+                rank.get("vendor"),
+                rank.get("noc_cluster"),
+                rank.get("network"),
+                traffic_valores,
+            )
+            traffic_raw = [
+                unscale_value(((by_key.get(traffic_key) or {}).get(off) or {}).get("unit_raw"))
+                for off in range(48)
+            ]
+            traffic_rows_raw.append(traffic_raw)
+            traffic_by_key[detail] = traffic_raw
+
+    if payload_mode == "histogram":
+        pct_zmin, pct_zmax = -0.5, 3.5
+        pct_title = "% IA / % DC (color por umbral)"
+    elif payload_mode == "integrity":
+        pct_zmin, pct_zmax = 0.0, 100.0
+        pct_title = "% Integridad"
+    else:
+        pct_zmin, pct_zmax = 0.0, 1.0
+        pct_title = "% IA / % DC"
+
+    pct_payload = {
+        "z": z_pct,
+        "z_raw": z_pct_raw,
+        "x_dt": x_dt,
+        "y": y_labels,
+        "color_mode": "progress" if payload_mode == "integrity" else "severity",
+        "zmin": pct_zmin,
+        "zmax": pct_zmax,
+        "title": pct_title,
+        "row_detail": row_detail,
+        "row_last_ts": row_last_ts,
+        "row_max_pct": row_max_pct,
+        "row_max_unit": row_max_unit,
+    }
+    unit_payload = {
+        "z": z_unit,
+        "z_raw": z_unit_raw,
+        "x_dt": x_dt,
+        "y": y_labels,
+        "color_mode": "progress",
+        "zmin": min(unit_scores) if unit_scores else 0.0,
+        "zmax": max(unit_scores) if unit_scores else 1.0,
+        "title": "Unidades",
+        "row_detail": row_detail,
+        "row_last_ts": row_last_ts,
+        "row_max_pct": row_max_pct,
+        "row_max_unit": row_max_unit,
+    }
+    if traffic_metric:
+        pct_payload["traffic_metric"] = traffic_metric
+        pct_payload["traffic_raw"] = traffic_rows_raw
+        pct_payload["traffic_by_key"] = traffic_by_key
+    if payload_mode == "integrity":
+        pct_payload["color_theme"] = "pct_rg_80"
+        pct_payload["title"] = "Integridad (%)"
+        unit_payload["color_theme"] = "blue"
+        unit_payload["zmin"] = 0.0
+        unit_payload["zmax"] = 1.0
+        unit_payload["title"] = "Integridad (UNIT)"
+
+    return pct_payload, unit_payload, {
+        "total_rows": int(total),
+        "offset": int(offset),
+        "limit": int(limit),
+        "showing": len(rank_rows),
+    }
+
+
+def snapshot_key(row):
+    return (
+        row.get("technology"),
+        row.get("vendor"),
+        row.get("noc_cluster"),
+        row.get("network"),
+        row.get("valores"),
+    )
+
+
+def unscale_value(value):
+    value = to_float(value)
+    if value is None:
+        return None
+    return value / VISUAL_SCALE
+
+
+def build_visual_rank_where(params, fecha, view_type):
+    where = {"fecha": {"_eq": fecha}, "view_type": {"_eq": view_type}}
+    add_in_filter(where, "network", filter_value(params, "networks", "network"))
+    add_in_filter(where, "technology", filter_value(params, "technologies", "technology"))
+    add_in_filter(where, "vendor", filter_value(params, "vendors", "vendor"))
+    add_in_filter(where, "noc_cluster", filter_value(params, "clusters", "cluster"))
+    return where
 
 
 def build_where(params, today, yday):
@@ -488,17 +917,17 @@ def integrity_payloads_from_rows(rows_all, row_index, today, yday, offset, limit
         raw_unit = row48(row_index, key4, "integrity")
         z_pct_raw.append(raw_pct)
         z_unit_raw.append(raw_unit)
-        z_pct.append([integrity_color(v) for v in raw_pct])
+        z_pct.append(raw_pct)
         z_unit.append([progress_simple(v) for v in raw_unit])
     base = {
         "x_dt": x_dt,
         "y": y_labels,
         "row_detail": row_detail,
         "zmin": 0.0,
-        "zmax": 1.0,
+        "zmax": 100.0,
     }
-    pct_payload = dict(base, z=z_pct, z_raw=z_pct_raw, color_mode="severity", title="% Integridad")
-    unit_payload = dict(base, z=z_unit, z_raw=z_unit_raw, color_mode="progress", title="Integridad")
+    pct_payload = dict(base, z=z_pct, z_raw=z_pct_raw, color_mode="progress", color_theme="pct_rg_80", title="Integridad (%)")
+    unit_payload = dict(base, z=z_unit, z_raw=z_unit_raw, color_mode="progress", color_theme="blue", zmin=0.0, zmax=1.0, title="Integridad (UNIT)")
     return pct_payload, unit_payload, {"total_rows": total, "offset": start, "limit": int(limit), "showing": len(rows_page)}
 
 
