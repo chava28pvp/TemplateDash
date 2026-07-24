@@ -747,17 +747,15 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
         else:
             last_label = "—"
 
-        # detail: tech/vendor/region/province/mun/site/rnc/nodeb/valores
-        parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 8)
-        tech   = parts[0] if len(parts) > 0 else ""
-        vendor = parts[1] if len(parts) > 1 else ""
-        region = parts[2] if len(parts) > 2 else ""
-        prov   = parts[3] if len(parts) > 3 else ""
-        mun    = parts[4] if len(parts) > 4 else ""
-        site   = parts[5] if len(parts) > 5 else ""
-        rnc    = parts[6] if len(parts) > 6 else ""
-        nodeb  = parts[7] if len(parts) > 7 else ""
-        valor  = parts[8] if len(parts) > 8 else ""
+        parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 9)
+        if len(parts) >= 10:
+            site = parts[6]
+            rnc = parts[7]
+            nodeb = parts[8]
+        else:
+            site = parts[5] if len(parts) > 5 else ""
+            rnc = parts[6] if len(parts) > 6 else ""
+            nodeb = parts[7] if len(parts) > 7 else ""
 
         def _fmt_cell(v):
             if not np.isfinite(v):
@@ -768,18 +766,18 @@ def build_heatmap_figure_topoff(payload, *, height=750, decimals=2):
         for j in range(len(x)):
             raw_cell = arr[j] if j < len(arr) else np.nan
             raw_s = _fmt_cell(raw_cell)
-            row_cd.append([tech, vendor, region, prov, mun, site, rnc, nodeb, raw_s, last_label, valor])
+            row_cd.append([raw_s, last_label, site, rnc, nodeb])
         customdata.append(row_cd)
 
     hover_tmpl = (
-        "<span style='font-size:120%; font-weight:700'>%{customdata[8]}</span><br>"
+        "<span style='font-size:120%; font-weight:700'>%{customdata[0]}</span><br>"
         "<span style='opacity:0.85'>%{x|%Y-%m-%d %H:%M}</span><br>"
         "──────────<br>"
         "DETALLE<br>"
-        "<b>Site:</b> %{customdata[5]}<br>"
-        "<b>RNC:</b> %{customdata[6]}<br>"
-        "<b>NodeB:</b> %{customdata[7]}<br>"
-        "<b>Última hora con registro:</b> %{customdata[9]}<br>"
+        "<b>Site:</b> %{customdata[2]}<br>"
+        "<b>RNC:</b> %{customdata[3]}<br>"
+        "<b>NodeB:</b> %{customdata[4]}<br>"
+        "<b>Última hora con registro:</b> %{customdata[1]}<br>"
         "<extra></extra>"
     )
 

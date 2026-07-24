@@ -416,7 +416,10 @@ def register_callbacks(app):
         purge_topoff_heatmap_caches(now_ts=now_ts)
 
         main_slot = fetch_latest_available_slot()
-        topoff_slot = None if DATA_SOURCE == "api" else fetch_latest_available_slot_topoff()
+        if DATA_SOURCE == "api":
+            topoff_slot = None
+        else:
+            topoff_slot = fetch_latest_available_slot_topoff()
         common_slot = choose_common_available_slot(main_slot, topoff_slot)
 
         if not common_slot:

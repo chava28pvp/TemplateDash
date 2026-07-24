@@ -10,3 +10,5 @@ dist/
 *.exe
 *.pkg
 *.pyz
+.runtime-api/logs/
+.runtime-api/umbrales.json

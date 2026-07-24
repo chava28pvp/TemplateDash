@@ -30,6 +30,7 @@ from src.Utils.umbrales.umbrales_manager import UM_MANAGER
 # === Data access TopOff ===
 from src.dataAccess.data_acess_topoff import fetch_topoff_paginated
 from src.dataAccess.data_acess_topoff import fetch_alarm_meta_for_topoff
+from src.dataAccess import topoff_visuals_api_client
 from src.config import DATA_SOURCE
 
 
@@ -293,6 +294,109 @@ def _run_topoff_histo_for_domain(
     return fig_pct, fig_unit, page_info, False
 
 
+def _run_topoff_histo_api_for_domain(
+    domain,
+    sel_wave,
+    fecha,
+    technologies,
+    vendors,
+    clusters,
+    sites,
+    rncs,
+    nodebs,
+    hi_page_state,
+):
+    selected_wave = (sel_wave or {}).get("series_key")
+    technologies = _as_list(technologies)
+    vendors = _as_list(vendors)
+    clusters = _as_list(clusters)
+    sites = _as_list(sites)
+    rncs = _as_list(rncs)
+    nodebs = _as_list(nodebs)
+
+    page = int((hi_page_state or {}).get("page", 1))
+    page_sz = int((hi_page_state or {}).get("page_size", 50))
+
+    payload = topoff_visuals_api_client.fetch_histogram(
+        fecha=fecha,
+        domain=domain,
+        technologies=technologies,
+        vendors=vendors,
+        clusters=clusters,
+        sites=sites,
+        rncs=rncs,
+        nodebs=nodebs,
+        page=page,
+        page_size=page_sz,
+        thresholds_snapshot=UM_MANAGER.config(),
+    )
+    pct_payload = payload.get("pct_payload")
+    unit_payload = payload.get("unit_payload")
+    _normalize_topoff_histo_row_detail(pct_payload)
+    _normalize_topoff_histo_row_detail(unit_payload)
+    page_info = payload.get("page_info") or {"total_rows": 0, "offset": 0, "limit": page_sz, "showing": 0}
+
+    fig_pct = build_overlay_waves_figure_topoff(
+        pct_payload,
+        UMBRAL_CFG=UM_MANAGER.config(),
+        mode="severity",
+        height=420,
+        smooth_win=3,
+        opacity=0.9,
+        line_width=1.2,
+        decimals=2,
+        show_yaxis_ticks=True,
+        selected_wave=selected_wave,
+        show_traffic_bars=False,
+        traffic_agg="mean",
+        traffic_decimals=1,
+    ) if pct_payload else go.Figure()
+
+    fig_unit = build_overlay_waves_figure_topoff(
+        unit_payload,
+        UMBRAL_CFG=UM_MANAGER.config(),
+        mode="progress",
+        height=420,
+        smooth_win=3,
+        opacity=0.9,
+        line_width=1.2,
+        decimals=0,
+        show_yaxis_ticks=True,
+        selected_wave=selected_wave,
+        show_traffic_bars=False,
+    ) if unit_payload else go.Figure()
+
+    return fig_pct, fig_unit, page_info
+
+
+def _normalize_topoff_histo_row_detail(payload):
+    if not payload:
+        return
+    detail = payload.get("row_detail") or []
+    fixed = []
+    changed = False
+    for item in detail:
+        parts = str(item).split("/")
+        if len(parts) == 9:
+            parts = parts[:5] + [""] + parts[5:]
+            changed = True
+        fixed.append("/".join(parts))
+    if changed:
+        payload["row_detail"] = fixed
+
+
+def _series_key_from_histo_trace(trace):
+    meta = (trace or {}).get("meta")
+    if isinstance(meta, list) and meta:
+        return meta[0]
+    if isinstance(meta, tuple) and meta:
+        return meta[0]
+    cd = (trace or {}).get("customdata")
+    if cd and cd[0]:
+        return cd[0][0]
+    return None
+
+
 # ======================================================
 # Callbacks Heatmap + Histograma TopOff
 # ======================================================
@@ -336,21 +440,6 @@ def topoff_heatmap_callbacks(app):
         hm_page_state,
         hm_order_by,
     ):
-        if DATA_SOURCE == "api":
-            dates_children, hours_children = build_time_header_children_by_dates(fecha)
-            return (
-                dbc.Alert("TopOff deshabilitado en modo API.", color="secondary", className="mb-0"),
-                go.Figure(),
-                go.Figure(),
-                "Pagina 1 de 1",
-                "Sin resultados.",
-                {"total_rows": 0, "offset": 0, "limit": 50, "showing": 0},
-                dates_children,
-                hours_children,
-                dates_children,
-                hours_children,
-            )
-
         """
         Renderiza:
           - tabla resumen
@@ -376,6 +465,73 @@ def topoff_heatmap_callbacks(app):
         page_sz = int((hm_page_state or {}).get("page_size", 50))
         offset = max(0, (page - 1) * page_sz)
         limit = max(1, page_sz)
+
+        if DATA_SOURCE == "api":
+            dates_children, hours_children = build_time_header_children_by_dates(fecha)
+            try:
+                payload = topoff_visuals_api_client.fetch_heatmap(
+                    fecha=fecha,
+                    technologies=technologies,
+                    vendors=vendors,
+                    clusters=clusters,
+                    sites=sites,
+                    rncs=rncs,
+                    nodebs=nodebs,
+                    page=page,
+                    page_size=page_sz,
+                    order_by=hm_order_by or "alarm_bins_pct",
+                    thresholds_snapshot=UM_MANAGER.config(),
+                )
+            except Exception as exc:
+                return (
+                    dbc.Alert(f"No se pudo cargar TopOff heatmap desde API: {exc}", color="danger", className="mb-0"),
+                    go.Figure(),
+                    go.Figure(),
+                    "Pagina 1 de 1",
+                    "Sin resultados.",
+                    {"total_rows": 0, "offset": 0, "limit": page_sz, "showing": 0},
+                    dates_children,
+                    hours_children,
+                    dates_children,
+                    hours_children,
+                )
+
+            pct_payload = payload.get("pct_payload")
+            unit_payload = payload.get("unit_payload")
+            page_info = payload.get("page_info") or {
+                "total_rows": 0,
+                "offset": 0,
+                "limit": limit,
+                "showing": 0,
+                "height": 300,
+            }
+            hm_height = int(page_info.get("height") or 300)
+            fig_pct = build_heatmap_figure_topoff(pct_payload, height=hm_height, decimals=2) if pct_payload else go.Figure(layout={"height": hm_height})
+            fig_unit = build_heatmap_figure_topoff(unit_payload, height=hm_height, decimals=0) if unit_payload else go.Figure(layout={"height": hm_height})
+            table_component = (
+                render_heatmap_summary_table_topoff(pct_payload, unit_payload, pct_decimals=2, unit_decimals=0)
+                if (pct_payload or unit_payload)
+                else dbc.Alert("Sin filas para mostrar.", color="secondary", className="mb-0")
+            )
+            total = int(page_info.get("total_rows", 0))
+            showing = int(page_info.get("showing", 0))
+            start_i = int(page_info.get("offset", 0)) + 1 if showing else 0
+            end_i = start_i + showing - 1 if showing else 0
+            total_pg = max(1, math.ceil(total / max(1, page_sz)))
+            hm_indicator = f"Pagina {page} de {total_pg}"
+            hm_banner = "Sin filas." if total == 0 else f"Mostrando {start_i}-{end_i} de {total} filas"
+            return (
+                table_component,
+                fig_pct,
+                fig_unit,
+                hm_indicator,
+                hm_banner,
+                page_info,
+                dates_children,
+                hours_children,
+                dates_children,
+                hours_children,
+            )
 
         # Llave de estado (incluye order_by) para evitar recomputar si todo es igual
         state_key = _hm_key_topoff(
@@ -516,9 +672,6 @@ def topoff_heatmap_callbacks(app):
     )
     def topoff_heatmap_trigger_controller(*args):
         """Store â€œdummyâ€ para disparar el callback grande sin loops raros."""
-        if DATA_SOURCE == "api":
-            return no_update
-
         ready = args[0] if args else None
         return {
             "ts": time.time(),
@@ -607,7 +760,22 @@ def topoff_heatmap_callbacks(app):
     ):
         """Construye histo PS (pct y unit) usando la misma paginaciÃ³n."""
         if DATA_SOURCE == "api":
-            return no_update, no_update, no_update
+            try:
+                fig_pct, fig_unit, page_info = _run_topoff_histo_api_for_domain(
+                    "PS",
+                    sel_wave,
+                    fecha,
+                    technologies,
+                    vendors,
+                    clusters,
+                    sites,
+                    rncs,
+                    nodebs,
+                    hi_page_state,
+                )
+            except Exception:
+                return go.Figure(), go.Figure(), {"total_rows": 0, "offset": 0, "limit": 50, "showing": 0}
+            return fig_pct, fig_unit, page_info
 
         fig_pct, fig_unit, page_info, is_cache = _run_topoff_histo_for_domain(
             "PS",
@@ -658,7 +826,22 @@ def topoff_heatmap_callbacks(app):
     ):
         """Construye histo CS (pct y unit)."""
         if DATA_SOURCE == "api":
-            return no_update, no_update
+            try:
+                fig_pct, fig_unit, _page_info = _run_topoff_histo_api_for_domain(
+                    "CS",
+                    sel_wave,
+                    fecha,
+                    technologies,
+                    vendors,
+                    clusters,
+                    sites,
+                    rncs,
+                    nodebs,
+                    hi_page_state,
+                )
+            except Exception:
+                return go.Figure(), go.Figure()
+            return fig_pct, fig_unit
 
         fig_pct, fig_unit, _page_info, is_cache = _run_topoff_histo_for_domain(
             "CS",
@@ -695,10 +878,9 @@ def topoff_heatmap_callbacks(app):
         traces = (fig or {}).get("data") or []
         if i is None or i >= len(traces):
             return no_update
-        cd = traces[i].get("customdata")
-        if not cd or not cd[0]:
+        series_key = _series_key_from_histo_trace(traces[i])
+        if not series_key:
             return no_update
-        series_key = cd[0][0]
         return {"series_key": series_key}
 
     # -------------------------------------------------
@@ -719,10 +901,9 @@ def topoff_heatmap_callbacks(app):
         traces = (fig or {}).get("data") or []
         if i is None or i >= len(traces):
             return no_update
-        cd = traces[i].get("customdata")
-        if not cd or not cd[0]:
+        series_key = _series_key_from_histo_trace(traces[i])
+        if not series_key:
             return no_update
-        series_key = cd[0][0]
         return {"series_key": series_key}
 
     # -------------------------------------------------
@@ -743,10 +924,9 @@ def topoff_heatmap_callbacks(app):
         traces = (fig or {}).get("data") or []
         if i is None or i >= len(traces):
             return no_update
-        cd = traces[i].get("customdata")
-        if not cd or not cd[0]:
+        series_key = _series_key_from_histo_trace(traces[i])
+        if not series_key:
             return no_update
-        series_key = cd[0][0]
         return {"series_key": series_key}
 
     # -------------------------------------------------
@@ -767,10 +947,9 @@ def topoff_heatmap_callbacks(app):
         traces = (fig or {}).get("data") or []
         if i is None or i >= len(traces):
             return no_update
-        cd = traces[i].get("customdata")
-        if not cd or not cd[0]:
+        series_key = _series_key_from_histo_trace(traces[i])
+        if not series_key:
             return no_update
-        series_key = cd[0][0]
         return {"series_key": series_key}
 
     # -------------------------------------------------
@@ -906,9 +1085,6 @@ def topoff_heatmap_callbacks(app):
     )
     def topoff_histo_trigger_controller(*args):
         """Store dummy que dispara el refresh de histogramas."""
-        if DATA_SOURCE == "api":
-            return no_update
-
         ready = args[0] if args else None
         return {
             "ts": time.time(),

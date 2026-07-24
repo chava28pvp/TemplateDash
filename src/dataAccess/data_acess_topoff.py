@@ -470,7 +470,7 @@ def _hora_to_range_prev_and_current(hora: Optional[str]):
     """
     Devuelve (h_inicio, h_fin_exclusivo) abarcando:
       [hora-1h, hora+1h)
-    Ejemplo: '10:00' -> ('09:00:00', '11:00:00')
+    Ejemplo: '10:00' -> ('09:00', '11:00')
     """
     if not hora:
         return None
@@ -488,7 +488,7 @@ def _hora_to_range_prev_and_current(hora: Optional[str]):
     start = (dt - timedelta(hours=1)).replace(minute=0, second=0)
     end = (dt + timedelta(hours=1)).replace(minute=0, second=0)
 
-    return start.strftime("%H:%M:%S"), end.strftime("%H:%M:%S")
+    return start.strftime("%H:%M"), end.strftime("%H:%M")
 
 
 # =========================================================

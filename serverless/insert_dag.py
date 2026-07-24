@@ -4,7 +4,7 @@
 ###########################################  READ ONLY LIBRARIES  ######################################################
 ###########################################                       ######################################################
 ########################################################################################################################
-import json, logging, os, sys, glob
+import hashlib, json, logging, os, sys, glob
 sys.path.append(os.path.dirname(__file__))
 log = logging.getLogger(__name__)
 from datetime import datetime, timedelta
@@ -58,6 +58,11 @@ default_args = {
 }
 
 dag = DAG(dag_id='9jd-guh-r7j', description='', start_date=datetime(2025,9,17), schedule_interval='*/5 * * * *', catchup=False, on_failure_callback=MATWorkflowErrorManagement, on_success_callback=MATWorkflowSuccessManagement, default_args=default_args)
+
+DASHBOARD_MASTER_INSERT_BATCH_SIZE = int(os.environ.get("DASHBOARD_MASTER_INSERT_BATCH_SIZE", "1000"))
+DASHBOARD_MASTER_EXISTING_PK_CHUNK_SIZE = int(os.environ.get("DASHBOARD_MASTER_EXISTING_PK_CHUNK_SIZE", "1000"))
+DASHBOARD_MASTER_SKIP_EXISTING_CHECK = str(os.environ.get("DASHBOARD_MASTER_SKIP_EXISTING_CHECK", "0")).strip().lower() in ("1", "true", "yes", "y")
+DASHBOARD_MASTER_DATA_HASH_FIELD = os.environ.get("DASHBOARD_MASTER_DATA_HASH_FIELD", "Data_Hash")
 
 
 ########################################################################################################################
@@ -993,6 +998,8 @@ SERVER_SORT_FIELDS = {
     "complete_flag": "Complete_Flag",
     "integrity_health_pct": "Integrity_Health_Pct",
 }
+THRESHOLD_CONFIG_HASH_FIELD = "Threshold_Config_Hash"
+THRESHOLD_COMPUTED_AT_FIELD = "Threshold_Computed_At"
 
 SEVERITY_METRICS = [
     "PS_RRC__IA",
@@ -1054,6 +1061,15 @@ VISUAL_INSERT_BATCH_SIZE = int(os.environ.get("VISUAL_INSERT_BATCH_SIZE", "2000"
 VISUAL_SNAPSHOT_BUILD_ALL_DATES = str(os.environ.get("VISUAL_SNAPSHOT_BUILD_ALL_DATES", "0")).strip().lower() in ("1", "true", "yes", "y")
 VISUAL_SNAPSHOT_FORCE_REBUILD = str(os.environ.get("VISUAL_SNAPSHOT_FORCE_REBUILD", "0")).strip().lower() in ("1", "true", "yes", "y")
 VISUAL_SNAPSHOT_SKIP_EXISTING = str(os.environ.get("VISUAL_SNAPSHOT_SKIP_EXISTING", "0")).strip().lower() in ("1", "true", "yes", "y")
+VISUAL_RANK_RETENTION_DAYS = int(os.environ.get("VISUAL_RANK_RETENTION_DAYS", "3"))
+VISUAL_RANK_REBUILD_DAYS = int(os.environ.get("VISUAL_RANK_REBUILD_DAYS", "2"))
+VISUAL_RANK_DELETE_MAX_LOOPS = int(os.environ.get("VISUAL_RANK_DELETE_MAX_LOOPS", "25"))
+VISUAL_RANK_VIEW_ORDER = {
+    "main_heatmap": 0,
+    "integrity": 1,
+    "histo_ps": 2,
+    "histo_cs": 3,
+}
 
 VISUAL_INPUT_FIELDS = {
     "Resources_DashboardVisualSeries_insert_input": {
@@ -1385,7 +1401,12 @@ def fetch_active_threshold_config_for_insert(mat, job, profile="main"):
         "Config de umbrales activa cargada: "
         f"profile={row.get('profile')} hash={row.get('config_hash')} updated_at={row.get('updated_at')}"
     )
-    return config
+    return {
+        "config": config,
+        "config_hash": row.get("config_hash"),
+        "profile": row.get("profile"),
+        "updated_at": row.get("updated_at"),
+    }
 
 
 def add_dashboard_master_computed_columns(df_insert, mat, job):
@@ -1396,9 +1417,14 @@ def add_dashboard_master_computed_columns(df_insert, mat, job):
         return df_insert
 
     out = df_insert.copy()
-    thresholds_snapshot = fetch_active_threshold_config_for_insert(mat, job, profile="main")
+    threshold_row = fetch_active_threshold_config_for_insert(mat, job, profile="main")
+    thresholds_snapshot = (threshold_row or {}).get("config")
+    threshold_config_hash = (threshold_row or {}).get("config_hash")
+    computed_at = datetime.utcnow().isoformat()
     key_cols = ["Network", "Vendor", "Noc_Cluster", "Technology"]
     baseline_maps_by_date = {}
+    dates_by_window = {}
+    key_rows_by_window = {}
 
     valid_key_df = out.dropna(subset=required_cols)
     for fecha in sorted(valid_key_df["Date"].astype(str).unique()):
@@ -1409,7 +1435,29 @@ def add_dashboard_master_computed_columns(df_insert, mat, job):
             .drop_duplicates()
             .to_dict(orient="records")
         )
-        baseline_maps_by_date[fecha] = fetch_integrity_baseline_map_for_insert(mat, fecha, key_rows, job)
+        try:
+            window = compute_previous_week_window(fecha)
+        except Exception as exc:
+            job.log.warning(f"No se pudo calcular ventana baseline para fecha={fecha}: {exc}")
+            baseline_maps_by_date[fecha] = {}
+            continue
+        dates_by_window.setdefault(window, []).append(fecha)
+        key_rows_by_window.setdefault(window, {})
+        for row in key_rows:
+            key = (
+                row.get("Network"),
+                row.get("Vendor"),
+                row.get("Noc_Cluster"),
+                row.get("Technology"),
+            )
+            key_rows_by_window[window][key] = row
+
+    for window, fechas in dates_by_window.items():
+        first_fecha = fechas[0]
+        key_rows = list((key_rows_by_window.get(window) or {}).values())
+        baseline_map = fetch_integrity_baseline_map_for_insert(mat, first_fecha, key_rows, job)
+        for fecha in fechas:
+            baseline_maps_by_date[fecha] = baseline_map
 
     severity_scores = []
     crit_counts = []
@@ -1444,16 +1492,35 @@ def add_dashboard_master_computed_columns(df_insert, mat, job):
     out[SERVER_SORT_FIELDS["crit_count"]] = crit_counts
     out[SERVER_SORT_FIELDS["complete_flag"]] = complete_flags
     out[SERVER_SORT_FIELDS["integrity_health_pct"]] = integrity_health_pcts
+    out[THRESHOLD_CONFIG_HASH_FIELD] = threshold_config_hash
+    out[THRESHOLD_COMPUTED_AT_FIELD] = computed_at
 
     job.log.info(
         "Columnas optimizadas calculadas: "
-        f"{list(SERVER_SORT_FIELDS.values())}"
+        f"{list(SERVER_SORT_FIELDS.values()) + [THRESHOLD_CONFIG_HASH_FIELD, THRESHOLD_COMPUTED_AT_FIELD]}"
     )
     return out
 
 
 def visual_pk(*parts):
     return "||".join("" if part is None else str(part).strip() for part in parts)
+
+
+def dashboard_master_pk(*parts):
+    raw = "||".join("" if part is None or pd.isna(part) else str(part).strip() for part in parts)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"dm-{digest}"
+
+
+def dashboard_master_data_hash(row, columns):
+    payload = {}
+    for col in columns:
+        value = row.get(col)
+        clean = clean_value(value)
+        payload[col] = clean
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"dh-{digest}"
 
 
 def get_graphql_input_fields(mat, type_name, job):
@@ -1510,6 +1577,7 @@ def fetch_dashboard_rows_for_visual_snapshot(mat, fecha, job):
         Noc_Cluster
         Date
         Time
+        Fecha_Ejecucion
         INTEGRITY
         Integrity_Health_Pct
         PS_TRAFF_GB
@@ -1554,8 +1622,46 @@ def fetch_dashboard_rows_for_visual_snapshot(mat, fecha, job):
             break
         offset += limit
 
-    job.log.info(f"Filas fuente visual fecha={today} yday={yday}: {len(rows)}")
-    return rows, today, yday
+    compacted = keep_latest_dashboard_rows(rows, job)
+    job.log.info(
+        f"Filas fuente visual fecha={today} yday={yday}: "
+        f"{len(rows)} crudas, {len(compacted)} ultima ejecucion"
+    )
+    return compacted, today, yday
+
+
+def dashboard_functional_key(row):
+    return (
+        str(row.get("Network") or "").strip(),
+        str(row.get("Technology") or "").strip(),
+        str(row.get("Vendor") or "").strip(),
+        str(row.get("Noc_Cluster") or "").strip(),
+        str(row.get("Date") or "").strip(),
+        str(row.get("Time") or "").strip(),
+    )
+
+
+def execution_sort_value(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def keep_latest_dashboard_rows(rows, job=None):
+    latest = {}
+    replaced = 0
+    for row in rows or []:
+        key = dashboard_functional_key(row)
+        current = latest.get(key)
+        if current is None:
+            latest[key] = row
+            continue
+        if execution_sort_value(row.get("Fecha_Ejecucion")) >= execution_sort_value(current.get("Fecha_Ejecucion")):
+            latest[key] = row
+        replaced += 1
+    if replaced and job is not None:
+        job.log.info(f"Filas dashboardMaster compactadas por ultima Fecha_Ejecucion: {replaced}")
+    return list(latest.values())
 
 
 def row_offset48(row, today, yday):
@@ -1755,6 +1861,134 @@ def build_visual_rank_records(series_records, fecha, updated_at):
     return rank_records
 
 
+def build_visual_rank_records_from_rows(rows, fecha, yday, thresholds_snapshot, updated_at):
+    grouped = {}
+    for row in rows:
+        offset48 = row_offset48(row, fecha, yday)
+        if offset48 is None:
+            continue
+        network = row.get("Network")
+        vendor = row.get("Vendor")
+        cluster = row.get("Noc_Cluster")
+        technology = row.get("Technology")
+        for valores, (pct_col, unit_col) in VISUAL_VALORES_MAP.items():
+            pct_raw = to_float(row.get(pct_col)) if pct_col else None
+            unit_raw = to_float(row.get(unit_col))
+            if pct_raw is None and unit_raw is None:
+                continue
+
+            key = (network, vendor, cluster, technology, valores)
+            acc = grouped.setdefault(key, {
+                "network": network,
+                "vendor": vendor,
+                "noc_cluster": cluster,
+                "technology": technology,
+                "valores": valores,
+                "crit_hours": 0,
+                "alarm_hours": 0,
+                "max_pct_score": None,
+                "max_unit_raw": None,
+                "min_integrity_pct": None,
+                "last_bad_offset": None,
+                "_last_interest_score": -1,
+                "_score_by_offset": {},
+            })
+
+            if valores == "INTEGRITY":
+                severity_level = 4 if pct_raw is not None and pct_raw < 80 else 0
+                pct_score = None if pct_raw is None else max(0.0, min(1.0, pct_raw / 100.0))
+            else:
+                severity_level = metric_severity_level(pct_col, pct_raw, network, thresholds_snapshot)
+                pct_score = metric_severity_score(pct_col, pct_raw, network, thresholds_snapshot)
+
+            if severity_level >= 4:
+                acc["crit_hours"] += 1
+            if severity_level >= 1:
+                acc["alarm_hours"] += 1
+
+            if pct_score is not None:
+                scaled_score = scaled_bigint(pct_score)
+                acc["max_pct_score"] = max(acc["max_pct_score"], scaled_score) if acc["max_pct_score"] is not None else scaled_score
+                if severity_level >= 1:
+                    score_by_offset = acc["_score_by_offset"]
+                    off_score = max(score_by_offset.get(int(offset48), -1), int(scaled_score or 0))
+                    score_by_offset[int(offset48)] = off_score
+
+            if unit_raw is not None:
+                scaled_unit = scaled_bigint(unit_raw)
+                acc["max_unit_raw"] = max(acc["max_unit_raw"], scaled_unit) if acc["max_unit_raw"] is not None else scaled_unit
+
+            if valores == "INTEGRITY" and pct_raw is not None:
+                scaled_pct = scaled_bigint(pct_raw)
+                acc["min_integrity_pct"] = min(acc["min_integrity_pct"], scaled_pct) if acc["min_integrity_pct"] is not None else scaled_pct
+                if pct_raw < 80:
+                    acc["last_bad_offset"] = max(acc["last_bad_offset"], int(offset48)) if acc["last_bad_offset"] is not None else int(offset48)
+
+    rows_rank = []
+    for acc in grouped.values():
+        score_by_offset = acc.get("_score_by_offset") or {}
+        if acc.get("valores") != "INTEGRITY":
+            last_interest_offset = max(score_by_offset.keys()) if score_by_offset else None
+            acc["last_bad_offset"] = last_interest_offset
+            acc["_last_interest_score"] = score_by_offset.get(last_interest_offset, -1) if last_interest_offset is not None else -1
+        rows_rank.append(acc)
+
+    return build_visual_rank_records_from_rank_rows(rows_rank, fecha, updated_at)
+
+
+def build_visual_rank_records_from_rank_rows(rows, fecha, updated_at):
+    def make_rank(view_type, source_rows, sort_key):
+        ranked = sorted(source_rows, key=sort_key)
+        out = []
+        for idx, row in enumerate(ranked, start=1):
+            item = dict(row)
+            item["fecha"] = fecha
+            item["view_type"] = view_type
+            item["rank_order"] = idx
+            item["updated_at"] = updated_at
+            item["mat_pk"] = visual_pk(fecha, view_type, idx, row.get("network"), row.get("vendor"), row.get("noc_cluster"), row.get("technology"), row.get("valores"))
+            out.append(item)
+        return out
+
+    non_integrity = [r for r in rows if r["valores"] not in ("INTEGRITY", "PS_TRAFF", "CS_TRAFF")]
+    main_rows = [r for r in non_integrity if r.get("alarm_hours", 0) > 0]
+    ps_rows = [r for r in non_integrity if str(r["valores"]).startswith("PS_")]
+    cs_rows = [r for r in non_integrity if str(r["valores"]).startswith("CS_")]
+    integrity_rows = [r for r in rows if r["valores"] == "INTEGRITY"]
+
+    rank_records = []
+    rank_records += make_rank(
+        "main_heatmap",
+        main_rows,
+        lambda r: (
+            -(int(r.get("last_bad_offset")) if r.get("last_bad_offset") is not None else -1),
+            -int(r.get("_last_interest_score") or -1),
+            *[-int((r.get("_score_by_offset") or {}).get(off, -1)) for off in range(47, -1, -1)],
+            str(r.get("vendor")),
+            str(r.get("technology")),
+            str(r.get("noc_cluster")),
+            str(r.get("network")),
+            str(r.get("valores")),
+        ),
+    )
+    rank_records += make_rank(
+        "histo_ps",
+        ps_rows,
+        lambda r: (-int(r.get("max_unit_raw") or -1), str(r.get("noc_cluster")), str(r.get("valores"))),
+    )
+    rank_records += make_rank(
+        "histo_cs",
+        cs_rows,
+        lambda r: (-int(r.get("max_unit_raw") or -1), str(r.get("noc_cluster")), str(r.get("valores"))),
+    )
+    rank_records += make_rank(
+        "integrity",
+        integrity_rows,
+        lambda r: (-(int(r.get("last_bad_offset")) if r.get("last_bad_offset") is not None else -1), int(r.get("min_integrity_pct") or 10**12), -int(r.get("max_unit_raw") or -1), str(r.get("noc_cluster"))),
+    )
+    return rank_records
+
+
 def clean_record_for_insert(row, valid_fields):
     return {
         key: clean_value(value)
@@ -1850,15 +2084,79 @@ def fetch_existing_visual_pks(mat, table_name, pks, job):
     return existing
 
 
-def visual_snapshot_counts(mat, fecha, job):
+def fetch_existing_dashboard_master_hashes(mat, pks, hash_field, job):
+    existing = {}
+    pks = [pk for pk in (pks or []) if pk]
+    if not pks:
+        return existing
+
+    chunk_size = max(1, int(DASHBOARD_MASTER_EXISTING_PK_CHUNK_SIZE or 1000))
+    query = f"""
+    query getExistingDashboardMasterHashes($where: Resources_dashboardMaster_bool_exp!) {{
+      Resources_dashboardMaster(where: $where) {{
+        mat_pk
+        {hash_field}
+      }}
+    }}
+    """
+    for i in range(0, len(pks), chunk_size):
+        chunk = pks[i:i + chunk_size]
+        result = mat.graphQL.execute(
+            operation=query,
+            variables={"where": {"mat_pk": {"_in": chunk}}},
+        )
+        if result.get("errors"):
+            raise Exception(f"Error consultando hashes existentes en DashboardMaster: {result.get('errors')}")
+        rows = (
+            result
+            .get("data", {})
+            .get("Resources_dashboardMaster", [])
+        )
+        for row in rows or []:
+            pk = row.get("mat_pk")
+            if pk:
+                existing[str(pk)] = row.get(hash_field)
+    return existing
+
+
+def delete_dashboard_master_by_pks(mat, pks, job):
+    pks = [pk for pk in (pks or []) if pk]
+    if not pks:
+        return 0
+
+    mutation = """
+    mutation deleteDashboardMasterChanged($where: Resources_dashboardMaster_bool_exp!) {
+      delete_Resources_dashboardMaster(where: $where) {
+        affected_rows
+      }
+    }
+    """
+    total = 0
+    chunk_size = max(1, int(DASHBOARD_MASTER_EXISTING_PK_CHUNK_SIZE or 1000))
+    for i in range(0, len(pks), chunk_size):
+        chunk = pks[i:i + chunk_size]
+        result = mat.graphQL.execute(
+            operation=mutation,
+            variables={"where": {"mat_pk": {"_in": chunk}}},
+        )
+        if result.get("errors"):
+            raise Exception(f"Error eliminando DashboardMaster por mat_pk: {result.get('errors')}")
+        affected = (
+            result
+            .get("data", {})
+            .get("delete_Resources_dashboardMaster", {})
+            .get("affected_rows", 0)
+        )
+        total += int(affected or 0)
+    job.log.info(f"DashboardMaster: registros reemplazados/eliminados por cambio de hash: {total}")
+    return total
+
+
+def visual_rank_count(mat, fecha, job):
     query = """
-    query getVisualSnapshotCounts(
-      $series_where: Resources_DashboardVisualSeries_bool_exp!,
+    query getVisualRankCount(
       $rank_where: Resources_DashboardVisualRank_bool_exp!
     ) {
-      Resources_DashboardVisualSeries_aggregate(where: $series_where) {
-        aggregate { count }
-      }
       Resources_DashboardVisualRank_aggregate(where: $rank_where) {
         aggregate { count }
       }
@@ -1867,21 +2165,17 @@ def visual_snapshot_counts(mat, fecha, job):
     result = mat.graphQL.execute(
         operation=query,
         variables={
-            "series_where": {"fecha": {"_eq": fecha}},
             "rank_where": {"fecha": {"_eq": fecha}},
         },
     )
     if result.get("errors"):
-        job.log.warning(f"No se pudieron consultar conteos snapshot fecha={fecha}: {result.get('errors')}")
-        return 0, 0
+        job.log.warning(f"No se pudo consultar conteo rank fecha={fecha}: {result.get('errors')}")
+        return 0
     data = result.get("data") or {}
-    series_count = (
-        ((data.get(f"{VISUAL_SERIES_TABLE}_aggregate") or {}).get("aggregate") or {}).get("count") or 0
-    )
     rank_count = (
         ((data.get(f"{VISUAL_RANK_TABLE}_aggregate") or {}).get("aggregate") or {}).get("count") or 0
     )
-    return int(series_count), int(rank_count)
+    return int(rank_count)
 
 
 def delete_visual_snapshot_for_date(mat, fecha, job):
@@ -1909,6 +2203,118 @@ def delete_visual_snapshot_for_date(mat, fecha, job):
         job.log.info(f"Registros eliminados en {table_name} fecha={fecha}: {affected}")
 
 
+def delete_visual_rank_for_date(mat, fecha, job):
+    mutation = f"""
+    mutation deleteVisualRank($where: {VISUAL_RANK_TABLE}_bool_exp!) {{
+      delete_{VISUAL_RANK_TABLE}(where: $where) {{
+        affected_rows
+      }}
+    }}
+    """
+    total = 0
+    max_loops = max(1, int(VISUAL_RANK_DELETE_MAX_LOOPS or 25))
+    for loop_idx in range(max_loops):
+        result = mat.graphQL.execute(
+            operation=mutation,
+            variables={"where": {"fecha": {"_eq": fecha}}},
+        )
+        if result.get("errors"):
+            job.log.warning(f"No se pudo limpiar {VISUAL_RANK_TABLE} fecha={fecha}: {result.get('errors')}")
+            return total
+        affected = (
+            result
+            .get("data", {})
+            .get(f"delete_{VISUAL_RANK_TABLE}", {})
+            .get("affected_rows", 0)
+        )
+        affected = int(affected or 0)
+        total += affected
+        if affected <= 0:
+            break
+        if affected < 2000:
+            break
+    else:
+        job.log.warning(
+            f"Se alcanzo el limite de borrado {VISUAL_RANK_DELETE_MAX_LOOPS} "
+            f"para {VISUAL_RANK_TABLE} fecha={fecha}; eliminados parciales={total}"
+        )
+    job.log.info(f"Registros eliminados en {VISUAL_RANK_TABLE} fecha={fecha}: {total}")
+    return total
+
+
+def fetch_visual_rank_dates(mat, job):
+    query = f"""
+    query getVisualRankDates {{
+      {VISUAL_RANK_TABLE}(distinct_on: fecha, order_by: {{fecha: desc}}) {{
+        fecha
+      }}
+    }}
+    """
+    result = mat.graphQL.execute(operation=query, variables={})
+    if result.get("errors"):
+        job.log.warning(f"No se pudieron consultar fechas de {VISUAL_RANK_TABLE}: {result.get('errors')}")
+        return []
+    rows = (
+        result
+        .get("data", {})
+        .get(VISUAL_RANK_TABLE, [])
+    )
+    fechas = []
+    for row in rows or []:
+        fecha = str(row.get("fecha") or "").strip()
+        if fecha:
+            fechas.append(fecha)
+    return fechas
+
+
+def delete_visual_rank_except_dates(mat, keep_fechas, job):
+    keep_fechas = [str(fecha).strip() for fecha in (keep_fechas or []) if str(fecha or "").strip()]
+    if not keep_fechas:
+        job.log.warning(f"Retencion {VISUAL_RANK_TABLE}: no hay fechas a conservar; se omite borrado.")
+        return 0
+    mutation = f"""
+    mutation deleteOldVisualRank($where: {VISUAL_RANK_TABLE}_bool_exp!) {{
+      delete_{VISUAL_RANK_TABLE}(where: $where) {{
+        affected_rows
+      }}
+    }}
+    """
+    result = mat.graphQL.execute(
+        operation=mutation,
+        variables={"where": {"fecha": {"_nin": keep_fechas}}},
+    )
+    if result.get("errors"):
+        job.log.warning(
+            f"No se pudo aplicar retencion en {VISUAL_RANK_TABLE} keep={keep_fechas}: "
+            f"{result.get('errors')}"
+        )
+        return 0
+    affected = (
+        result
+        .get("data", {})
+        .get(f"delete_{VISUAL_RANK_TABLE}", {})
+        .get("affected_rows", 0)
+    )
+    job.log.info(
+        f"Retencion {VISUAL_RANK_TABLE}: eliminados={affected} "
+        f"conservando fechas={keep_fechas}"
+    )
+    return int(affected or 0)
+
+
+def apply_visual_rank_retention(mat, job):
+    keep_count = max(1, int(VISUAL_RANK_RETENTION_DAYS or 3))
+    fechas = fetch_visual_rank_dates(mat, job)
+    keep_fechas = fechas[:keep_count]
+    if len(fechas) <= keep_count:
+        job.log.info(
+            f"Retencion {VISUAL_RANK_TABLE}: fechas_existentes={fechas}. "
+            "No hay fechas antiguas para borrar."
+        )
+        return 0
+    return delete_visual_rank_except_dates(mat, keep_fechas, job)
+
+
 def build_dashboard_visual_snapshots(**kwargs):
     job = kwargs.get("job")
     mat = MATClient()
@@ -1926,64 +2332,40 @@ def build_dashboard_visual_snapshots(**kwargs):
     updated_at = datetime.utcnow().isoformat()
     task_instance = kwargs.get("task_instance") or kwargs.get("ti")
     try_number = int(getattr(task_instance, "try_number", 1) or 1)
-    skip_existing = (try_number > 1 or VISUAL_SNAPSHOT_SKIP_EXISTING) and not VISUAL_SNAPSHOT_FORCE_REBUILD
     fechas_disponibles = sorted([str(v) for v in df["Date"].dropna().unique()])
     if VISUAL_SNAPSHOT_BUILD_ALL_DATES:
         fechas = fechas_disponibles
     else:
-        fechas = fechas_disponibles[-1:] if fechas_disponibles else []
+        rebuild_days = max(1, int(VISUAL_RANK_REBUILD_DAYS or 2))
+        fechas = fechas_disponibles[-rebuild_days:] if fechas_disponibles else []
     job.log.info(
         f"Construyendo snapshots visuales para fechas: {fechas} "
         f"(disponibles={fechas_disponibles}, build_all={VISUAL_SNAPSHOT_BUILD_ALL_DATES}, "
-        f"force_rebuild={VISUAL_SNAPSHOT_FORCE_REBUILD}, skip_existing={skip_existing}, "
-        f"try_number={try_number})"
+        f"force_rebuild={VISUAL_SNAPSHOT_FORCE_REBUILD}, rebuild_days={VISUAL_RANK_REBUILD_DAYS}, "
+        f"retention_days={VISUAL_RANK_RETENTION_DAYS}, try_number={try_number})"
     )
 
     for fecha in fechas:
-        series_count, rank_count = visual_snapshot_counts(mat, fecha, job)
-        if series_count and rank_count and skip_existing:
-            job.log.info(
-                f"Snapshot visual fecha={fecha} ya existe: "
-                f"series={series_count}, rank={rank_count}. Se omite rebuild."
-            )
-            continue
-
         rows, today, yday = fetch_dashboard_rows_for_visual_snapshot(mat, fecha, job)
         if not rows:
             job.log.warning(f"No hay filas fuente para snapshot visual fecha={fecha}.")
             continue
-        partial_snapshot = bool(series_count and not rank_count)
-        rebuild_from_zero = (
-            (try_number <= 1 or VISUAL_SNAPSHOT_FORCE_REBUILD)
-            and not VISUAL_SNAPSHOT_SKIP_EXISTING
-            and not partial_snapshot
-        )
-        if rebuild_from_zero:
-            delete_visual_snapshot_for_date(mat, today, job)
-        else:
-            job.log.info(
-                f"Reintentando snapshot visual fecha={today} sin borrar progreso parcial "
-                f"(series_existentes={series_count}, rank_existentes={rank_count}, "
-                f"partial_snapshot={partial_snapshot})."
-            )
-        series_records = build_visual_series_records(rows, today, yday, thresholds_snapshot, updated_at)
-        series_records = dedupe_records_by_pk(series_records, VISUAL_SERIES_TABLE, job)
-        series_records = sorted(series_records, key=lambda row: row.get("mat_pk") or "")
-        rank_records = build_visual_rank_records(series_records, today, updated_at)
+        rank_records = build_visual_rank_records_from_rows(rows, today, yday, thresholds_snapshot, updated_at)
         rank_records = dedupe_records_by_pk(rank_records, VISUAL_RANK_TABLE, job)
-        rank_records = sorted(rank_records, key=lambda row: row.get("mat_pk") or "")
+        rank_records = sorted(
+            rank_records,
+            key=lambda row: (
+                VISUAL_RANK_VIEW_ORDER.get(str(row.get("view_type") or ""), 99),
+                int(row.get("rank_order") or 0),
+                row.get("mat_pk") or "",
+            )
+        )
         job.log.info(
-            f"Snapshot fecha={today}: series={len(series_records)} rank={len(rank_records)}"
+            f"VisualRank fecha={today}: filas_fuente={len(rows)} rank={len(rank_records)}"
         )
-        insert_graphql_records(
-            mat,
-            VISUAL_SERIES_TABLE,
-            "Resources_DashboardVisualSeries_insert_input",
-            series_records,
-            job,
-            batch_size=VISUAL_INSERT_BATCH_SIZE,
-            check_existing=not rebuild_from_zero,
-        )
+
+        delete_visual_rank_for_date(mat, today, job)
+
         insert_graphql_records(
             mat,
             VISUAL_RANK_TABLE,
@@ -1991,8 +2373,10 @@ def build_dashboard_visual_snapshots(**kwargs):
             rank_records,
             job,
             batch_size=VISUAL_INSERT_BATCH_SIZE,
-            check_existing=not rebuild_from_zero,
+            check_existing=False,
         )
+
+    apply_visual_rank_retention(mat, job)
 
 
 def insert_dashboard_master_graphql(**kwargs):
@@ -2051,91 +2435,21 @@ def insert_dashboard_master_graphql(**kwargs):
     def build_pk_from_values(values):
         return "||".join("" if pd.isna(value) else str(value).strip() for value in values)
 
-    df["__pk"] = df.apply(
-        lambda row: build_pk_from_values([row[col] for col in pk_cols]),
+    df["mat_pk"] = df.apply(
+        lambda row: dashboard_master_pk(*[row[col] for col in pk_cols]),
         axis=1
     )
-
-    query_existing = """
-    query getExistingDashboardMaster($where: Resources_dashboardMaster_bool_exp!) {
-      Resources_dashboardMaster(where: $where) {
-        Network
-        Technology
-        Vendor
-        Noc_Cluster
-        Date
-        Time
-      }
-    }
-    """
     
     def chunks(items, size):
         for i in range(0, len(items), size):
             yield items[i:i + size]
-    
-    pk_rows = (
-        df[pk_cols]
-        .dropna(subset=pk_cols)
-        .drop_duplicates()
-        .to_dict(orient="records")
-    )
-    
-    existing_keys = set()
-    chunk_size = 100
-    
-    for chunk in chunks(pk_rows, chunk_size):
-        where = {
-            "_or": [
-                {
-                    "Network": {"_eq": str(row["Network"]).strip()},
-                    "Technology": {"_eq": str(row["Technology"]).strip()},
-                    "Vendor": {"_eq": str(row["Vendor"]).strip()},
-                    "Noc_Cluster": {"_eq": str(row["Noc_Cluster"]).strip()},
-                    "Date": {"_eq": str(row["Date"]).strip()},
-                    "Time": {"_eq": str(row["Time"]).strip()},
-                }
-                for row in chunk
-            ]
-        }
-    
-        result_existing = mat.graphQL.execute(
-            operation=query_existing,
-            variables={"where": where}
-        )
-    
-        if result_existing.get("errors"):
-            raise Exception(
-                f"Error consultando registros existentes en GraphQL: {result_existing.get('errors')}"
-            )
-    
-        existing_rows = (
-            result_existing
-            .get("data", {})
-            .get("Resources_dashboardMaster", [])
-        )
-    
-        for existing_row in existing_rows:
-            existing_keys.add(
-                build_pk_from_values([existing_row.get(col) for col in pk_cols])
-            )
-
-    before_existing_filter = len(df)
-
-    df = df[~df["__pk"].isin(existing_keys)].copy()
-
-    after_existing_filter = len(df)
-
-    job.log.info(f"Registros antes de filtrar existentes en GraphQL: {before_existing_filter}")
-    job.log.info(f"Registros nuevos para insertar: {after_existing_filter}")
-    job.log.info(f"Registros omitidos porque ya existian: {before_existing_filter - after_existing_filter}")
-
-    df = df.drop(columns=["__pk"])
 
     if df.empty:
         job.log.info("Todos los registros del CSV consolidado ya existen en GraphQL. No hay registros nuevos para insertar.")
         return
 
     graphql_column_map = {
+        "mat_pk": "mat_pk",
         "Network": "Network",
         "Technology": "Technology",
         "Vendor": "Vendor",
@@ -2220,9 +2534,6 @@ def insert_dashboard_master_graphql(**kwargs):
         variables={"typeName": "Resources_dashboardMaster_insert_input"}
     )
 
-    job.log.info("Schema insert_input:")
-    job.log.info(json.dumps(schema_input_result, indent=2))
-
     if schema_input_result.get("errors"):
         raise Exception(f"Error consultando schema GraphQL: {schema_input_result.get('errors')}")
 
@@ -2234,6 +2545,62 @@ def insert_dashboard_master_graphql(**kwargs):
     )
 
     graphql_fields = [field["name"] for field in input_fields]
+
+    data_hash_field = DASHBOARD_MASTER_DATA_HASH_FIELD
+    required_optimized_fields = [
+        SERVER_SORT_FIELDS["severity_score"],
+        SERVER_SORT_FIELDS["crit_count"],
+        SERVER_SORT_FIELDS["complete_flag"],
+        SERVER_SORT_FIELDS["integrity_health_pct"],
+        data_hash_field,
+    ]
+    optional_optimized_fields = [
+        THRESHOLD_CONFIG_HASH_FIELD,
+        THRESHOLD_COMPUTED_AT_FIELD,
+    ]
+    missing_required_optimized_fields = [
+        field for field in required_optimized_fields
+        if field not in graphql_fields
+    ]
+    if missing_required_optimized_fields:
+        raise Exception(
+            "Faltan columnas optimizadas en Resources_dashboardMaster_insert_input: "
+            f"{missing_required_optimized_fields}. "
+            "Son necesarias para alarmado/global, integridad y reemplazo por Data_Hash."
+        )
+    missing_optional_optimized_fields = [
+        field for field in optional_optimized_fields
+        if field not in graphql_fields
+    ]
+    if missing_optional_optimized_fields:
+        job.log.warning(
+            "Columnas opcionales de versionado no existen en Resources_dashboardMaster_insert_input: "
+            f"{missing_optional_optimized_fields}. "
+            "El DAG continuara, pero la API no podra validar desfases por cambio de umbral."
+        )
+
+    data_hash_excluded_cols = {
+        "mat_pk",
+        "Network",
+        "Technology",
+        "Vendor",
+        "Noc_Cluster",
+        "Date",
+        "Time",
+        "Fecha_Ejecucion",
+        "Archivo_Fuente",
+        THRESHOLD_COMPUTED_AT_FIELD,
+        data_hash_field,
+    }
+    data_hash_cols = [
+        col for col in df_insert.columns
+        if col not in data_hash_excluded_cols
+    ]
+    df_insert[data_hash_field] = df_insert.apply(
+        lambda row: dashboard_master_data_hash(row, data_hash_cols),
+        axis=1,
+    )
+    job.log.info(f"Columna {data_hash_field} calculada usando columnas: {data_hash_cols}")
 
     job.log.info(f"Campos válidos en GraphQL insert_input: {graphql_fields}")
 
@@ -2270,6 +2637,51 @@ def insert_dashboard_master_graphql(**kwargs):
         return
 
     job.log.info("Primer registro que se enviará a GraphQL:")
+    before_hash_filter = len(records)
+    if DASHBOARD_MASTER_SKIP_EXISTING_CHECK:
+        job.log.info(
+            "DASHBOARD_MASTER_SKIP_EXISTING_CHECK activo: "
+            "se omite comparacion de Data_Hash y se insertan todos los registros."
+        )
+    else:
+        incoming_pks = sorted({str(row.get("mat_pk")) for row in records if row.get("mat_pk")})
+        existing_hashes = fetch_existing_dashboard_master_hashes(mat, incoming_pks, data_hash_field, job)
+        filtered_records = []
+        changed_pks = []
+        skipped_same_hash = 0
+
+        for row in records:
+            pk = str(row.get("mat_pk") or "")
+            new_hash = row.get(data_hash_field)
+            pk_exists = pk in existing_hashes
+            old_hash = existing_hashes.get(pk)
+            if not pk or not pk_exists:
+                filtered_records.append(row)
+                continue
+            if old_hash is None or str(old_hash or "").strip() == "":
+                filtered_records.append(row)
+                changed_pks.append(pk)
+                continue
+            if str(old_hash or "") == str(new_hash or ""):
+                skipped_same_hash += 1
+                continue
+            filtered_records.append(row)
+            changed_pks.append(pk)
+
+        if changed_pks:
+            delete_dashboard_master_by_pks(mat, sorted(set(changed_pks)), job)
+
+        records = filtered_records
+        job.log.info(
+            "DashboardMaster delta por Data_Hash: "
+            f"entrada={before_hash_filter}, nuevos_o_cambiados={len(records)}, "
+            f"sin_cambios={skipped_same_hash}, reemplazos={len(set(changed_pks))}"
+        )
+
+    if not records:
+        job.log.info("No hay registros nuevos o modificados para insertar en Resources_dashboardMaster.")
+        return
+
     job.log.info(json.dumps(records[0], indent=2))
 
     mutation_insert = """
@@ -2280,7 +2692,7 @@ def insert_dashboard_master_graphql(**kwargs):
     }
     """
 
-    batch_size = 500
+    batch_size = max(1, int(DASHBOARD_MASTER_INSERT_BATCH_SIZE or 1000))
     total_inserted = 0
 
     for i in range(0, len(records), batch_size):
@@ -2294,9 +2706,6 @@ def insert_dashboard_master_graphql(**kwargs):
                 "objects": batch
             }
         )
-
-        job.log.info(f"Resultado batch {i} - {i + len(batch)}:")
-        job.log.info(json.dumps(result, indent=2))
 
         if result.get("errors"):
             raise Exception(

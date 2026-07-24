@@ -7,11 +7,13 @@ import urllib3
 from src.config import (
     HEATMAP_QUERY_API_CA_BUNDLE,
     HEATMAP_QUERY_API_DEBUG,
+    HEATMAP_QUERY_API_RANK_ONLY_MAX_ROWS,
     HEATMAP_QUERY_API_TIMEOUT,
     HEATMAP_QUERY_API_TOKEN,
     HEATMAP_QUERY_API_TOKEN_HEADER,
     HEATMAP_QUERY_API_TOKEN_PREFIX,
     HEATMAP_QUERY_API_URL,
+    HEATMAP_QUERY_API_USE_VISUAL_SERIES,
     HEATMAP_QUERY_API_VERIFY_SSL,
 )
 
@@ -90,7 +92,7 @@ def fetch_main_heatmap(
     )
     payload["pagination"] = {"page": int(page or 1), "page_size": int(page_size or 50)}
     payload["order_by"] = order_by
-    payload["options"] = {"max_rows": int(max_rows or 200000)}
+    payload["options"] = _options(max_rows=max_rows)
     data = call_operation("main_heatmap", payload)
     return data.get("data") or {}
 
@@ -118,7 +120,7 @@ def fetch_histogram(
     )
     payload["pagination"] = {"page": int(page or 1), "page_size": int(page_size or 50)}
     payload["domain"] = str(domain or "PS").upper()
-    payload["options"] = {"max_rows": int(max_rows or 200000)}
+    payload["options"] = _options(max_rows=max_rows)
     data = call_operation("histogram", payload)
     return data.get("data") or {}
 
@@ -142,9 +144,17 @@ def fetch_integrity_heatmap(
         technologies=technologies,
     )
     payload["pagination"] = {"page": int(page or 1), "page_size": int(page_size or 50)}
-    payload["options"] = {"max_rows": int(max_rows or 200000)}
+    payload["options"] = _options(max_rows=max_rows)
     data = call_operation("integrity_heatmap", payload)
     return data.get("data") or {}
+
+
+def _options(*, max_rows=200000):
+    return {
+        "max_rows": int(max_rows or 200000),
+        "use_visual_series": bool(HEATMAP_QUERY_API_USE_VISUAL_SERIES),
+        "rank_only_max_rows": int(HEATMAP_QUERY_API_RANK_ONLY_MAX_ROWS or 50000),
+    }
 
 
 def _base_payload(

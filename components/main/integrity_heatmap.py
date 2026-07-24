@@ -226,6 +226,7 @@ def build_integrity_heatmap_payloads_fast(
     # Metadatos por fila (para hover/tablas)
     y_labels, row_detail = [], []
     row_last_ts, row_max_pct, row_max_unit = [], [], []
+    row_min_pct, row_min_unit = [], []
 
     # Buffers temporales para construir matrices crudas y máscara de missing
     tmp_unit_raws = []
@@ -298,9 +299,7 @@ def build_integrity_heatmap_payloads_fast(
             else:
                 pct_masked.append(None)
                 # Missing “real”: el offset existe globalmente y no es futuro
-                miss_row.append(
-                    1 if (off in present_off and (global_last_off < 0 or off <= global_last_off)) else None
-                )
+                miss_row.append(1 if (global_last_off >= 0 and off <= global_last_off) else None)
 
             # Regla para UNIT: solo mostrar si el % pasa el umbral (o si no hay %)
             if pct_ok_num and fp is not None:
@@ -320,6 +319,8 @@ def build_integrity_heatmap_payloads_fast(
 
         rmax_u = np.nanmax(arr_u) if np.isfinite(arr_u).any() else np.nan
         rmax_p = np.nanmax(arr_p) if np.isfinite(arr_p).any() else np.nan
+        rmin_u = np.nanmin(arr_u) if np.isfinite(arr_u).any() else np.nan
+        rmin_p = np.nanmin(arr_p) if np.isfinite(arr_p).any() else np.nan
 
         valid_idx = np.where(np.isfinite(arr_p) | np.isfinite(arr_u))[0]
         last_label = str(x_dt[int(valid_idx[-1])]).replace("T", " ")[:16] if valid_idx.size else ""
@@ -327,6 +328,8 @@ def build_integrity_heatmap_payloads_fast(
         row_last_ts.append(last_label)
         row_max_pct.append(rmax_p)
         row_max_unit.append(rmax_u)
+        row_min_pct.append(rmin_p)
+        row_min_unit.append(rmin_u)
 
     # PCT: se usa crudo (0..100) y color_mode progress (gradiente)
     z_pct_raw = tmp_pct_raws
@@ -362,6 +365,9 @@ def build_integrity_heatmap_payloads_fast(
         "row_last_ts": row_last_ts,
         "row_max_pct": row_max_pct,
         "row_max_unit": row_max_unit,
+        "row_min_pct": row_min_pct,
+        "row_min_unit": row_min_unit,
+        "stat_field": "min_pct",
         "missing_mask": missing_mask,
     }
 
@@ -380,6 +386,10 @@ def build_integrity_heatmap_payloads_fast(
         "row_last_ts": row_last_ts,
         "row_max_pct": row_max_pct,
         "row_max_unit": row_max_unit,
+        "row_min_pct": row_min_pct,
+        "row_min_unit": row_min_unit,
+        "stat_field": "min_unit",
+        "missing_mask": missing_mask,
     }
 
     page_info = {"total_rows": total_rows, "offset": start, "limit": limit, "showing": len(rows_page)}
@@ -452,13 +462,13 @@ def render_integrity_summary_table(
 
         # Arma fila HTML (Dash)
         rows.append(html.Tr([
-            html.Td(clus, className="w-cluster"),
-            html.Td(tech, className="w-tech"),
+            html.Td(clus, title=f"Cluster: {clus or 'NULL'}", className="w-cluster"),
+            html.Td(tech, title=f"Technology: {tech or 'NULL'}", className="w-tech"),
             html.Td(vendor_disp(vend), title=vend, className="w-vendor"),
-            html.Td(last_str, className="w-ultima"),
-            html.Td(last_pct, className="w-num ta-right"),
-            html.Td(trend, className="w-num ta-right"),  # baseline (trend)
-            html.Td(last_unit, className="w-num ta-right"),
+            html.Td(last_str, title=f"Ultima hora con registro: {last_str or 'NULL'}", className="w-ultima"),
+            html.Td(last_pct, title=f"Integridad %: {last_pct or 'NULL'}", className="w-num ta-right"),
+            html.Td(trend, title=f"Trend: {trend or 'NULL'}", className="w-num ta-right"),  # baseline (trend)
+            html.Td(last_unit, title=f"Integridad UNIT: {last_unit or 'NULL'}", className="w-num ta-right"),
         ]))
 
     # Tabla final con estilos (dark/compact)

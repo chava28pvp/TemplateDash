@@ -105,13 +105,13 @@ def _render_integrity_summary_from_payload(pct_payload, unit_payload, integrity_
             base_val = _baseline_from_payload_values(last_unit_val, last_pct_val)
         trend = "" if base_val is None or pd.isna(base_val) else f"{float(base_val):.0f}"
         rows.append(html.Tr([
-            html.Td(clus, className="w-cluster"),
-            html.Td(tech, className="w-tech"),
+            html.Td(clus, title=f"Cluster: {clus or 'NULL'}", className="w-cluster"),
+            html.Td(tech, title=f"Technology: {tech or 'NULL'}", className="w-tech"),
             html.Td(vend[:1].upper() if vend else "", title=vend, className="w-vendor"),
-            html.Td(last_str, className="w-ultima"),
-            html.Td(last_pct, className="w-num ta-right"),
-            html.Td(trend, className="w-num ta-right"),
-            html.Td(last_unit, className="w-num ta-right"),
+            html.Td(last_str, title=f"Ultima hora con registro: {last_str or 'NULL'}", className="w-ultima"),
+            html.Td(last_pct, title=f"Integridad %: {last_pct or 'NULL'}", className="w-num ta-right"),
+            html.Td(trend, title=f"Trend: {trend or 'NULL'}", className="w-num ta-right"),
+            html.Td(last_unit, title=f"Integridad UNIT: {last_unit or 'NULL'}", className="w-num ta-right"),
         ]))
 
     return dbc.Table(

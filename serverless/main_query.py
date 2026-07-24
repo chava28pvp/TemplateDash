@@ -21,12 +21,16 @@ SERVER_SORT_FIELDS = {
     "complete_flag": "Complete_Flag",
     "integrity_health_pct": "Integrity_Health_Pct",
 }
+THRESHOLD_CONFIG_HASH_FIELD = "Threshold_Config_Hash"
+THRESHOLD_COMPUTED_AT_FIELD = "Threshold_Computed_At"
 
 COMPUTED_FIELDS = [
     SERVER_SORT_FIELDS["severity_score"],
     SERVER_SORT_FIELDS["crit_count"],
     SERVER_SORT_FIELDS["complete_flag"],
     SERVER_SORT_FIELDS["integrity_health_pct"],
+    THRESHOLD_CONFIG_HASH_FIELD,
+    THRESHOLD_COMPUTED_AT_FIELD,
 ]
 
 STABLE_SCAN_ORDER = [
@@ -87,7 +91,8 @@ BASE_COLUMNS = [
 ]
 
 KEY_COLUMNS = ["fecha", "hora", "vendor", "noc_cluster", "technology"]
-BASE_FIELDS = [COLMAP[c] for c in BASE_COLUMNS]
+LATEST_EXEC_KEY_COLUMNS = ["fecha", "hora", "network", "technology", "vendor", "noc_cluster"]
+BASE_FIELDS = [COLMAP[c] for c in BASE_COLUMNS + ["fecha_ejecucion"]]
 
 SEVERITY_METRICS = [
     "ps_rrc_ia_percent",
@@ -198,11 +203,35 @@ def handle_page(matclient, params):
     if mode in ("alarmado", "global", "severity") or is_integrity_pct_sort(sort):
         options = params.get("options") or {}
         use_in_memory_sort = should_use_runtime_scoring(params)
+        runtime_reason = "forced" if use_in_memory_sort else None
+        active_threshold_row = None
+
+        if not use_in_memory_sort and should_check_threshold_hash(params, mode):
+            active_threshold_row = fetch_active_threshold_config(matclient, "main")
+            active_hash = (active_threshold_row or {}).get("config_hash")
+            if active_hash and table_has_field(matclient, THRESHOLD_CONFIG_HASH_FIELD):
+                stale_count = count_threshold_hash_mismatches(matclient, where, active_hash)
+                if stale_count > 0:
+                    use_in_memory_sort = True
+                    runtime_reason = "threshold_hash_mismatch"
+                    params = clone_params(params)
+                    params["thresholds_snapshot"] = active_threshold_row.get("config") or {}
+                    params["active_threshold_hash"] = active_hash
+                    options = dict(params.get("options") or {})
+                    options["force_in_memory_sort"] = True
+                    params["options"] = options
 
         if not use_in_memory_sort:
+            backend_where = build_backend_page_where(where, mode)
+            active_hash = None
+            if should_check_threshold_hash(params, mode):
+                active_threshold_row = active_threshold_row or fetch_active_threshold_config(matclient, "main")
+                active_hash = (active_threshold_row or {}).get("config_hash")
+                if active_hash and table_has_field(matclient, THRESHOLD_CONFIG_HASH_FIELD):
+                    backend_where = add_threshold_hash_match_where(backend_where, active_hash)
             data = execute_rows_query(
                 matclient,
-                where=build_backend_page_where(where, mode),
+                where=backend_where,
                 limit=page_size,
                 offset=offset,
                 order_by=build_backend_page_order_by(params, mode),
@@ -216,7 +245,7 @@ def handle_page(matclient, params):
                 rows=rows,
                 total=data["total"],
                 pagination={"page": page, "page_size": page_size, "offset": offset},
-                meta={"mode": mode, "sorted_by": "backend_computed_fields"},
+                meta={"mode": mode, "sorted_by": "backend_computed_fields", "threshold_hash": active_hash},
             )
 
         # Fallback only for diagnostics. It violates real backend pagination because
@@ -229,6 +258,7 @@ def handle_page(matclient, params):
             max_rows=option_int(params.get("options") or {}, "max_rows", MAX_SCAN_ROWS, MAX_SCAN_ROWS),
         )
         rows = normalize_rows(raw_rows, na_as_empty=get_na_as_empty(params))
+        rows = keep_latest_execution_rows(rows)
         rows = dedupe_rows(rows, columns)
         scored = score_and_sort_rows(rows, params, mode)
         page_rows = trim_columns([item["row"] for item in scored[offset:offset + page_size]], columns)
@@ -238,7 +268,13 @@ def handle_page(matclient, params):
             rows=page_rows,
             total=len(scored),
             pagination={"page": page, "page_size": page_size, "offset": offset},
-            meta={"mode": mode, "sorted_by": "server_computed", "diagnostic": "in_memory_sort"},
+            meta={
+                "mode": mode,
+                "sorted_by": "server_computed",
+                "diagnostic": "in_memory_sort",
+                "runtime_reason": runtime_reason,
+                "threshold_hash": params.get("active_threshold_hash"),
+            },
         )
 
     include_total = bool((params.get("options") or {}).get("include_total", True))
@@ -276,6 +312,71 @@ def should_use_runtime_scoring(params):
     if params.get("thresholds_snapshot") or options.get("thresholds_snapshot"):
         return True
     return bool(ALLOW_IN_MEMORY_SORT_FALLBACK)
+
+
+def should_check_threshold_hash(params, mode):
+    options = params.get("options") or {}
+    if "check_threshold_hash" in options:
+        return bool(options.get("check_threshold_hash"))
+    if "runtime_on_stale_threshold" in options:
+        return bool(options.get("runtime_on_stale_threshold"))
+    return mode in ("alarmado", "global", "severity")
+
+
+def table_has_field(matclient, field_name):
+    query = """
+    query getTableFields($typeName: String!) {
+      __type(name: $typeName) {
+        fields { name }
+      }
+    }
+    """
+    result = matclient.graphQL.execute(operation=query, variables={"typeName": TABLE})
+    if result.get("errors"):
+        return False
+    fields = (((result.get("data") or {}).get("__type") or {}).get("fields") or [])
+    return field_name in [field.get("name") for field in fields if field.get("name")]
+
+
+def add_threshold_hash_match_where(base_where, active_hash):
+    if not active_hash:
+        return base_where
+    return combine_where(base_where, {THRESHOLD_CONFIG_HASH_FIELD: {"_eq": active_hash}})
+
+
+def add_threshold_hash_mismatch_where(base_where, active_hash):
+    if not active_hash:
+        return base_where
+    return combine_where(base_where, {
+        "_or": [
+            {THRESHOLD_CONFIG_HASH_FIELD: {"_is_null": True}},
+            {THRESHOLD_CONFIG_HASH_FIELD: {"_neq": active_hash}},
+        ]
+    })
+
+
+def combine_where(left, right):
+    left = left or {}
+    right = right or {}
+    if not left:
+        return right
+    if not right:
+        return left
+    return {"_and": [left, right]}
+
+
+def count_threshold_hash_mismatches(matclient, base_where, active_hash):
+    where = add_threshold_hash_mismatch_where(base_where, active_hash)
+    data = execute_rows_query(
+        matclient,
+        where=where,
+        limit=1,
+        offset=0,
+        order_by=STABLE_SCAN_ORDER,
+        include_total=True,
+        fields=["mat_pk"],
+    )
+    return int(data.get("total") or 0)
 
 
 def build_backend_page_order_by(params, mode):
@@ -725,7 +826,7 @@ def handle_computed_columns_check(matclient, params):
         "Network",
         "Technology",
         "INTEGRITY",
-    ] + COMPUTED_FIELDS)
+    ] + available_computed_fields(matclient))
     data = execute_rows_query(
         matclient,
         where=build_where(params),
@@ -751,6 +852,19 @@ def handle_computed_columns_check(matclient, params):
         pagination={"page": page, "page_size": page_size, "offset": offset},
         meta={"total_is_page_count": True},
     )
+
+
+def available_computed_fields(matclient):
+    fields = []
+    for field in COMPUTED_FIELDS:
+        if field in (
+            SERVER_SORT_FIELDS["severity_score"],
+            SERVER_SORT_FIELDS["crit_count"],
+            SERVER_SORT_FIELDS["complete_flag"],
+            SERVER_SORT_FIELDS["integrity_health_pct"],
+        ) or table_has_field(matclient, field):
+            fields.append(field)
+    return fields
 
 
 def fetch_integrity_baseline_map_for_rows(matclient, rows, params):
@@ -1310,6 +1424,25 @@ def dedupe_rows(rows, columns=None):
         seen.add(key)
         out.append(row)
     return out
+
+
+def execution_sort_value(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def keep_latest_execution_rows(rows):
+    latest = {}
+    for row in rows or []:
+        key = tuple(str(row.get(col) or "").strip() for col in LATEST_EXEC_KEY_COLUMNS)
+        current = latest.get(key)
+        if current is None:
+            latest[key] = row
+            continue
+        if execution_sort_value(row.get("fecha_ejecucion")) >= execution_sort_value(current.get("fecha_ejecucion")):
+            latest[key] = row
+    return list(latest.values())
 
 
 def normalize_row_key(raw_key):

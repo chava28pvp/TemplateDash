@@ -10,6 +10,7 @@ from src.dataAccess.data_acess_topoff import (
     fetch_topoff_paginated_severity_global_sort,
     fetch_topoff_distinct_options,
 )
+from src.dataAccess import topoff_api_client
 from components.topoff.topoff import render_topoff_table
 from src.config import DATA_SOURCE
 
@@ -47,7 +48,20 @@ def register_topoff_callbacks(app):
     )
     def load_topoff_options(fecha, technologies, vendors, clusters):
         if DATA_SOURCE == "api":
-            return [], [], []
+            try:
+                sites, rncs, nodebs = topoff_api_client.fetch_distinct_options(
+                    fecha=fecha,
+                    technologies=technologies,
+                    vendors=vendors,
+                    clusters=clusters,
+                )
+            except Exception:
+                return [], [], []
+            return (
+                [{"label": s, "value": s} for s in sites],
+                [{"label": r, "value": r} for r in rncs],
+                [{"label": n, "value": n} for n in nodebs],
+            )
 
         sites, rncs, nodebs = fetch_topoff_distinct_options(
             fecha=fecha,
@@ -178,13 +192,6 @@ def register_topoff_callbacks(app):
         link_state,
         cluster_mode,
     ):
-        if DATA_SOURCE == "api":
-            return (
-                dbc.Alert("TopOff deshabilitado en modo API.", color="secondary"),
-                "Pagina 1 de 1",
-                "Sin resultados.",
-            )
-
         page = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
 
@@ -249,7 +256,21 @@ def register_topoff_callbacks(app):
             page_size=page_size,
         )
 
-        if order_mode == "alarmado":
+        if DATA_SOURCE == "api":
+            try:
+                df, total = topoff_api_client.fetch_page(
+                    **common_kwargs,
+                    mode=order_mode,
+                    sort_by=sort_by,
+                    ascending=ascending,
+                )
+            except Exception as exc:
+                return (
+                    dbc.Alert(f"No se pudo cargar TopOff desde API: {exc}", color="danger"),
+                    "Pagina 1 de 1",
+                    "Sin resultados.",
+                )
+        elif order_mode == "alarmado":
             # orden global por severidad
             df, total = fetch_topoff_paginated_severity_global_sort(
                 **common_kwargs,
@@ -315,10 +336,15 @@ def register_topoff_callbacks(app):
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-link-state", "data"),
+        State("topoff-sort-state", "data"),
         prevent_initial_call=True,
     )
-    def reset_sort_on_filters(_mode, *_):
-        return {"column": None, "ascending": True}
+    def reset_sort_on_filters(_mode, *args):
+        current_sort = args[-1] if args else None
+        default_sort = {"column": None, "ascending": True}
+        if (current_sort or default_sort) == default_sort:
+            raise PreventUpdate
+        return default_sort
 
     @app.callback(
         Output("topoff-cluster-mode", "data"),

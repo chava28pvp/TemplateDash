@@ -1051,6 +1051,9 @@ def build_heatmap_figure(payload, *, height=750, decimals=2):
     row_last_ts = payload.get("row_last_ts") or []
     row_max_pct = payload.get("row_max_pct") or []
     row_max_unit = payload.get("row_max_unit") or []
+    row_min_pct = payload.get("row_min_pct") or []
+    row_min_unit = payload.get("row_min_unit") or []
+    stat_field = payload.get("stat_field") or payload.get("max_field")
 
     # Colores según modo
     if mode == "severity":
@@ -1073,9 +1076,21 @@ def build_heatmap_figure(payload, *, height=750, decimals=2):
     customdata = []
     for i, row in enumerate(z_raw):
         last_label = row_last_ts[i] if i < len(row_last_ts) else ""
-        rmax = (
-            row_max_pct[i] if mode == "severity" else row_max_unit[i]
-        ) if (mode == "severity" and i < len(row_max_pct)) or (mode != "severity" and i < len(row_max_unit)) else np.nan
+        stat_label = "Max"
+        if stat_field == "min_pct":
+            stat_value = row_min_pct[i] if i < len(row_min_pct) else np.nan
+            stat_label = "Min"
+        elif stat_field == "min_unit":
+            stat_value = row_min_unit[i] if i < len(row_min_unit) else np.nan
+            stat_label = "Min"
+        elif stat_field == "pct":
+            stat_value = row_max_pct[i] if i < len(row_max_pct) else np.nan
+        elif stat_field == "unit":
+            stat_value = row_max_unit[i] if i < len(row_max_unit) else np.nan
+        else:
+            stat_value = (
+                row_max_pct[i] if mode == "severity" else row_max_unit[i]
+            ) if (mode == "severity" and i < len(row_max_pct)) or (mode != "severity" and i < len(row_max_unit)) else np.nan
 
         # detail se parte por '/', esperando: tech/vendor/cluster/net/valor
         parts = (detail[i] if i < len(detail) else str(y[i])).split("/", 4)
@@ -1094,13 +1109,13 @@ def build_heatmap_figure(payload, *, height=750, decimals=2):
                 return ""
             return f"{fv:,.{decimals}f}" if decimals > 0 else f"{fv:,.0f}"
 
-        rmax_s = _fmt(rmax)
+        stat_s = _fmt(stat_value)
 
         row_cd = []
         for j in range(len(x)):
             raw_cell = row[j] if j < len(row) else np.nan
             raw_s = _fmt(raw_cell)
-            row_cd.append([tech, vendor, clus, net, valor, last_label, rmax_s, "", raw_s])
+            row_cd.append([tech, vendor, clus, net, valor, last_label, stat_s, stat_label, raw_s])
         customdata.append(row_cd)
 
     hover_tmpl = (
@@ -1110,7 +1125,7 @@ def build_heatmap_figure(payload, *, height=750, decimals=2):
         "DETALLE<br>"
         "<b>Net:</b> %{customdata[3]}<br>"
         "<b>Última hora con registro:</b> %{customdata[5]}<br>"
-        "<b>Máx:</b> %{customdata[6]}<br>"
+        "<b>%{customdata[7]}:</b> %{customdata[6]}<br>"
         "<extra></extra>"
     )
 
@@ -1128,15 +1143,17 @@ def build_heatmap_figure(payload, *, height=750, decimals=2):
     # Si payload trae missing_mask, pinta celdas faltantes en gris (capa encima)
     missing = payload.get("missing_mask")
     if missing:
+        missing_z = [[1 if cell is not None else None for cell in row] for row in missing]
         fig.add_trace(go.Heatmap(
-            z=missing,
+            z=missing_z,
             x=x, y=y,
             zmin=0, zmax=1,
             colorscale=[
-                [0.0, "rgba(0,0,0,0)"],
+                [0.0, "rgba(140,140,140,0.60)"],
                 [1.0, "rgba(140,140,140,0.60)"],
             ],
             showscale=False,
+            customdata=missing,
             hoverongaps=False,
             hovertemplate=(
                 "<span style='font-size:120%; font-weight:700'>NULL</span><br>"

@@ -10,6 +10,7 @@ MAX_SCAN_ROWS = 200000
 MAX_PAGE_SIZE = 2000
 DEFAULT_PAGE_SIZE = 50
 VISUAL_SCALE = 10000.0
+USE_VISUAL_SERIES_DEFAULT = False
 
 
 COLMAP = {
@@ -39,6 +40,7 @@ COLMAP = {
     "cs_rab_fail": "CS_RAB_FAIL",
     "cs_drop_dc_percent": "CS_DROP__DC",
     "cs_drop_abnrel": "CS_DROP_ABNREL",
+    "fecha_ejecucion": "Fecha_Ejecucion",
 }
 REVERSE_COLMAP = {v: k for k, v in COLMAP.items()}
 
@@ -91,7 +93,7 @@ BASE_FIELDS = [COLMAP[k] for k in [
     "cs_rrc_ia_percent", "cs_rrc_fail",
     "cs_rab_ia_percent", "cs_rab_fail",
     "cs_drop_dc_percent", "cs_drop_abnrel",
-]]
+]] + [COLMAP["fecha_ejecucion"]]
 
 
 def serverless_function_handler(params, context):
@@ -156,7 +158,7 @@ def handle_main_heatmap(matclient, params):
             "main_heatmap",
             data=snap,
             pagination={"page": page, "page_size": page_size, "offset": offset},
-            meta={"source": "visual_snapshot", "order_by": order_by},
+            meta={"source": snap.get("_source", "visual_snapshot"), "order_by": order_by},
         )
     rows = fetch_48h_rows(matclient, params, today, yday)
     networks = requested_networks(params, rows)
@@ -211,7 +213,7 @@ def handle_histogram(matclient, params):
             "histogram",
             data=snap,
             pagination={"page": page, "page_size": page_size, "offset": offset},
-            meta={"source": "visual_snapshot", "domain": domain},
+            meta={"source": snap.get("_source", "visual_snapshot"), "domain": domain},
         )
 
     rows = fetch_48h_rows(matclient, params, today, yday)
@@ -256,7 +258,7 @@ def handle_integrity_heatmap(matclient, params):
             "integrity_heatmap",
             data=snap,
             pagination={"page": page, "page_size": page_size, "offset": offset},
-            meta={"source": "visual_snapshot"},
+            meta={"source": snap.get("_source", "visual_snapshot")},
         )
     rows = fetch_48h_rows(matclient, params, today, yday)
     networks = requested_networks(params, rows)
@@ -286,35 +288,28 @@ def handle_snapshot_status(matclient, params):
         view_types = ["main_heatmap", "histo_ps", "histo_cs", "integrity"]
 
     query = """
-    query getVisualSnapshotStatus($rank_where: Resources_DashboardVisualRank_bool_exp, $series_where: Resources_DashboardVisualSeries_bool_exp) {
+    query getVisualSnapshotStatus($rank_where: Resources_DashboardVisualRank_bool_exp) {
       Resources_DashboardVisualRank_aggregate(where: $rank_where) {
-        aggregate { count }
-      }
-      Resources_DashboardVisualSeries_aggregate(where: $series_where) {
         aggregate { count }
       }
     }
     """
     out = []
-    total_series = None
     for view_type in view_types:
         rank_where = {"fecha": {"_eq": fecha}, "view_type": {"_eq": view_type}}
-        series_where = {"fecha": {"_eq": fecha}}
         result = matclient.graphQL.execute(
             operation=query,
-            variables={"rank_where": rank_where, "series_where": series_where},
+            variables={"rank_where": rank_where},
         )
         if result.get("errors"):
             raise Exception("Error GraphQL snapshot_status: %s" % result.get("errors"))
         data = result.get("data") or {}
         rank_count = (((data.get("%s_aggregate" % VISUAL_RANK_TABLE) or {}).get("aggregate") or {}).get("count") or 0)
-        if total_series is None:
-            total_series = (((data.get("%s_aggregate" % VISUAL_SERIES_TABLE) or {}).get("aggregate") or {}).get("count") or 0)
         out.append({"fecha": fecha, "view_type": view_type, "rank_count": int(rank_count)})
 
     return ok_response(
         "snapshot_status",
-        data={"fecha": fecha, "series_count": int(total_series or 0), "rank": out},
+        data={"fecha": fecha, "rank": out},
         meta={"source": "visual_snapshot_status"},
     )
 
@@ -341,7 +336,33 @@ def fetch_48h_rows(matclient, params, today, yday):
         if len(chunk) < page_size:
             break
         offset += page_size
-    return rows[:max_rows]
+    return keep_latest_execution_rows(rows)[:max_rows]
+
+
+def execution_sort_value(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def keep_latest_execution_rows(rows):
+    latest = {}
+    for row in rows or []:
+        key = (
+            str(row.get("network") or "").strip(),
+            str(row.get("technology") or "").strip(),
+            str(row.get("vendor") or "").strip(),
+            str(row.get("noc_cluster") or "").strip(),
+            str(row.get("fecha") or "").strip(),
+            str(row.get("hora") or "").strip(),
+        )
+        current = latest.get(key)
+        if current is None:
+            latest[key] = row
+            continue
+        if execution_sort_value(row.get("fecha_ejecucion")) >= execution_sort_value(current.get("fecha_ejecucion")):
+            latest[key] = row
+    return list(latest.values())
 
 
 def execute_rows_query(matclient, where, limit, offset, order_by, fields):
@@ -371,6 +392,29 @@ def execute_rows_query(matclient, where, limit, offset, order_by, fields):
     return ((result.get("data") or {}).get(TABLE) or [])
 
 
+def fetch_all_rows(matclient, *, where, order_by, fields, max_rows):
+    max_rows = max(1, min(int(max_rows or MAX_SCAN_ROWS), MAX_SCAN_ROWS))
+    rows = []
+    offset = 0
+    page_size = min(MAX_PAGE_SIZE, max_rows)
+    while len(rows) < max_rows:
+        chunk = execute_rows_query(
+            matclient,
+            where=where,
+            limit=page_size,
+            offset=offset,
+            order_by=order_by,
+            fields=fields,
+        )
+        if not chunk:
+            break
+        rows.extend(normalize_rows(chunk))
+        if len(chunk) < page_size:
+            break
+        offset += page_size
+    return keep_latest_execution_rows(rows)[:max_rows]
+
+
 def fetch_snapshot_payload(
     matclient,
     params,
@@ -394,7 +438,57 @@ def fetch_snapshot_payload(
     rank_rows = rank_data.get("rows") or []
     total = int(rank_data.get("total") or 0)
     if not rank_rows:
+        if should_expand_filtered_visual(params, payload_mode):
+            rows = fetch_48h_rows(matclient, params, fecha, yday)
+            if not rows:
+                return None
+            thresholds = threshold_snapshot(params)
+            pct_payload, unit_payload, page_info = payloads_from_rank_and_dashboard_rows(
+                params,
+                [],
+                rows,
+                thresholds=thresholds,
+                fecha=fecha,
+                yday=yday,
+                total=0,
+                offset=offset,
+                limit=page_size,
+                payload_mode=payload_mode,
+                traffic_metric=traffic_metric,
+            )
+            return {
+                "pct_payload": pct_payload,
+                "unit_payload": unit_payload,
+                "page_info": page_info,
+                "_source": "dashboard_master_filtered",
+            }
         return None
+
+    if not should_use_visual_series(params):
+        if should_expand_filtered_visual(params, payload_mode):
+            rows = fetch_48h_rows(matclient, params, fecha, yday)
+        else:
+            rows = fetch_dashboard_rows_for_rank_rows(matclient, params, fecha, yday, rank_rows)
+        thresholds = threshold_snapshot(params)
+        pct_payload, unit_payload, page_info = payloads_from_rank_and_dashboard_rows(
+            params,
+            rank_rows,
+            rows,
+            thresholds=thresholds,
+            fecha=fecha,
+            yday=yday,
+            total=total,
+            offset=offset,
+            limit=page_size,
+            payload_mode=payload_mode,
+            traffic_metric=traffic_metric,
+        )
+        return {
+            "pct_payload": pct_payload,
+            "unit_payload": unit_payload,
+            "page_info": page_info,
+            "_source": "visual_rank_dashboard_master",
+        }
 
     traffic_valores = None
     if traffic_metric == "ps_traff_gb":
@@ -418,7 +512,172 @@ def fetch_snapshot_payload(
         payload_mode=payload_mode,
         traffic_metric=traffic_metric,
     )
-    return {"pct_payload": pct_payload, "unit_payload": unit_payload, "page_info": page_info}
+    return {
+        "pct_payload": pct_payload,
+        "unit_payload": unit_payload,
+        "page_info": page_info,
+        "_source": "visual_snapshot",
+    }
+
+
+def should_use_visual_series(params):
+    options = params.get("options") or {}
+    value = options.get("use_visual_series")
+    if value is None:
+        value = params.get("use_visual_series")
+    if value is None:
+        return USE_VISUAL_SERIES_DEFAULT
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def fetch_dashboard_rows_for_rank_rows(matclient, params, fecha, yday, rank_rows):
+    key_or = []
+    for row in rank_rows:
+        key_or.append({
+            "_and": [
+                {"Network": {"_eq": row.get("network")}},
+                {"Technology": {"_eq": row.get("technology")}},
+                {"Vendor": {"_eq": row.get("vendor")}},
+                {"Noc_Cluster": {"_eq": row.get("noc_cluster")}},
+            ]
+        })
+    if not key_or:
+        return []
+    where = {
+        "_and": [
+            {"Date": {"_in": [yday, fecha]}},
+            {"_or": key_or},
+        ]
+    }
+    max_rows = int(((params.get("options") or {}).get("rank_only_max_rows")) or 50000)
+    rows = fetch_all_rows(
+        matclient,
+        where=where,
+        order_by=[
+            {"Date": "asc"},
+            {"Time": "asc"},
+            {"Network": "asc"},
+            {"Technology": "asc"},
+            {"Vendor": "asc"},
+            {"Noc_Cluster": "asc"},
+            {"Fecha_Ejecucion": "desc"},
+        ],
+        fields=BASE_FIELDS,
+        max_rows=max_rows,
+    )
+    return rows
+
+
+def payloads_from_rank_and_dashboard_rows(
+    params,
+    rank_rows,
+    rows,
+    *,
+    thresholds,
+    fecha,
+    yday,
+    total,
+    offset,
+    limit,
+    payload_mode,
+    traffic_metric=None,
+):
+    row_index = build_row_index(rows, fecha, yday)
+    if should_expand_filtered_visual(params, payload_mode):
+        rank_items = complete_metric_items_from_rows(rows, payload_mode=payload_mode, traffic_metric=traffic_metric)
+        total = len(rank_items)
+        offset = 0
+    else:
+        rank_items = []
+    for row in rank_rows:
+        if should_expand_filtered_visual(params, payload_mode):
+            break
+        item = {
+            "technology": row.get("technology"),
+            "vendor": row.get("vendor"),
+            "noc_cluster": row.get("noc_cluster"),
+            "network": row.get("network"),
+            "valores": row.get("valores"),
+        }
+        if payload_mode == "main":
+            enrich_rank(item, row_index, thresholds, fecha, yday)
+            if int(item.get("alarm_hours") or 0) <= 0:
+                continue
+        rank_items.append(item)
+    if payload_mode == "integrity":
+        pct_payload, unit_payload, _page_info = integrity_payloads_from_rows(rank_items, row_index, fecha, yday, 0, limit)
+    else:
+        pct_payload, unit_payload, _page_info = payloads_from_rows(
+            rank_items,
+            row_index,
+            thresholds,
+            fecha,
+            yday,
+            0,
+            limit,
+            y_as_cluster=(payload_mode == "histogram"),
+            traffic_metric=traffic_metric,
+        )
+    return pct_payload, unit_payload, {
+        "total_rows": int(total),
+        "offset": int(offset),
+        "limit": int(limit),
+        "showing": len(rank_items),
+    }
+
+
+def should_expand_filtered_visual(params, payload_mode):
+    if payload_mode not in ("main", "histogram"):
+        return False
+    if len(as_list(filter_value(params, "clusters", "cluster"))) == 1:
+        return True
+    return all(
+        len(as_list(filter_value(params, plural, singular))) == 1
+        for plural, singular in (
+            ("networks", "network"),
+            ("technologies", "technology"),
+            ("vendors", "vendor"),
+            ("clusters", "cluster"),
+        )
+    )
+
+
+def complete_metric_items_from_rows(rows, payload_mode="main", traffic_metric=None):
+    if payload_mode == "histogram":
+        if traffic_metric == "cs_traff_erl":
+            order = ("CS_RRC", "CS_DROP", "CS_RAB")
+        else:
+            order = ("PS_RRC", "PS_S1", "PS_DROP", "PS_RAB")
+    else:
+        order = ("PS_RRC", "CS_RRC", "PS_S1", "PS_DROP", "CS_DROP", "PS_RAB", "CS_RAB")
+
+    combos = {}
+    for row in rows or []:
+        key4 = key4_from_row(row)
+        combos.setdefault(key4, []).append(row)
+
+    items = []
+    for key4 in sorted(combos.keys(), key=lambda k: (str(k[1]), str(k[0]), str(k[2]), str(k[3]))):
+        tech, vendor, cluster, network = key4
+        combo_rows = combos.get(key4) or []
+        for valores in order:
+            pct_col, unit_col = VALORES_MAP.get(valores, (None, None))
+            has_value = False
+            for row in combo_rows:
+                if (pct_col and to_float(row.get(pct_col)) is not None) or (unit_col and to_float(row.get(unit_col)) is not None):
+                    has_value = True
+                    break
+            if has_value:
+                items.append({
+                    "technology": tech,
+                    "vendor": vendor,
+                    "noc_cluster": cluster,
+                    "network": network,
+                    "valores": valores,
+                })
+    return items
 
 
 def fetch_visual_rank_page(matclient, params, *, fecha, view_type, limit, offset):
@@ -539,9 +798,18 @@ def payloads_from_snapshot_rows(rank_rows, series_rows, *, fecha, yday, total, o
     for row in series_rows:
         key = snapshot_key(row)
         by_key.setdefault(key, {})[int(row.get("offset48") or 0)] = row
+    global_last_off = -1
+    for row in series_rows:
+        if row.get("pct_raw") is not None or row.get("unit_raw") is not None:
+            try:
+                global_last_off = max(global_last_off, int(row.get("offset48") or 0))
+            except Exception:
+                pass
 
     z_pct, z_unit, z_pct_raw, z_unit_raw = [], [], [], []
     y_labels, row_detail, row_last_ts, row_max_pct, row_max_unit = [], [], [], [], []
+    row_min_pct, row_min_unit = [], []
+    missing_mask = []
     traffic_rows_raw, traffic_by_key = [], {}
     unit_scores = []
 
@@ -561,6 +829,7 @@ def payloads_from_snapshot_rows(rank_rows, series_rows, *, fecha, yday, total, o
         unit_raw = []
         pct_z = []
         unit_z = []
+        miss_row = []
         for off in range(48):
             item = (by_key.get(key) or {}).get(off) or {}
             pr = unscale_value(item.get("pct_raw"))
@@ -570,6 +839,7 @@ def payloads_from_snapshot_rows(rank_rows, series_rows, *, fecha, yday, total, o
             lvl = item.get("severity_level")
             pct_raw.append(pr)
             unit_raw.append(ur)
+            miss_row.append(1 if payload_mode == "integrity" and pr is None and ur is None and global_last_off >= 0 and off <= global_last_off else None)
 
             if payload_mode == "histogram":
                 pct_z.append(None if lvl is None else int(lvl))
@@ -591,11 +861,14 @@ def payloads_from_snapshot_rows(rank_rows, series_rows, *, fecha, yday, total, o
         z_unit.append(unit_z)
         z_pct_raw.append(pct_raw)
         z_unit_raw.append(unit_raw)
+        missing_mask.append(miss_row)
 
         valid = [i for i, v in enumerate(unit_raw) if v is not None] or [i for i, v in enumerate(pct_raw) if v is not None]
         row_last_ts.append(str(x_dt[valid[-1]]).replace("T", " ")[:16] if valid else "")
         row_max_pct.append(max([v for v in pct_raw if v is not None] or [None]))
         row_max_unit.append(max([v for v in unit_raw if v is not None] or [None]))
+        row_min_pct.append(min([v for v in pct_raw if v is not None] or [None]))
+        row_min_unit.append(min([v for v in unit_raw if v is not None] or [None]))
 
         if traffic_metric:
             traffic_valores = "PS_TRAFF" if traffic_metric == "ps_traff_gb" else "CS_TRAFF"
@@ -636,6 +909,8 @@ def payloads_from_snapshot_rows(rank_rows, series_rows, *, fecha, yday, total, o
         "row_last_ts": row_last_ts,
         "row_max_pct": row_max_pct,
         "row_max_unit": row_max_unit,
+        "row_min_pct": row_min_pct,
+        "row_min_unit": row_min_unit,
     }
     unit_payload = {
         "z": z_unit,
@@ -650,6 +925,8 @@ def payloads_from_snapshot_rows(rank_rows, series_rows, *, fecha, yday, total, o
         "row_last_ts": row_last_ts,
         "row_max_pct": row_max_pct,
         "row_max_unit": row_max_unit,
+        "row_min_pct": row_min_pct,
+        "row_min_unit": row_min_unit,
     }
     if traffic_metric:
         pct_payload["traffic_metric"] = traffic_metric
@@ -658,10 +935,14 @@ def payloads_from_snapshot_rows(rank_rows, series_rows, *, fecha, yday, total, o
     if payload_mode == "integrity":
         pct_payload["color_theme"] = "pct_rg_80"
         pct_payload["title"] = "Integridad (%)"
+        pct_payload["stat_field"] = "min_pct"
+        pct_payload["missing_mask"] = missing_mask
         unit_payload["color_theme"] = "blue"
         unit_payload["zmin"] = 0.0
         unit_payload["zmax"] = 1.0
         unit_payload["title"] = "Integridad (UNIT)"
+        unit_payload["stat_field"] = "min_unit"
+        unit_payload["missing_mask"] = missing_mask
 
     return pct_payload, unit_payload, {
         "total_rows": int(total),
@@ -908,6 +1189,15 @@ def integrity_payloads_from_rows(rows_all, row_index, today, yday, offset, limit
     rows_page = rows_all[start:end]
     x_dt = x_axis(today, yday)
     z_pct, z_unit, z_pct_raw, z_unit_raw, y_labels, row_detail = [], [], [], [], [], []
+    row_last_ts, row_max_pct, row_max_unit, missing_mask = [], [], [], []
+    row_min_pct, row_min_unit = [], []
+    all_offsets = []
+    for by_off in (row_index or {}).values():
+        for off, row in (by_off or {}).items():
+            if row.get("integrity_deg_pct") is not None or row.get("integrity") is not None:
+                all_offsets.append(int(off))
+    global_last_off = max(all_offsets) if all_offsets else -1
+
     for r in rows_page:
         key4 = (r["technology"], r["vendor"], r["noc_cluster"], r["network"])
         detail = "%s/%s/%s/%s/INTEGRITY" % key4
@@ -915,6 +1205,16 @@ def integrity_payloads_from_rows(rows_all, row_index, today, yday, offset, limit
         row_detail.append(detail)
         raw_pct = row48(row_index, key4, "integrity_deg_pct")
         raw_unit = row48(row_index, key4, "integrity")
+        miss_row = []
+        for off, (p, u) in enumerate(zip(raw_pct, raw_unit)):
+            miss_row.append(1 if p is None and u is None and global_last_off >= 0 and off <= global_last_off else None)
+        valid = [i for i, v in enumerate(raw_unit) if is_number(v)] or [i for i, v in enumerate(raw_pct) if is_number(v)]
+        row_last_ts.append(str(x_dt[valid[-1]]).replace("T", " ")[:16] if valid else "")
+        row_max_pct.append(max([v for v in raw_pct if is_number(v)] or [None]))
+        row_max_unit.append(max([v for v in raw_unit if is_number(v)] or [None]))
+        row_min_pct.append(min([v for v in raw_pct if is_number(v)] or [None]))
+        row_min_unit.append(min([v for v in raw_unit if is_number(v)] or [None]))
+        missing_mask.append(miss_row)
         z_pct_raw.append(raw_pct)
         z_unit_raw.append(raw_unit)
         z_pct.append(raw_pct)
@@ -928,6 +1228,24 @@ def integrity_payloads_from_rows(rows_all, row_index, today, yday, offset, limit
     }
     pct_payload = dict(base, z=z_pct, z_raw=z_pct_raw, color_mode="progress", color_theme="pct_rg_80", title="Integridad (%)")
     unit_payload = dict(base, z=z_unit, z_raw=z_unit_raw, color_mode="progress", color_theme="blue", zmin=0.0, zmax=1.0, title="Integridad (UNIT)")
+    pct_payload.update({
+        "row_last_ts": row_last_ts,
+        "row_max_pct": row_max_pct,
+        "row_max_unit": row_max_unit,
+        "row_min_pct": row_min_pct,
+        "row_min_unit": row_min_unit,
+        "stat_field": "min_pct",
+        "missing_mask": missing_mask,
+    })
+    unit_payload.update({
+        "row_last_ts": row_last_ts,
+        "row_max_pct": row_max_pct,
+        "row_max_unit": row_max_unit,
+        "row_min_pct": row_min_pct,
+        "row_min_unit": row_min_unit,
+        "stat_field": "min_unit",
+        "missing_mask": missing_mask,
+    })
     return pct_payload, unit_payload, {"total_rows": total, "offset": start, "limit": int(limit), "showing": len(rows_page)}
 
 

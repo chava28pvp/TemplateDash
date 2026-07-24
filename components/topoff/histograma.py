@@ -27,6 +27,48 @@ METRIC_COLOR_MAP_TOPOFF = {
     "CS_DROP": "#6f42c1",
 }
 
+
+def _wave_raw_for_plot(row_vals):
+    """
+    Prepara una serie TopOff para overlay sin extender muestras aisladas.
+    Los histogramas TopOff representan muestras discretas de 15 min; fuera del
+    rango observado deben caer a cero en lugar de heredar el unico valor real.
+    """
+    arr = np.array([
+        np.nan if (vv is None or not isinstance(vv, (int, float, np.floating))) else float(vv)
+        for vv in (row_vals or [])
+    ], dtype=float)
+    if arr.size == 0:
+        return arr
+
+    mask = np.isfinite(arr)
+    if not mask.any():
+        return np.zeros_like(arr)
+
+    first = int(np.where(mask)[0][0])
+    last = int(np.where(mask)[0][-1])
+    out = arr.copy()
+    out[:first] = 0.0
+    out[last + 1:] = 0.0
+
+    if last > first:
+        x = np.arange(arr.size, dtype=float)
+        inner = slice(first, last + 1)
+        inner_vals = out[inner].copy()
+        inner_mask = np.isfinite(inner_vals)
+        if inner_mask.any():
+            inner_x = x[inner]
+            inner_vals[~inner_mask] = np.interp(
+                inner_x[~inner_mask],
+                inner_x[inner_mask],
+                inner_vals[inner_mask],
+            )
+            out[inner] = inner_vals
+    else:
+        out[~mask] = 0.0
+
+    return out
+
 # =========================================================
 # PAYLOADS HISTO TOPOFF (AYER/Hoy, 192 bins de 15m)
 # =========================================================
@@ -458,7 +500,7 @@ def build_overlay_waves_figure_topoff(
 
     for i in range(n):
         row_vals = z_raw[i] if i < len(z_raw) else []
-        raw = _interp_nan(row_vals)
+        raw = _wave_raw_for_plot(row_vals)
 
         parts = (detail[i] if i < len(detail) else "").split("/", 9)
         tech = parts[0] if len(parts) > 0 else ""
@@ -563,7 +605,7 @@ def build_overlay_waves_figure_topoff(
     # ------------------------------------------------------
     for i in range(n):
         row_vals = z_raw[i] if i < len(z_raw) else []
-        raw = _interp_nan(row_vals)
+        raw = _wave_raw_for_plot(row_vals)
 
         parts = (detail[i] if i < len(detail) else "").split("/", 9)
         tech = parts[0] if len(parts) > 0 else ""
@@ -617,14 +659,14 @@ def build_overlay_waves_figure_topoff(
         hovertemplate = (
             "%{x|%Y-%m-%d %H:%M}<br>"
             + ("Valor: " if mode == "severity" else "Unidad: ")
-            + f"%{{customdata[1]:{val_fmt}}}"
-            + "<br><span style='opacity:0.85'>Tech:</span> %{customdata[2]}"
-            + "<br><span style='opacity:0.85'>Vendor:</span> %{customdata[3]}"
-            + "<br><span style='opacity:0.85'>Cluster:</span> %{customdata[7]}"
-            + "<br><span style='opacity:0.85'>Site:</span> %{customdata[8]}"
-            + "<br><span style='opacity:0.85'>RNC:</span> %{customdata[9]}"
-            + "<br><span style='opacity:0.85'>NodeB:</span> %{customdata[10]}"
-            + "<br><span style='opacity:0.85'>Valor:</span> %{customdata[11]}"
+            + f"%{{customdata[0]:{val_fmt}}}"
+            + "<br><span style='opacity:0.85'>Tech:</span> %{meta[1]}"
+            + "<br><span style='opacity:0.85'>Vendor:</span> %{meta[2]}"
+            + "<br><span style='opacity:0.85'>Cluster:</span> %{meta[6]}"
+            + "<br><span style='opacity:0.85'>Site:</span> %{meta[7]}"
+            + "<br><span style='opacity:0.85'>RNC:</span> %{meta[8]}"
+            + "<br><span style='opacity:0.85'>NodeB:</span> %{meta[9]}"
+            + "<br><span style='opacity:0.85'>Valor:</span> %{meta[10]}"
             + "<extra></extra>"
         )
 
@@ -638,20 +680,8 @@ def build_overlay_waves_figure_topoff(
             legendgroup=legend_key,
             showlegend=showlegend,
             opacity=overall_alpha,
-            customdata=np.column_stack([
-                np.full(len(x), series_key, dtype=object),      # 0 series_key
-                raw if raw.size else np.zeros(len(x)),          # 1 raw value
-                np.full(len(x), tech, dtype=object),            # 2
-                np.full(len(x), vendor, dtype=object),          # 3
-                np.full(len(x), region, dtype=object),          # 4
-                np.full(len(x), prov, dtype=object),            # 5
-                np.full(len(x), mun, dtype=object),             # 6
-                np.full(len(x), cluster, dtype=object),         # 7
-                np.full(len(x), site, dtype=object),            # 8
-                np.full(len(x), rnc, dtype=object),             # 9
-                np.full(len(x), nodeb, dtype=object),           # 10
-                np.full(len(x), valores, dtype=object),         # 11
-            ]),
+            customdata=np.asarray(raw if raw.size else np.zeros(len(x)), dtype=float).reshape(-1, 1),
+            meta=[series_key, tech, vendor, region, prov, mun, cluster, site, rnc, nodeb, valores],
             hovertemplate=hovertemplate,
         ))
 

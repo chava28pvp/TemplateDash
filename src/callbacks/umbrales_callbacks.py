@@ -122,10 +122,6 @@ def umbral_callbacks(app):
         is_sev = UM_MANAGER.is_severity(metric, profile=profile)
         is_prog = UM_MANAGER.is_progress(metric, profile=profile)
 
-        # Texto de ayuda (Ã¡mbito + tabla)
-        scope_txt = "(Global)" if network is None else f"(Override Â· {network})"
-        table_txt = f"Â· Tabla: {profile}"
-
         # --- Caso Severidad ---
         if is_sev:
             # 1) intenta override por network, 2) fallback a global
@@ -135,15 +131,9 @@ def umbral_callbacks(app):
                 or {}
             )
             thr = sev_cfg.get("thresholds", {})
-            ori = sev_cfg.get("orientation", "lower_is_better")
-
-            help_txt = (
-                f"Tipo: Severidad (4 colores) Â· Ãmbito: {scope_txt} {table_txt} Â· "
-                f"OrientaciÃ³n: {'Mayor es mejor' if ori == 'higher_is_better' else 'Menor es mejor'}"
-            )
 
             return (
-                False, True, help_txt,  # muestra severidad / oculta progress
+                False, True, "",  # muestra severidad / oculta progress
                 thr.get("excelente"), thr.get("bueno"), thr.get("regular"), thr.get("critico"),
                 no_update, no_update
             )
@@ -157,10 +147,8 @@ def umbral_callbacks(app):
                 or {}
             )
 
-            help_txt = f"Tipo: Progress (min/max) Â· Ãmbito: {scope_txt} {table_txt}"
-
             return (
-                True, False, help_txt,  # oculta severidad / muestra progress
+                True, False, "",  # oculta severidad / muestra progress
                 no_update, no_update, no_update, no_update,
                 p_cfg.get("min"), p_cfg.get("max")
             )
