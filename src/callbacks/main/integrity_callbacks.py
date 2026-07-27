@@ -68,6 +68,91 @@ def _baseline_from_payload_values(last_unit_val, last_pct_val):
     return unit / (pct / 100.0)
 
 
+def _is_number(value):
+    try:
+        fv = float(value)
+        return math.isfinite(fv)
+    except Exception:
+        return False
+
+
+def _numeric_values(values):
+    out = []
+    for value in values or []:
+        if _is_number(value):
+            out.append(float(value))
+    return out
+
+
+def _enrich_integrity_payloads(pct_payload, unit_payload):
+    if not pct_payload or not unit_payload:
+        return pct_payload, unit_payload
+
+    pct_payload = dict(pct_payload)
+    unit_payload = dict(unit_payload)
+    x_dt = pct_payload.get("x_dt") or unit_payload.get("x_dt") or []
+    pct_raw = pct_payload.get("z_raw") or pct_payload.get("z") or []
+    unit_raw = unit_payload.get("z_raw") or unit_payload.get("z") or []
+    row_count = max(len(pct_raw), len(unit_raw))
+
+    global_last = -1
+    for rows in (pct_raw, unit_raw):
+        for row in rows or []:
+            for idx, value in enumerate(row or []):
+                if _is_number(value):
+                    global_last = max(global_last, idx)
+
+    row_last_ts = []
+    row_min_pct = []
+    row_min_unit = []
+    row_max_pct = []
+    row_max_unit = []
+    missing_mask = []
+
+    for idx in range(row_count):
+        pvals = pct_raw[idx] if idx < len(pct_raw) else []
+        uvals = unit_raw[idx] if idx < len(unit_raw) else []
+        plen = len(x_dt) or max(len(pvals or []), len(uvals or []), 48)
+        valid_idx = [
+            i for i in range(plen)
+            if (i < len(pvals or []) and _is_number(pvals[i]))
+            or (i < len(uvals or []) and _is_number(uvals[i]))
+        ]
+        last_i = valid_idx[-1] if valid_idx else None
+        row_last_ts.append(str(x_dt[last_i]).replace("T", " ")[:16] if last_i is not None and last_i < len(x_dt) else "")
+
+        pnums = _numeric_values(pvals)
+        unums = _numeric_values(uvals)
+        row_min_pct.append(min(pnums) if pnums else None)
+        row_min_unit.append(min(unums) if unums else None)
+        row_max_pct.append(max(pnums) if pnums else None)
+        row_max_unit.append(max(unums) if unums else None)
+
+        mask_row = []
+        for off in range(plen):
+            has_p = off < len(pvals or []) and _is_number(pvals[off])
+            has_u = off < len(uvals or []) and _is_number(uvals[off])
+            mask_row.append(1 if (not has_p and not has_u and global_last >= 0 and off <= global_last) else None)
+        missing_mask.append(mask_row)
+
+    pct_payload["row_last_ts"] = row_last_ts
+    pct_payload["row_min_pct"] = row_min_pct
+    pct_payload["row_min_unit"] = row_min_unit
+    pct_payload["row_max_pct"] = row_max_pct
+    pct_payload["row_max_unit"] = row_max_unit
+    pct_payload["stat_field"] = "min_pct"
+    pct_payload["missing_mask"] = missing_mask
+
+    unit_payload["row_last_ts"] = row_last_ts
+    unit_payload["row_min_pct"] = row_min_pct
+    unit_payload["row_min_unit"] = row_min_unit
+    unit_payload["row_max_pct"] = row_max_pct
+    unit_payload["row_max_unit"] = row_max_unit
+    unit_payload["stat_field"] = "min_unit"
+    unit_payload["missing_mask"] = missing_mask
+    return pct_payload, unit_payload
+
+
 def _render_integrity_summary_from_payload(pct_payload, unit_payload, integrity_baseline_map=None):
     detail = (pct_payload or {}).get("row_detail") or (pct_payload or {}).get("y") or []
     x_dt = (pct_payload or {}).get("x_dt") or []
@@ -105,13 +190,13 @@ def _render_integrity_summary_from_payload(pct_payload, unit_payload, integrity_
             base_val = _baseline_from_payload_values(last_unit_val, last_pct_val)
         trend = "" if base_val is None or pd.isna(base_val) else f"{float(base_val):.0f}"
         rows.append(html.Tr([
-            html.Td(clus, title=f"Cluster: {clus or 'NULL'}", className="w-cluster"),
-            html.Td(tech, title=f"Technology: {tech or 'NULL'}", className="w-tech"),
+            html.Td(clus, title=clus or "NULL", className="w-cluster"),
+            html.Td(tech, title=tech or "NULL", className="w-tech"),
             html.Td(vend[:1].upper() if vend else "", title=vend, className="w-vendor"),
-            html.Td(last_str, title=f"Ultima hora con registro: {last_str or 'NULL'}", className="w-ultima"),
-            html.Td(last_pct, title=f"Integridad %: {last_pct or 'NULL'}", className="w-num ta-right"),
-            html.Td(trend, title=f"Trend: {trend or 'NULL'}", className="w-num ta-right"),
-            html.Td(last_unit, title=f"Integridad UNIT: {last_unit or 'NULL'}", className="w-num ta-right"),
+            html.Td(last_str, title=last_str or "NULL", className="w-ultima"),
+            html.Td(last_pct, title=last_pct or "NULL", className="w-num ta-right"),
+            html.Td(trend, title=trend or "NULL", className="w-num ta-right"),
+            html.Td(last_unit, title=last_unit or "NULL", className="w-num ta-right"),
         ]))
 
     return dbc.Table(
@@ -216,6 +301,7 @@ def integrity_callbacks(app):
                 )
                 pct_payload = data.get("pct_payload")
                 unit_payload = data.get("unit_payload")
+                pct_payload, unit_payload = _enrich_integrity_payloads(pct_payload, unit_payload)
                 page_info = data.get("page_info") or {"total_rows": 0, "offset": 0, "limit": limit, "showing": 0}
             except Exception as exc:
                 return (

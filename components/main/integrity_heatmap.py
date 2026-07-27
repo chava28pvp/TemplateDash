@@ -462,13 +462,13 @@ def render_integrity_summary_table(
 
         # Arma fila HTML (Dash)
         rows.append(html.Tr([
-            html.Td(clus, title=f"Cluster: {clus or 'NULL'}", className="w-cluster"),
-            html.Td(tech, title=f"Technology: {tech or 'NULL'}", className="w-tech"),
+            html.Td(clus, title=clus or "NULL", className="w-cluster"),
+            html.Td(tech, title=tech or "NULL", className="w-tech"),
             html.Td(vendor_disp(vend), title=vend, className="w-vendor"),
-            html.Td(last_str, title=f"Ultima hora con registro: {last_str or 'NULL'}", className="w-ultima"),
-            html.Td(last_pct, title=f"Integridad %: {last_pct or 'NULL'}", className="w-num ta-right"),
-            html.Td(trend, title=f"Trend: {trend or 'NULL'}", className="w-num ta-right"),  # baseline (trend)
-            html.Td(last_unit, title=f"Integridad UNIT: {last_unit or 'NULL'}", className="w-num ta-right"),
+            html.Td(last_str, title=last_str or "NULL", className="w-ultima"),
+            html.Td(last_pct, title=last_pct or "NULL", className="w-num ta-right"),
+            html.Td(trend, title=trend or "NULL", className="w-num ta-right"),  # baseline (trend)
+            html.Td(last_unit, title=last_unit or "NULL", className="w-num ta-right"),
         ]))
 
     # Tabla final con estilos (dark/compact)

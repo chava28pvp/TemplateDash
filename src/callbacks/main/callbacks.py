@@ -282,6 +282,48 @@ def _build_alarm_list(df_alarm_state: pd.DataFrame):
         for r in df.itertuples(index=False)
     ]
 
+
+def _build_alarm_map_for_visible_page(fecha, df_page: pd.DataFrame):
+    if DATA_SOURCE != "api" or df_page is None or df_page.empty:
+        return {}
+
+    required = ["fecha", "hora", "network", "vendor", "noc_cluster", "technology"]
+    if not all(col in df_page.columns for col in required):
+        return {}
+
+    def _unique(col):
+        return sorted({
+            str(value).strip()
+            for value in df_page[col].dropna().tolist()
+            if str(value).strip()
+        })
+
+    try:
+        df_alarm_state = fetch_main_alarm_state(
+            fecha=fecha,
+            vendors=_unique("vendor") or None,
+            clusters=_unique("noc_cluster") or None,
+            networks=_unique("network") or None,
+            technologies=_unique("technology") or None,
+        )
+    except Exception:
+        logger.exception("No se pudo cargar alarm_state acotado para Ocurr.")
+        return {}
+
+    alarm_list = _build_alarm_list(df_alarm_state if isinstance(df_alarm_state, pd.DataFrame) else pd.DataFrame())
+    return {
+        (
+            item.get("fecha"),
+            item.get("hora"),
+            item.get("network"),
+            item.get("vendor"),
+            item.get("noc_cluster"),
+            item.get("technology"),
+        ): int(item.get("alarmas", 0) or 0)
+        for item in alarm_list
+    }
+
+
 def _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters):
     """
        Crea una llave hashable para cachear el 'contexto' del main.
@@ -292,7 +334,7 @@ def _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters):
         return tuple(sorted(x))
     return (
         "main_ctx",
-        fecha, hora,
+        fecha, None if DATA_SOURCE == "api" else hora,
         _norm(networks),
         _norm(technologies),
         _norm(vendors),
@@ -456,13 +498,12 @@ def register_callbacks(app):
         Output("f-cluster", "value"),
         Input("data-ready-store", "data"),
         Input("f-fecha", "date"),
-        Input("f-hora", "value"),
         State("f-network", "value"),
         State("f-technology", "value"),
         State("f-vendor", "value"),
         State("f-cluster", "value"),
     )
-    def update_all_filters(_ready, fecha, hora,
+    def update_all_filters(_ready, fecha,
                            net_val_current, tech_val_current,
                            ven_val_current, clu_val_current):
         """
@@ -592,14 +633,19 @@ def register_callbacks(app):
         Input("f-hora", "value"),
         Input("applied-filters-store", "data"),
         Input("page-size", "value"),
+        State("page-state", "data"),
         prevent_initial_call=True,
     )
-    def reset_page_on_filters(_fecha, _hora, _applied_filters, page_size):
+    def reset_page_on_filters(_fecha, _hora, _applied_filters, page_size, page_state):
         """
             Cada vez que cambian filtros o tamaño de página:
             - resetea la paginación a página 1
             """
-        return reset_page_state(page_size, default_size=50)
+        next_state = reset_page_state(page_size, default_size=50)
+        current = page_state or {}
+        if int(current.get("page", 1)) == 1 and int(current.get("page_size", 50)) == int(next_state["page_size"]):
+            raise PreventUpdate
+        return next_state
 
     # -------------------------------------------------
     # 3) Botones Anterior/Siguiente → actualizan page-state
@@ -822,6 +868,10 @@ def register_callbacks(app):
             )
         perf_marks.append(("row_enrichment", time.perf_counter()))
 
+        if DATA_SOURCE == "api" and not alarm_map:
+            alarm_map = _build_alarm_map_for_visible_page(fecha, df)
+            perf_marks.append(("alarm_visible_page", time.perf_counter()))
+
         # ---------- alarmas (sin apply) ----------
         if "network" in df.columns:
             key_cols_alarm = ["fecha", "hora", "network", "vendor", "noc_cluster", "technology"]
@@ -982,11 +1032,15 @@ def register_callbacks(app):
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         Input("applied-filters-store", "data"),
+        State("sort-state", "data"),
         prevent_initial_call=True,
     )
-    def reset_sort_state_on_filters(_fecha, _hora, _applied_filters):
+    def reset_sort_state_on_filters(_fecha, _hora, _applied_filters, sort_state):
         # Vuelve al estado “sin columna seleccionada”
-        return {"column": None, "ascending": True}
+        default_sort = {"column": None, "ascending": True}
+        if (sort_state or default_sort) == default_sort:
+            raise PreventUpdate
+        return default_sort
 
     @app.callback(
         Output("topoff-link-state", "data", allow_duplicate=True),

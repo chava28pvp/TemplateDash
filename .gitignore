@@ -12,3 +12,4 @@ dist/
 *.pyz
 .runtime-api/logs/
 .runtime-api/umbrales.json
+serverless/

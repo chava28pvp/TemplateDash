@@ -9,7 +9,6 @@ import pandas as pd
 import requests
 import urllib3
 
-from src.Utils.alarmados import load_threshold_cfg
 from src.config import (
     TOPOFF_QUERY_API_CA_BUNDLE,
     TOPOFF_QUERY_API_DEBUG,
@@ -29,16 +28,14 @@ _ROWS_CACHE_TTL = 120
 _ROWS_CACHE_LOCK = threading.Lock()
 _ALL_ROWS_PAGE_SIZE = 2000
 
-SEVERITY_KPIS = [
-    "ps_rrc_ia_percent",
-    "ps_rab_ia_percent",
-    "ps_s1_ia_percent",
-    "ps_drop_dc_percent",
-    "cs_rrc_ia_percent",
-    "cs_rab_ia_percent",
-    "cs_drop_dc_percent",
-    "rtx_tnl_tx_percent",
-]
+_NUMERIC_COLS = {
+    "ps_traff_gb", "ps_rrc_ia_percent", "ps_rrc_fail",
+    "ps_rab_ia_percent", "ps_rab_fail", "ps_s1_ia_percent", "ps_s1_fail",
+    "ps_drop_dc_percent", "ps_drop_abnrel",
+    "cs_traff_erl", "cs_rrc_ia_percent", "cs_rrc_fail",
+    "cs_rab_ia_percent", "cs_rab_fail", "cs_drop_dc_percent", "cs_drop_abnrel",
+    "unav", "rtx_tnl_tx_percent", "tnl_abn", "tnl_fail",
+}
 
 
 class TopoffApiError(RuntimeError):
@@ -65,24 +62,25 @@ def fetch_page(
     sort_by=None,
     ascending=True,
 ):
-    rows = _fetch_rows_cached(
-        fecha=fecha,
-        technologies=technologies,
-        vendors=vendors,
-        clusters=clusters,
-        sites=sites,
-        rncs=rncs,
-        nodebs=nodebs,
-    )
-    if rows is not None:
-        rows = _filter_rows_by_hora(rows, hora)
+    cached_rows = None
+    if str(mode or "recent").lower() != "alarmado" and not sort_by:
+        cached_rows = _fetch_rows_cached(
+            fecha=fecha,
+            technologies=technologies,
+            vendors=vendors,
+            clusters=clusters,
+            sites=sites,
+            rncs=rncs,
+            nodebs=nodebs,
+        )
+    if cached_rows is not None:
+        rows = _filter_rows_by_hora(cached_rows, hora)
         rows = _sort_rows(rows, mode=mode, sort_by=sort_by, ascending=ascending)
         total = len(rows)
         page = max(1, int(page or 1))
         page_size = max(1, int(page_size or 50))
         start = (page - 1) * page_size
-        df = pd.DataFrame(rows[start:start + page_size])
-        return df, total
+        return pd.DataFrame(rows[start:start + page_size]), total
 
     payload = _base_payload(
         fecha=fecha,
@@ -98,7 +96,6 @@ def fetch_page(
         "pagination": {"page": int(page or 1), "page_size": int(page_size or 50)},
         "mode": mode or "recent",
         "sort": {"column": sort_by, "ascending": bool(ascending)},
-        "thresholds_snapshot": load_threshold_cfg(),
     })
     data = call_operation("page", payload)
     body = data.get("data") or {}
@@ -139,14 +136,14 @@ def _fetch_rows_cached(*, fecha=None, technologies=None, vendors=None, clusters=
         "sort": {"column": None, "ascending": True},
     })
     cache_key = _cache_key(payload)
-    cached = _ROWS_CACHE.get(cache_key)
     now = time.time()
+    cached = _ROWS_CACHE.get(cache_key)
     if cached and (now - cached["ts"] < _ROWS_CACHE_TTL):
         return copy.deepcopy(cached["rows"])
 
     with _ROWS_CACHE_LOCK:
-        cached = _ROWS_CACHE.get(cache_key)
         now = time.time()
+        cached = _ROWS_CACHE.get(cache_key)
         if cached and (now - cached["ts"] < _ROWS_CACHE_TTL):
             return copy.deepcopy(cached["rows"])
 
@@ -155,13 +152,14 @@ def _fetch_rows_cached(*, fecha=None, technologies=None, vendors=None, clusters=
             body = data.get("data") or {}
             rows = body.get("rows") or []
             total = int(body.get("total") or len(rows))
-            if total > len(rows):
-                return None
-            _ROWS_CACHE[cache_key] = {"ts": now, "rows": copy.deepcopy(rows)}
-            return rows
         except Exception:
-            logger.exception("No se pudo cargar/cachear universo TopOff; se usara fallback paginado.")
+            logger.exception("No se pudo cachear universo TopOff; se usara paginacion directa.")
             return None
+
+        if total > len(rows):
+            return None
+        _ROWS_CACHE[cache_key] = {"ts": now, "rows": copy.deepcopy(rows)}
+        return rows
 
 
 def _filter_rows_by_hora(rows, hora):
@@ -193,75 +191,44 @@ def _hora_range(hora):
 def _sort_rows(rows, *, mode="recent", sort_by=None, ascending=True):
     rows = list(rows or [])
     mode = str(mode or "recent").lower()
-    if mode == "alarmado":
-        cfg = load_threshold_cfg()
+    if mode == "sitio":
         return sorted(
             rows,
             key=lambda row: (
-                -_row_severity_score(row, cfg),
-                _sort_value(row, sort_by, ascending),
-                str(row.get("fecha") or ""),
-                str(row.get("hora") or ""),
+                _text(row.get("site_att")),
+                _desc_text(row.get("fecha")),
+                _desc_text(row.get("hora")),
             ),
         )
-    if mode == "sitio":
-        return sorted(rows, key=lambda row: (str(row.get("site_att") or ""), str(row.get("fecha") or ""), str(row.get("hora") or "")))
     if sort_by:
-        return sorted(rows, key=lambda row: _sort_value(row, sort_by, True), reverse=not bool(ascending))
-    return sorted(rows, key=lambda row: (str(row.get("fecha") or ""), str(row.get("hora") or "")), reverse=True)
+        direction = bool(ascending)
+        return sorted(
+            rows,
+            key=lambda row: (
+                _sort_value(row, sort_by),
+                _desc_text(row.get("fecha")),
+                _desc_text(row.get("hora")),
+            ),
+            reverse=not direction,
+        )
+    return sorted(rows, key=lambda row: (_text(row.get("fecha")), _text(row.get("hora"))), reverse=True)
 
 
-def _sort_value(row, col, ascending=True):
-    if not col:
-        return ""
+def _sort_value(row, col):
     value = row.get(col)
-    numeric = _to_float(value)
-    if numeric is not None:
-        return numeric if ascending else -numeric
-    text = str(value or "")
-    if ascending:
-        return text
+    if col in _NUMERIC_COLS:
+        numeric = _to_float(value)
+        return (numeric is None, float(numeric or 0.0))
+    return (value in (None, ""), _text(value))
+
+
+def _text(value):
+    return "" if value is None else str(value)
+
+
+def _desc_text(value):
+    text = _text(value)
     return "".join(chr(255 - ord(ch)) for ch in text)
-
-
-def _row_severity_score(row, cfg):
-    return sum(_metric_severity_level(metric, row.get(metric), cfg) for metric in SEVERITY_KPIS)
-
-
-def _metric_severity_level(metric, raw_value, cfg):
-    value = _to_float(raw_value)
-    if value is None:
-        value = 0.0
-    profiles = (cfg or {}).get("profiles") or {}
-    profile = profiles.get("topoff") or profiles.get("main") or {}
-    sev = profile.get("severity") or {}
-    metric_cfg = sev.get(metric) or {}
-    block = (metric_cfg.get("default") or metric_cfg) or {}
-    thresholds = block.get("thresholds") or {}
-    orientation = block.get("orientation") or "lower_is_better"
-    exc = _safe_float(thresholds.get("excelente"), 0.0)
-    bue = _safe_float(thresholds.get("bueno"), exc)
-    reg = _safe_float(thresholds.get("regular"), bue)
-    cri = _safe_float(thresholds.get("critico"), reg)
-    if orientation == "higher_is_better":
-        if value <= cri:
-            return 4
-        if value <= reg:
-            return 3
-        if value <= bue:
-            return 2
-        if value <= exc:
-            return 1
-        return 0
-    if value >= cri:
-        return 4
-    if value >= reg:
-        return 3
-    if value >= bue:
-        return 2
-    if value >= exc:
-        return 1
-    return 0
 
 
 def _to_float(value):
@@ -271,13 +238,6 @@ def _to_float(value):
         return float(value)
     except Exception:
         return None
-
-
-def _safe_float(value, default=0.0):
-    try:
-        return float(value)
-    except Exception:
-        return default
 
 
 def call_operation(operation: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
