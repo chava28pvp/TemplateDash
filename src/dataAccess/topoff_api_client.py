@@ -114,6 +114,40 @@ def fetch_distinct_options(*, fecha=None, technologies=None, vendors=None, clust
     return body.get("sites") or [], body.get("rncs") or [], body.get("nodebs") or []
 
 
+def fetch_distinct_catalogs(*, fecha=None, technologies=None, vendors=None, clusters=None):
+    rows = _fetch_rows_cached(
+        fecha=fecha,
+        technologies=technologies,
+        vendors=vendors,
+        clusters=clusters,
+    )
+    if rows is None:
+        df, _total = fetch_page(
+            fecha=fecha,
+            hora="todas",
+            technologies=technologies,
+            vendors=vendors,
+            clusters=clusters,
+            page=1,
+            page_size=_ALL_ROWS_PAGE_SIZE,
+            mode="recent",
+        )
+        rows = df.to_dict("records") if isinstance(df, pd.DataFrame) else []
+
+    def _values(key):
+        return sorted({
+            str(row.get(key)).strip()
+            for row in rows
+            if row.get(key) is not None and str(row.get(key)).strip()
+        })
+
+    return {
+        "technologies": _values("technology"),
+        "vendors": _values("vendor"),
+        "clusters": _values("cluster"),
+    }
+
+
 def fetch_latest_slot():
     data = call_operation("latest_slot", {})
     return (data.get("data") or {}).get("slot")

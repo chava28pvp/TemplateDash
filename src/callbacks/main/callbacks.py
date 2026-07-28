@@ -18,6 +18,7 @@ from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_
     fetch_latest_available_slot
 from src.config import DATA_SOURCE, PROFILE_MAIN_CALLBACKS
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct, fetch_latest_available_slot_topoff
+from src.dataAccess import topoff_api_client
 from dash.exceptions import PreventUpdate
 from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot, purge_expired_cache_entries
 from src.callbacks.main.heatmap_callbacks import purge_main_heatmap_caches
@@ -459,7 +460,11 @@ def register_callbacks(app):
 
         main_slot = fetch_latest_available_slot()
         if DATA_SOURCE == "api":
-            topoff_slot = None
+            try:
+                topoff_slot = topoff_api_client.fetch_latest_slot()
+            except Exception:
+                logger.exception("No se pudo cargar latest_slot TopOff API.")
+                topoff_slot = None
         else:
             topoff_slot = fetch_latest_available_slot_topoff()
         common_slot = choose_common_available_slot(main_slot, topoff_slot)
@@ -517,21 +522,36 @@ def register_callbacks(app):
         techs_sel = _as_list(tech_val_current)
 
         # -------- 1) Catálogos principales vía DISTINCT (sin traer dataset completo) --------
-        main_opts = fetch_main_distinct_catalogs(
-            fecha=fecha,
-            hora=None,
-            networks=nets_sel or None,
-            technologies=techs_sel or None,
-        ) or {}
+        try:
+            main_opts = fetch_main_distinct_catalogs(
+                fecha=fecha,
+                hora=None,
+                networks=nets_sel or None,
+                technologies=techs_sel or None,
+            ) or {}
+        except Exception:
+            logger.exception("No se pudo cargar catalogo Main para filtros globales.")
+            main_opts = {}
 
         networks_all = order_networks(main_opts.get("networks", []) or [])
         techs_all = main_opts.get("technologies", []) or []
         vendors_main = main_opts.get("vendors", []) or []
         clusters_main = main_opts.get("clusters", []) or []
 
-        # -------- 2) Merge con TOPOFF (para tech y vendors) --------
+        # -------- 2) Merge con TOPOFF (para tech, vendors y clusters) --------
         top_opts = {}
-        if DATA_SOURCE != "api":
+        if DATA_SOURCE == "api":
+            try:
+                top_opts = topoff_api_client.fetch_distinct_catalogs(
+                    fecha=fecha,
+                    technologies=techs_sel or None,
+                    vendors=None,
+                    clusters=None,
+                ) or {}
+            except Exception:
+                logger.exception("No se pudo cargar catalogo TopOff API para filtros globales.")
+                top_opts = {}
+        else:
             top_opts = fetch_topoff_distinct(
                 fecha=fecha,
                 technologies=techs_sel or None,
@@ -540,21 +560,23 @@ def register_callbacks(app):
 
         techs_top = top_opts.get("technologies", []) or []
         vendors_top = top_opts.get("vendors", []) or []
+        clusters_top = top_opts.get("clusters", []) or []
 
         techs_all = sorted(set(techs_all) | set(techs_top))
         vendors_all = sorted(set(vendors_main) | set(vendors_top))
+        clusters_all = sorted(set(clusters_main) | set(clusters_top))
 
         # -------- 3) Construir opciones (sin ifs que devuelvan no_update) --------
         net_opts = [{"label": n, "value": n} for n in networks_all]
         tech_opts = [{"label": t, "value": t} for t in techs_all]
         ven_opts = [{"label": v, "value": v} for v in vendors_all]
-        clu_opts = [{"label": c, "value": c} for c in clusters_main]
+        clu_opts = [{"label": c, "value": c} for c in clusters_all]
 
         # -------- 4) Mantener selección previa válida --------
         new_net_value = _keep_valid(net_val_current, networks_all)
         new_tech_value = _keep_valid(tech_val_current, techs_all)
         new_ven_value = _keep_valid(ven_val_current, vendors_all)
-        new_clu_value = _keep_valid(clu_val_current, clusters_main)
+        new_clu_value = _keep_valid(clu_val_current, clusters_all)
 
         return (
             net_opts, new_net_value,

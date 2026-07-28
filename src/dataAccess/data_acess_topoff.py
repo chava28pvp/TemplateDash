@@ -895,7 +895,8 @@ def fetch_topoff_distinct(
         SELECT DISTINCT
             {_quote(COLMAP['fecha'])} AS fecha,
             {_quote(COLMAP['technology'])} AS technology,
-            {_quote(COLMAP['vendor'])} AS vendor
+            {_quote(COLMAP['vendor'])} AS vendor,
+            {_quote(COLMAP['cluster'])} AS cluster
         FROM {_quote_table(_TABLE_NAME)}
         WHERE {where_sql}
     """
@@ -916,11 +917,13 @@ def fetch_topoff_distinct(
     fechas = sorted([str(x) for x in df["fecha"].dropna().unique().tolist()], reverse=True)
     techs  = sorted([str(x) for x in df["technology"].dropna().unique().tolist()])
     vends  = sorted([str(x) for x in df["vendor"].dropna().unique().tolist()])
+    clusters = sorted([str(x) for x in df["cluster"].dropna().unique().tolist()])
 
     return {
         "fechas": fechas,
         "technologies": techs,
         "vendors": vends,
+        "clusters": clusters,
     }
 
 def fetch_alarm_meta_for_topoff(
