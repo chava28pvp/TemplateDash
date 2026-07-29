@@ -30,9 +30,9 @@ METRIC_COLOR_MAP_TOPOFF = {
 
 def _wave_raw_for_plot(row_vals):
     """
-    Prepara una serie TopOff para overlay sin extender muestras aisladas.
-    Los histogramas TopOff representan muestras discretas de 15 min; fuera del
-    rango observado deben caer a cero en lugar de heredar el unico valor real.
+    Prepara una serie TopOff discreta.
+    Cada bin de 15 min debe representar solo una muestra real; los huecos se
+    pintan en cero para no sugerir valores interpolados en horas sin dato.
     """
     arr = np.array([
         np.nan if (vv is None or not isinstance(vv, (int, float, np.floating))) else float(vv)
@@ -41,33 +41,7 @@ def _wave_raw_for_plot(row_vals):
     if arr.size == 0:
         return arr
 
-    mask = np.isfinite(arr)
-    if not mask.any():
-        return np.zeros_like(arr)
-
-    first = int(np.where(mask)[0][0])
-    last = int(np.where(mask)[0][-1])
-    out = arr.copy()
-    out[:first] = 0.0
-    out[last + 1:] = 0.0
-
-    if last > first:
-        x = np.arange(arr.size, dtype=float)
-        inner = slice(first, last + 1)
-        inner_vals = out[inner].copy()
-        inner_mask = np.isfinite(inner_vals)
-        if inner_mask.any():
-            inner_x = x[inner]
-            inner_vals[~inner_mask] = np.interp(
-                inner_x[~inner_mask],
-                inner_x[inner_mask],
-                inner_vals[inner_mask],
-            )
-            out[inner] = inner_vals
-    else:
-        out[~mask] = 0.0
-
-    return out
+    return np.where(np.isfinite(arr), arr, 0.0)
 
 # =========================================================
 # PAYLOADS HISTO TOPOFF (AYER/Hoy, 192 bins de 15m)

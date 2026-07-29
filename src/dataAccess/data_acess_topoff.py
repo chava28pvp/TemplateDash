@@ -678,7 +678,14 @@ def fetch_topoff_paginated_global_sort(
             real_expr = f"NULLIF({_quote(real)}, '')"
 
         # ✅ SIN coma final
-        order_by = f"({real_expr} IS NULL) ASC, {real_expr} {direction}"
+        if sort_by_friendly == "site_att" and ascending:
+            order_by = (
+                f"{_quote(COLMAP['fecha'])} DESC, "
+                f"{_quote(COLMAP['hora'])} DESC, "
+                f"({real_expr} IS NULL) ASC, {real_expr} ASC"
+            )
+        else:
+            order_by = f"({real_expr} IS NULL) ASC, {real_expr} {direction}"
     else:
         # fallback cuando no hay sort_by_friendly
         order_by = f"{_quote(COLMAP['fecha'])} DESC, {_quote(COLMAP['hora'])} DESC"

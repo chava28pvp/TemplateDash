@@ -301,7 +301,7 @@ def register_topoff_callbacks(app):
 
 
         df = add_ucrr_streak_topoff(df)
-        if sort_by and sort_by in df.columns:
+        if order_mode != "sitio" and sort_by and sort_by in df.columns:
             df = df.sort_values(
                 by=sort_by,
                 ascending=ascending,

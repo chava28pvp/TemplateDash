@@ -229,9 +229,9 @@ def _sort_rows(rows, *, mode="recent", sort_by=None, ascending=True):
         return sorted(
             rows,
             key=lambda row: (
-                _text(row.get("site_att")),
                 _desc_text(row.get("fecha")),
                 _desc_text(row.get("hora")),
+                _text(row.get("site_att")),
             ),
         )
     if sort_by:

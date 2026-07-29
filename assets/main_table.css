@@ -142,6 +142,7 @@
 
 /* ======= Envoltura ======= */
 .kpi-table-wrap {
+  position: relative;
   max-height: 480px;
   overflow-y: auto;
   overflow-x: auto;
@@ -150,6 +151,49 @@
   border-radius: 8px;
   background: #1e1e1e;
   padding: 0.25rem;
+}
+
+#table-container[data-dash-is-loading="true"]::before,
+#topoff-table-container[data-dash-is-loading="true"]::before {
+  content: "Actualizando tabla...";
+  position: absolute;
+  top: 0.65rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0.3rem 0.85rem 0.3rem 2.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #e5e7eb;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+#table-container[data-dash-is-loading="true"]::after,
+#topoff-table-container[data-dash-is-loading="true"]::after {
+  content: "";
+  position: absolute;
+  top: calc(0.65rem + 6px);
+  left: calc(50% - 72px);
+  z-index: 31;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(229, 231, 235, 0.35);
+  border-top-color: #e5e7eb;
+  border-radius: 50%;
+  animation: table-loading-spin 0.8s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes table-loading-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ======= Severidades ======= */

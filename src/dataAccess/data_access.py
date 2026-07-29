@@ -83,6 +83,7 @@ COLMAP = {
 
     # Integridad / PS
     "integrity": "INTEGRITY",
+    "integrity_deg_pct": "Integrity_Health_Pct",
     "ps_traff_delta": "PS_TRAFF_DELTA",
     "ps_traff_gb": "PS_TRAFF_GB",
     "ps_rrc_ia_percent": "PS_RRC_%IA",
@@ -239,6 +240,34 @@ def _select_list_with_aliases(friendly_cols):
         else:
             select_parts.append(f"{_quote(real)} AS {friendly}")
     return select_parts
+
+
+def _integrity_complete_order_exprs():
+    """
+    Devuelve expresiones SQL para priorizar integridad completa.
+    Si existe Integrity_Health_Pct, ese porcentaje gobierna la completitud;
+    si no existe, mantiene el comportamiento anterior con INTEGRITY.
+    """
+    c_integ = _quote(COLMAP["integrity"])
+    health_real = COLMAP.get("integrity_deg_pct")
+    has_health = bool(health_real and health_real in _existing_columns())
+    if has_health:
+        c_health = _quote(health_real)
+        complete_flag_expr = (
+            "CASE "
+            f"WHEN {c_health} IS NOT NULL THEN CASE WHEN {c_health} >= 80 THEN 0 ELSE 1 END "
+            f"WHEN {c_integ} >= 80 THEN 0 "
+            "ELSE 1 END"
+        )
+        order_value_expr = f"COALESCE({c_health}, {c_integ})"
+    else:
+        complete_flag_expr = (
+            f"CASE "
+            f"WHEN {c_integ} >= 80 THEN 0 "
+            f"ELSE 1 END"
+        )
+        order_value_expr = c_integ
+    return complete_flag_expr, order_value_expr
 
 def _filters_where_and_params(
     fecha=None,
@@ -747,12 +776,7 @@ def fetch_kpis_paginated_severity_global_sort(
     # Expresión de severidad desde el JSON
     cfg = load_threshold_cfg()
     severity_expr, crit_expr, thr_params = _build_severity_expressions_from_json(cfg, profile="main")
-    c_integ = _quote(COLMAP["integrity"])
-    complete_flag_expr = (
-        f"CASE "
-        f"WHEN {c_integ} >= 80 THEN 0 "
-        f"ELSE 1 END"
-    )
+    complete_flag_expr, _integrity_order_expr = _integrity_complete_order_exprs()
 
     # COUNT total
     count_sql = f"""
@@ -895,12 +919,7 @@ def fetch_kpis_paginated_severity_sort(
     cfg = load_threshold_cfg()  # data/umbrales.json
     severity_expr, crit_expr, thr_params = _build_severity_expressions_from_json(cfg, profile="main")
     # 👇 flag de completitud usando INTEGRITY como % (>=80 = completo)
-    c_integ = _quote(COLMAP["integrity"])  # -> `INTEGRITY`
-    complete_flag_expr = (
-        f"CASE "
-        f"WHEN {c_integ} >= 80 THEN 0 "
-        f"ELSE 1 END"
-    )
+    complete_flag_expr, integrity_order_expr = _integrity_complete_order_exprs()
 
     # COUNT con al menos un KPI en nivel 'critico'
     count_sql = f"""
@@ -925,7 +944,7 @@ def fetch_kpis_paginated_severity_sort(
       AND ( {crit_expr} ) > 0
     ORDER BY
         complete_flag ASC,
-        {c_integ}   DESC, 
+        {integrity_order_expr} DESC,
         severity_score DESC,
         {_quote(COLMAP['noc_cluster'])} ASC
     LIMIT :_limit OFFSET :_offset
