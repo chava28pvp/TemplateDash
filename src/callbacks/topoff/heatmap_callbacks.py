@@ -51,6 +51,8 @@ TOPOFF_CS_VALORES = ("CS_RRC", "CS_DROP", "CS_RAB")
 
 def purge_topoff_heatmap_caches(now_ts=None):
     purge_expired_cache_entries(_DFTS_TOPOFF_CACHE, _DFTS_TOPOFF_TTL, now_ts=now_ts)
+    if DATA_SOURCE == "api":
+        topoff_visuals_api_client.clear_cache()
 
 
 def _as_list(x):
@@ -1080,7 +1082,6 @@ def topoff_heatmap_callbacks(app):
         Input("topoff-site-filter", "value"),
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
-        Input("topoff-heatmap-page-state", "data"),  # paginado compartido
         prevent_initial_call=False,  # bootstrap
     )
     def topoff_histo_trigger_controller(*args):

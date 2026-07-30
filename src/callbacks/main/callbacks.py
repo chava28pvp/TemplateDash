@@ -18,7 +18,7 @@ from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_
     fetch_latest_available_slot
 from src.config import DATA_SOURCE, PROFILE_MAIN_CALLBACKS
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct, fetch_latest_available_slot_topoff
-from src.dataAccess import topoff_api_client
+from src.dataAccess import main_api_client, topoff_api_client
 from dash.exceptions import PreventUpdate
 from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot, purge_expired_cache_entries
 from src.callbacks.main.heatmap_callbacks import purge_main_heatmap_caches
@@ -455,8 +455,6 @@ def register_callbacks(app):
     def refresh_data_ready_store(_tick, current_store):
         now_ts = time.time()
         purge_main_callback_caches(now_ts=now_ts)
-        purge_main_heatmap_caches(now_ts=now_ts)
-        purge_topoff_heatmap_caches(now_ts=now_ts)
 
         main_slot = fetch_latest_available_slot()
         if DATA_SOURCE == "api":
@@ -486,6 +484,12 @@ def register_callbacks(app):
         }
         if current_comp == new_store:
             raise PreventUpdate
+
+        if DATA_SOURCE == "api":
+            main_api_client.clear_cache()
+            topoff_api_client.clear_cache()
+            purge_main_heatmap_caches(now_ts=now_ts)
+            purge_topoff_heatmap_caches(now_ts=now_ts)
 
         return {**new_store, "updated_at": now_ts}
 

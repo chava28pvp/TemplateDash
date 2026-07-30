@@ -1,4 +1,8 @@
 import logging
+import copy
+import json
+import threading
+import time
 from typing import Any, Dict, Iterable, Optional
 
 import pandas as pd
@@ -7,6 +11,7 @@ import urllib3
 
 from src.config import (
     MAIN_QUERY_API_CA_BUNDLE,
+    MAIN_QUERY_API_CACHE_TTL,
     MAIN_QUERY_API_DEBUG,
     MAIN_QUERY_API_FORCE_RUNTIME_SORT,
     MAIN_QUERY_API_MAX_PAGES,
@@ -21,6 +26,8 @@ from src.config import (
 )
 
 logger = logging.getLogger(__name__)
+_API_CACHE = {}
+_API_CACHE_LOCK = threading.Lock()
 
 
 class MainApiError(RuntimeError):
@@ -31,12 +38,24 @@ def is_configured() -> bool:
     return bool(MAIN_QUERY_API_URL)
 
 
+def clear_cache() -> None:
+    with _API_CACHE_LOCK:
+        _API_CACHE.clear()
+
+
 def call_operation(operation: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if not MAIN_QUERY_API_URL:
         raise MainApiError("MAIN_QUERY_API_URL no esta configurado.")
 
     body = dict(payload or {})
     body["operation"] = operation
+    cache_key = _cache_key(body)
+    now = time.time()
+    if MAIN_QUERY_API_CACHE_TTL > 0:
+        with _API_CACHE_LOCK:
+            cached = _API_CACHE.get(cache_key)
+            if cached and (now - cached["ts"] < MAIN_QUERY_API_CACHE_TTL):
+                return copy.deepcopy(cached["data"])
 
     headers = _auth_headers()
     verify = _verify_setting()
@@ -67,6 +86,9 @@ def call_operation(operation: str, payload: Optional[Dict[str, Any]] = None) -> 
     if not data.get("ok", data.get("success", False)):
         message = ((data.get("error") or {}).get("message")) or str(data.get("error") or data)
         raise MainApiError(f"main API operation={operation} fallo: {message}")
+    if MAIN_QUERY_API_CACHE_TTL > 0:
+        with _API_CACHE_LOCK:
+            _API_CACHE[cache_key] = {"ts": now, "data": copy.deepcopy(data)}
     return data
 
 
@@ -439,3 +461,10 @@ def _as_list(value):
     if isinstance(value, (list, tuple, set)):
         return [v for v in value if v not in (None, "")]
     return [value] if value != "" else []
+
+
+def _cache_key(body: Dict[str, Any]) -> str:
+    try:
+        return json.dumps(body, sort_keys=True, default=str, separators=(",", ":"))
+    except TypeError:
+        return repr(sorted(body.items()))

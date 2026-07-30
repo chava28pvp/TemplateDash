@@ -46,6 +46,12 @@ def is_configured() -> bool:
     return bool(TOPOFF_QUERY_API_URL)
 
 
+def clear_cache() -> None:
+    _API_CACHE.clear()
+    with _ROWS_CACHE_LOCK:
+        _ROWS_CACHE.clear()
+
+
 def fetch_page(
     *,
     fecha=None,
@@ -103,6 +109,22 @@ def fetch_page(
 
 
 def fetch_distinct_options(*, fecha=None, technologies=None, vendors=None, clusters=None):
+    rows = _fetch_rows_cached(
+        fecha=fecha,
+        technologies=technologies,
+        vendors=vendors,
+        clusters=clusters,
+    )
+    if rows is not None:
+        def _values(key):
+            return sorted({
+                str(row.get(key)).strip()
+                for row in rows
+                if row.get(key) is not None and str(row.get(key)).strip()
+            })
+
+        return _values("site_att"), _values("rnc"), _values("nodeb")
+
     payload = _base_payload(
         fecha=fecha,
         technologies=technologies,

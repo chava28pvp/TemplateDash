@@ -88,6 +88,8 @@ def purge_main_heatmap_caches(now_ts=None):
     purge_expired_cache_entries(_HM_RANK_CACHE, _HM_RANK_TTL, now_ts=now_ts)
     purge_expired_cache_entries(_HI_PAYLOAD_CACHE, _HI_PAYLOAD_TTL, now_ts=now_ts)
     purge_expired_cache_entries(_HI_FIG_CACHE, _HI_FIG_TTL, now_ts=now_ts)
+    if DATA_SOURCE == "api":
+        main_visuals_api_client.clear_cache()
 
 
 def _perf_log(callback_name, started_at, marks=None, extra=None):
@@ -1124,12 +1126,14 @@ def heatmap_callbacks(app):
     @app.callback(
         Output("histo-trigger", "data"),
         Input("data-ready-store", "data"),
-        Input("heatmap-page-info", "data"),
+        Input("f-fecha", "date"),
+        Input("applied-filters-store", "data"),
+        Input("hm-page-size", "value"),
         Input("topoff-link-state", "data"),
         prevent_initial_call=False,
     )
-    def histo_trigger_controller(_ready, _heatmap_page_info, _link_state):
-        if not _heatmap_page_info:
+    def histo_trigger_controller(_ready, _fecha, _applied_filters, _page_size, _link_state):
+        if not _ready:
             return no_update
         return {
             "ts": time.time(),

@@ -11,6 +11,7 @@ from src.config import (
     TOPOFF_VISUALS_API_CA_BUNDLE,
     TOPOFF_VISUALS_API_DEBUG,
     TOPOFF_VISUALS_API_MAX_ROWS,
+    TOPOFF_VISUALS_API_PAGE_BLOCK_ROWS,
     TOPOFF_VISUALS_API_TIMEOUT,
     TOPOFF_VISUALS_API_TOKEN,
     TOPOFF_VISUALS_API_TOKEN_HEADER,
@@ -32,6 +33,10 @@ def is_configured() -> bool:
     return bool(TOPOFF_VISUALS_API_URL)
 
 
+def clear_cache() -> None:
+    _API_CACHE.clear()
+
+
 def fetch_heatmap(
     *,
     fecha=None,
@@ -46,6 +51,33 @@ def fetch_heatmap(
     order_by="alarm_bins_pct",
     thresholds_snapshot=None,
 ):
+    page = int(page or 1)
+    page_size = int(page_size or 50)
+    block_rows = _visual_block_rows(page_size)
+    if block_rows > page_size:
+        requested_offset = max(0, (page - 1) * page_size)
+        block_offset = (requested_offset // block_rows) * block_rows
+        block_page = (block_offset // block_rows) + 1
+        payload = _base_payload(
+            fecha=fecha,
+            technologies=technologies,
+            vendors=vendors,
+            clusters=clusters,
+            sites=sites,
+            rncs=rncs,
+            nodebs=nodebs,
+            thresholds_snapshot=thresholds_snapshot,
+        )
+        payload["pagination"] = {"page": block_page, "page_size": block_rows}
+        payload["order_by"] = order_by or "alarm_bins_pct"
+        data = call_operation("heatmap", payload)
+        return _slice_visual_page(
+            data.get("data") or {},
+            requested_offset=requested_offset,
+            requested_limit=page_size,
+            block_offset=block_offset,
+        )
+
     payload = _base_payload(
         fecha=fecha,
         technologies=technologies,
@@ -56,7 +88,7 @@ def fetch_heatmap(
         nodebs=nodebs,
         thresholds_snapshot=thresholds_snapshot,
     )
-    payload["pagination"] = {"page": int(page or 1), "page_size": int(page_size or 50)}
+    payload["pagination"] = {"page": page, "page_size": page_size}
     payload["order_by"] = order_by or "alarm_bins_pct"
     data = call_operation("heatmap", payload)
     return data.get("data") or {}
@@ -76,6 +108,33 @@ def fetch_histogram(
     page_size=50,
     thresholds_snapshot=None,
 ):
+    page = int(page or 1)
+    page_size = int(page_size or 50)
+    block_rows = _visual_block_rows(page_size)
+    if block_rows > page_size:
+        requested_offset = max(0, (page - 1) * page_size)
+        block_offset = (requested_offset // block_rows) * block_rows
+        block_page = (block_offset // block_rows) + 1
+        payload = _base_payload(
+            fecha=fecha,
+            technologies=technologies,
+            vendors=vendors,
+            clusters=clusters,
+            sites=sites,
+            rncs=rncs,
+            nodebs=nodebs,
+            thresholds_snapshot=thresholds_snapshot,
+        )
+        payload["pagination"] = {"page": block_page, "page_size": block_rows}
+        payload["domain"] = str(domain or "PS").upper()
+        data = call_operation("histogram", payload)
+        return _slice_visual_page(
+            data.get("data") or {},
+            requested_offset=requested_offset,
+            requested_limit=page_size,
+            block_offset=block_offset,
+        )
+
     payload = _base_payload(
         fecha=fecha,
         technologies=technologies,
@@ -86,7 +145,7 @@ def fetch_histogram(
         nodebs=nodebs,
         thresholds_snapshot=thresholds_snapshot,
     )
-    payload["pagination"] = {"page": int(page or 1), "page_size": int(page_size or 50)}
+    payload["pagination"] = {"page": page, "page_size": page_size}
     payload["domain"] = str(domain or "PS").upper()
     data = call_operation("histogram", payload)
     return data.get("data") or {}
@@ -205,3 +264,46 @@ def _cache_key(body: Dict[str, Any]) -> str:
         return json.dumps(body, sort_keys=True, default=str, separators=(",", ":"))
     except TypeError:
         return repr(sorted(body.items()))
+
+
+def _visual_block_rows(page_size: int) -> int:
+    configured = int(TOPOFF_VISUALS_API_PAGE_BLOCK_ROWS or 0)
+    if configured <= page_size:
+        return page_size
+    return min(configured, 1000)
+
+
+def _slice_visual_page(data: Dict[str, Any], *, requested_offset: int, requested_limit: int, block_offset: int) -> Dict[str, Any]:
+    out = copy.deepcopy(data or {})
+    local_start = max(0, int(requested_offset) - int(block_offset))
+    local_end = local_start + int(requested_limit)
+
+    for payload_key in ("pct_payload", "unit_payload"):
+        payload = out.get(payload_key)
+        if not isinstance(payload, dict):
+            continue
+        for key in (
+            "z", "z_raw", "y", "row_detail", "row_last_ts",
+            "row_max_pct", "row_max_unit", "row_min_pct", "row_min_unit",
+        ):
+            value = payload.get(key)
+            if isinstance(value, list):
+                payload[key] = value[local_start:local_end]
+        missing = payload.get("missing_mask")
+        if isinstance(missing, list):
+            payload["missing_mask"] = missing[local_start:local_end]
+        traffic = payload.get("traffic_raw")
+        if isinstance(traffic, list):
+            payload["traffic_raw"] = traffic[local_start:local_end]
+
+    page_info = dict(out.get("page_info") or {})
+    total_rows = int(page_info.get("total_rows") or 0)
+    showing = len(((out.get("pct_payload") or out.get("unit_payload") or {}).get("y")) or [])
+    page_info.update({
+        "offset": int(requested_offset),
+        "limit": int(requested_limit),
+        "showing": showing,
+        "total_rows": total_rows,
+    })
+    out["page_info"] = page_info
+    return out
