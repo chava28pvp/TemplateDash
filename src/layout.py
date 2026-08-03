@@ -841,7 +841,7 @@ def serve_layout():
                                                              className="hm-time-row hm-time-dates"),
                                                     html.Div(id="topoff-hm-pct-hours",
                                                              className="hm-time-row hm-time-hours"),
-                                                ], className="p-2"),
+                                                ], className="p-0"),
                                                 className="hm-time-card bg-dark text-white border-0 h-100"
                                             ),
                                             md=4, sm=12
@@ -855,7 +855,7 @@ def serve_layout():
                                                              className="hm-time-row hm-time-dates"),
                                                     html.Div(id="topoff-hm-unit-hours",
                                                              className="hm-time-row hm-time-hours"),
-                                                ], className="p-2"),
+                                                ], className="p-0"),
                                                 className="hm-time-card bg-dark text-white border-0 h-100"
                                             ),
                                             md=4, sm=12
@@ -889,7 +889,7 @@ def serve_layout():
                                                                 config={"displayModeBar": False, "scrollZoom": True},
                                                                 style={
                                                                     "width": "100%",
-                                                                    "transform": "translateX(4px)"
+                                                                    "transform": "translateX(12px)"
                                                                 }
                                                             ),
                                                             type="default"
@@ -910,7 +910,7 @@ def serve_layout():
                                                                 config={"displayModeBar": False},
                                                                 style={
                                                                     "width": "100%",
-                                                                    "transform": "translateX(10px)"
+                                                                    "transform": "translateX(16px)"
                                                                 }
                                                             ),
                                                             type="default"

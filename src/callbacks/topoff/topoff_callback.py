@@ -144,13 +144,14 @@ def register_topoff_callbacks(app):
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
         Input("topoff-sort-state", "data"),
+        Input("f-fecha", "date"),
         Input("f-hora", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("topoff-link-state", "data"),
         State("topoff-page-state", "data"),
         prevent_initial_call=True,
     )
-    def reset_page_on_any_change(ps, _mode, _s, _r, _n, _sort, _hora, _cluster, _link_state, page_state):
+    def reset_page_on_any_change(ps, _mode, _s, _r, _n, _sort, _fecha, _hora, _applied_filters, _link_state, page_state):
         ps = max(1, int(ps or DEFAULT_PAGE_SIZE))
         current_page = int((page_state or {}).get("page", 1))
         current_ps = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
@@ -172,9 +173,7 @@ def register_topoff_callbacks(app):
         Input("topoff-sort-state", "data"),
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("topoff-site-filter", "value"),
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
@@ -185,13 +184,16 @@ def register_topoff_callbacks(app):
     )
     def refresh_table(
         _ready, page_state, sort_state,
-        fecha, hora, technologies, vendors,
-        clusters,
+        fecha, hora, applied_filters,
         sites, rncs, nodebs,
         sort_mode,
         link_state,
         cluster_mode,
     ):
+        applied_filters = applied_filters or {}
+        technologies = applied_filters.get("technology") or None
+        vendors = applied_filters.get("vendor") or None
+        clusters = applied_filters.get("cluster") or None
         page = int((page_state or {}).get("page", 1))
         page_size = int((page_state or {}).get("page_size", DEFAULT_PAGE_SIZE))
 
@@ -329,9 +331,7 @@ def register_topoff_callbacks(app):
         Input("topoff-order-mode", "value"),  # recent / alarmado / sitio
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("topoff-site-filter", "value"),
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),

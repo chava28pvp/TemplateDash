@@ -19,6 +19,7 @@
   height: 75vh;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 /* altura por fila en la tabla (ajústalo fino 26–28) */

@@ -11,7 +11,8 @@
 .topoff-pane{
   height: 75vh;
   overflow-y: auto;
-  overflow-x: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 /* ==============================
@@ -83,6 +84,11 @@
   border-bottom: 0 !important;
 }
 
+.topoff-board .hm-time-card {
+  --hm-date-h: 28px;
+  --hm-hour-h: 36px;
+}
+
 /* Header Vendor visual más estrecho */
 .topoff-board .topoff-table.header-only th.w-vendor{
   padding-left: 0.1rem !important;
@@ -134,3 +140,28 @@
   height: auto !important;
 }
 
+/* Defensa contra reglas globales del heatmap principal:
+   TopOff usa 192 bins de 15 min en Plotly, pero un header visual de 48 horas.
+   Header y grafico deben partir del mismo borde de columna. */
+#topoff-hm-pct-dates,
+#topoff-hm-unit-dates,
+#topoff-hm-pct-hours,
+#topoff-hm-unit-hours {
+  grid-template-columns: repeat(48, 1fr) !important;
+  transform: none !important;
+  width: 100% !important;
+}
+
+#topoff-hm-pct-dates .cell,
+#topoff-hm-unit-dates .cell {
+  grid-column: span 24 !important;
+}
+
+.topoff-pane #topoff-hm-pct .dash-graph,
+.topoff-pane #topoff-hm-unit .dash-graph,
+.topoff-pane #topoff-hm-pct .svg-container,
+.topoff-pane #topoff-hm-unit .svg-container,
+.topoff-pane #topoff-hm-pct .main-svg,
+.topoff-pane #topoff-hm-unit .main-svg {
+  width: 100% !important;
+}

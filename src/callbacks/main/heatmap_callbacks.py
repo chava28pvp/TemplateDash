@@ -78,6 +78,82 @@ _HI_FIG_CACHE = {}
 _HI_FIG_TTL = 120  # seg
 _PREWARM_LOCK = threading.Lock()
 _PREWARM_STARTED = False
+
+
+def _has_histogram_drilldown_filters(networks, technologies, vendors, clusters):
+    return bool(clusters) or bool(networks and technologies and vendors)
+
+
+def _compact_heatmap_histogram_rows(pct_payload, unit_payload):
+    src = pct_payload or unit_payload or {}
+    x_dt = list(src.get("x_dt") or src.get("x") or [])
+    detail = list(src.get("row_detail") or src.get("y") or [])
+    y_labels = list(src.get("y") or detail)
+    pct_raw = list((pct_payload or {}).get("z_raw") or [])
+    unit_raw = list((unit_payload or {}).get("z_raw") or [])
+    traffic_raw = list((pct_payload or {}).get("traffic_raw") or [])
+
+    rows = []
+    for idx, row_detail in enumerate(detail):
+        row_detail = str(row_detail or "")
+        rows.append({
+            "y": str(y_labels[idx] if idx < len(y_labels) else row_detail),
+            "row_detail": row_detail,
+            "pct": pct_raw[idx] if idx < len(pct_raw) else [None] * len(x_dt),
+            "unit": unit_raw[idx] if idx < len(unit_raw) else [None] * len(x_dt),
+            "traffic": traffic_raw[idx] if idx < len(traffic_raw) else [None] * len(x_dt),
+        })
+    return {"x_dt": x_dt, "rows": rows}
+
+
+def _payload_from_visible_heatmap_rows(visible_payload, domain, value_kind):
+    domain = str(domain or "").upper()
+    value_kind = str(value_kind or "pct").lower()
+    x_dt = list((visible_payload or {}).get("x_dt") or [])
+    rows = []
+    z_raw = []
+    y_labels = []
+    traffic_raw = []
+    traffic_by_key = {}
+
+    for row in (visible_payload or {}).get("rows") or []:
+        detail = str(row.get("row_detail") or "")
+        parts = detail.split("/", 4)
+        valores = parts[4].upper() if len(parts) > 4 else ""
+        if not valores.startswith(domain):
+            continue
+
+        values = row.get(value_kind)
+        if not isinstance(values, list):
+            values = [None] * len(x_dt)
+        rows.append(detail)
+        y_labels.append(str(row.get("y") or (parts[2] if len(parts) > 2 else detail)))
+        z_raw.append(values)
+        if value_kind == "pct":
+            traffic_values = row.get("traffic")
+            if not isinstance(traffic_values, list):
+                traffic_values = [None] * len(x_dt)
+            traffic_raw.append(traffic_values)
+            traffic_by_key[detail] = traffic_values
+
+    if not rows or not x_dt:
+        return None
+
+    payload = {
+        "z_raw": z_raw,
+        "x_dt": x_dt,
+        "y": y_labels,
+        "row_detail": rows,
+        "color_mode": "severity" if value_kind == "pct" else "progress",
+        "title": "% IA / % DC" if value_kind == "pct" else "Unidades",
+    }
+    if value_kind == "pct" and any(any(v is not None for v in row) for row in traffic_raw):
+        payload["traffic_metric"] = "ps_traff_gb" if domain == "PS" else "cs_traff_erl"
+        payload["traffic_raw"] = traffic_raw
+        payload["traffic_by_key"] = traffic_by_key
+    return payload
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -676,6 +752,10 @@ def _render_api_main_heatmap(fecha, networks, technologies, vendors, clusters, p
     pct_payload = data.get("pct_payload")
     unit_payload = data.get("unit_payload")
     page_info = data.get("page_info") or {"total_rows": 0, "offset": 0, "limit": page_sz, "showing": 0}
+    page_info = dict(page_info)
+    page_info["fecha"] = fecha
+    page_info["order_by"] = order_by
+    page_info["histogram_visible_payload"] = _compact_heatmap_histogram_rows(pct_payload, unit_payload)
 
     nrows = len((pct_payload or unit_payload or {}).get("y") or [])
     hm_height = _hm_height(nrows)
@@ -689,7 +769,68 @@ def _render_api_main_heatmap(fecha, networks, technologies, vendors, clusters, p
     return table_component, fig_pct, fig_unit, page_info
 
 
-def _render_api_histogram(domain, fecha, networks, technologies, vendors, clusters, page, page_sz, selected_wave=None):
+def _render_api_histogram(
+    domain,
+    fecha,
+    networks,
+    technologies,
+    vendors,
+    clusters,
+    page,
+    page_sz,
+    selected_wave=None,
+    heatmap_page_info=None,
+):
+    if not _has_histogram_drilldown_filters(networks, technologies, vendors, clusters):
+        visible_payload = (heatmap_page_info or {}).get("histogram_visible_payload")
+        visible_fecha = (heatmap_page_info or {}).get("fecha")
+        if visible_payload and (not fecha or not visible_fecha or str(visible_fecha) == str(fecha)):
+            pct_payload = _payload_from_visible_heatmap_rows(visible_payload, domain, "pct")
+            unit_payload = _payload_from_visible_heatmap_rows(visible_payload, domain, "unit")
+            total_rows = len((pct_payload or unit_payload or {}).get("y") or [])
+            page_info = {
+                "total_rows": total_rows,
+                "offset": 0,
+                "limit": page_sz,
+                "showing": total_rows,
+                "source": "heatmap_visible",
+            }
+            fig_pct = build_overlay_waves_figure(
+                pct_payload,
+                UMBRAL_CFG=UM_MANAGER.config(),
+                mode="severity",
+                height=420,
+                smooth_win=3,
+                opacity=0.28,
+                line_width=1.2,
+                decimals=2,
+                show_yaxis_ticks=True,
+                selected_wave=selected_wave,
+                show_traffic_bars=bool((pct_payload or {}).get("traffic_raw")),
+                traffic_agg="mean",
+                traffic_decimals=1,
+            ) if pct_payload else go.Figure()
+            fig_unit = build_overlay_waves_figure(
+                unit_payload,
+                UMBRAL_CFG=UM_MANAGER.config(),
+                mode="progress",
+                height=420,
+                smooth_win=3,
+                opacity=0.25,
+                line_width=1.2,
+                decimals=0,
+                show_yaxis_ticks=True,
+                selected_wave=selected_wave,
+                show_traffic_bars=False,
+            ) if unit_payload else go.Figure()
+            return fig_pct, fig_unit, page_info
+
+        return (
+            go.Figure(),
+            go.Figure(),
+            {"total_rows": 0, "offset": 0, "limit": page_sz, "showing": 0, "source": "heatmap_visible_pending"},
+        )
+
     data = main_visuals_api_client.fetch_histogram(
         fecha=fecha,
         domain=domain,
@@ -1055,9 +1196,10 @@ def heatmap_callbacks(app):
         State("applied-filters-store", "data"),
         State("histo-page-state", "data"),
         State("topoff-link-state", "data"),
+        State("heatmap-page-info", "data"),
         prevent_initial_call=True,
     )
-    def refresh_histograma_ps(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state):
+    def refresh_histograma_ps(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state, heatmap_page_info):
         applied_filters = applied_filters or {}
         networks = _as_list(_applied_value(applied_filters, "network"))
         technologies = _as_list(_applied_value(applied_filters, "technology"))
@@ -1068,7 +1210,16 @@ def heatmap_callbacks(app):
         if DATA_SOURCE == "api":
             try:
                 fig_pct, fig_unit, page_info = _render_api_histogram(
-                    "PS", fecha, networks, technologies, vendors, clusters, page, page_sz, selected_wave=sel_wave
+                    "PS",
+                    fecha,
+                    networks,
+                    technologies,
+                    vendors,
+                    clusters,
+                    page,
+                    page_sz,
+                    selected_wave=sel_wave,
+                    heatmap_page_info=heatmap_page_info,
                 )
                 return fig_pct, fig_unit, page_info
             except Exception as exc:
@@ -1094,9 +1245,10 @@ def heatmap_callbacks(app):
         State("applied-filters-store", "data"),
         State("histo-page-state", "data"),
         State("topoff-link-state", "data"),
+        State("heatmap-page-info", "data"),
         prevent_initial_call=True,
     )
-    def refresh_histograma_cs(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state):
+    def refresh_histograma_cs(_trigger, sel_wave, fecha, applied_filters, hm_page_state, link_state, heatmap_page_info):
         applied_filters = applied_filters or {}
         networks = _as_list(_applied_value(applied_filters, "network"))
         technologies = _as_list(_applied_value(applied_filters, "technology"))
@@ -1107,7 +1259,16 @@ def heatmap_callbacks(app):
         if DATA_SOURCE == "api":
             try:
                 fig_pct, fig_unit, _page_info = _render_api_histogram(
-                    "CS", fecha, networks, technologies, vendors, clusters, page, page_sz, selected_wave=sel_wave
+                    "CS",
+                    fecha,
+                    networks,
+                    technologies,
+                    vendors,
+                    clusters,
+                    page,
+                    page_sz,
+                    selected_wave=sel_wave,
+                    heatmap_page_info=heatmap_page_info,
                 )
                 return fig_pct, fig_unit
             except Exception as exc:
@@ -1129,10 +1290,11 @@ def heatmap_callbacks(app):
         Input("f-fecha", "date"),
         Input("applied-filters-store", "data"),
         Input("hm-page-size", "value"),
+        Input("heatmap-page-info", "data"),
         Input("topoff-link-state", "data"),
         prevent_initial_call=False,
     )
-    def histo_trigger_controller(_ready, _fecha, _applied_filters, _page_size, _link_state):
+    def histo_trigger_controller(_ready, _fecha, _applied_filters, _page_size, _heatmap_page_info, _link_state):
         if not _ready:
             return no_update
         return {

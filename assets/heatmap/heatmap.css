@@ -120,9 +120,6 @@
 /* Atenuar horas que no se etiquetan */
 .hm-time-hours .cell.muted { opacity: 0.45; }
 
-
-}
-
 /* ========== Alturas del header de heatmaps ========== */
 .hm-time-card {
   /* Ajusta a tu gusto */
@@ -193,6 +190,7 @@
     --hm-hour-h: 32px;
   }
   .hm-time-card .hm-time-hours .lbl { font-size: 10px; }
+}
 
 /* Ajusta aquí el desplazamiento */
 :root{

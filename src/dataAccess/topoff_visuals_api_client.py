@@ -23,6 +23,8 @@ from src.config import (
 logger = logging.getLogger(__name__)
 _API_CACHE = {}
 _API_CACHE_TTL = 60
+_TOPOFF_ROW_HEIGHT = 26
+_TOPOFF_HEATMAP_BOTTOM_MARGIN = 170
 
 
 class TopoffVisualsApiError(RuntimeError):
@@ -273,6 +275,13 @@ def _visual_block_rows(page_size: int) -> int:
     return min(configured, 1000)
 
 
+def _topoff_visual_height(rows: int) -> int:
+    rows = max(0, int(rows or 0))
+    if rows <= 0:
+        return 300
+    return max(int(rows * _TOPOFF_ROW_HEIGHT + _TOPOFF_HEATMAP_BOTTOM_MARGIN), 300)
+
+
 def _slice_visual_page(data: Dict[str, Any], *, requested_offset: int, requested_limit: int, block_offset: int) -> Dict[str, Any]:
     out = copy.deepcopy(data or {})
     local_start = max(0, int(requested_offset) - int(block_offset))
@@ -304,6 +313,7 @@ def _slice_visual_page(data: Dict[str, Any], *, requested_offset: int, requested
         "limit": int(requested_limit),
         "showing": showing,
         "total_rows": total_rows,
+        "height": _topoff_visual_height(showing),
     })
     out["page_info"] = page_info
     return out

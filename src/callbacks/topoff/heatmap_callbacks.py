@@ -2,6 +2,7 @@
 import math
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import md5
 from datetime import datetime, timedelta
 
@@ -418,24 +419,20 @@ def topoff_heatmap_callbacks(app):
         Output("topoff-hm-pct-hours", "children"),
         Output("topoff-hm-unit-dates", "children"),
         Output("topoff-hm-unit-hours", "children"),
-        Input("topoff-heatmap-trigger", "data"),
-        State("f-fecha", "date"),
-        State("f-technology", "value"),
-        State("f-vendor", "value"),
-        State("f-cluster", "value"),  # filtro global de cluster
-        State("topoff-site-filter", "value"),
-        State("topoff-rnc-filter", "value"),
-        State("topoff-nodeb-filter", "value"),
-        State("topoff-heatmap-page-state", "data"),
-        State("topoff-hm-order-by", "value"),  # orden del heatmap
+        Input("data-ready-store", "data"),
+        Input("f-fecha", "date"),
+        Input("applied-filters-store", "data"),
+        Input("topoff-site-filter", "value"),
+        Input("topoff-rnc-filter", "value"),
+        Input("topoff-nodeb-filter", "value"),
+        Input("topoff-heatmap-page-state", "data"),
+        Input("topoff-hm-order-by", "value"),  # orden del heatmap
         prevent_initial_call=True,
     )
     def refresh_topoff_heatmaps(
-        _trigger,
+        _ready,
         fecha,
-        technologies,
-        vendors,
-        clusters,
+        applied_filters,
         sites,
         rncs,
         nodebs,
@@ -451,8 +448,12 @@ def topoff_heatmap_callbacks(app):
           - page_info (para paginado/altura)
         """
         global _LAST_TOPOFF_HEATMAP_KEY
-        trigger_source = (_trigger or {}).get("source")
-        trigger_revision = _trigger_revision_topoff(_trigger)
+        trigger_revision = _trigger_revision_topoff(_ready)
+
+        applied_filters = applied_filters or {}
+        technologies = applied_filters.get("technology") or None
+        vendors = applied_filters.get("vendor") or None
+        clusters = applied_filters.get("cluster") or None
 
         # Normaliza filtros
         technologies = _as_list(technologies)
@@ -689,9 +690,7 @@ def topoff_heatmap_callbacks(app):
         Output("topoff-heatmap-page-state", "data"),
         # Si cambia cualquier filtro o el tamaÃ±o de pÃ¡gina, regresamos a pÃ¡gina 1
         Input("f-fecha", "date"),
-        Input("f-technology", "value"),
-        Input("f-vendor", "value"),
-        Input("f-cluster", "value"),
+        Input("applied-filters-store", "data"),
         Input("topoff-site-filter", "value"),
         Input("topoff-rnc-filter", "value"),
         Input("topoff-nodeb-filter", "value"),
@@ -730,41 +729,43 @@ def topoff_heatmap_callbacks(app):
         return {"page": page, "page_size": ps}
 
     # =================================================
-    # F) Render HISTOGRAMA TopOff PS (2 figs + page_info)
+    # F) Render HISTOGRAMAS TopOff PS/CS
     # =================================================
     @app.callback(
         Output("topoff-hi-pct-ps", "figure"),
         Output("topoff-hi-unit-ps", "figure"),
         Output("topoff-histo-page-info", "data"),
-        Input("topoff-histo-trigger", "data"),
+        Output("topoff-hi-pct-cs", "figure"),
+        Output("topoff-hi-unit-cs", "figure"),
+        Input("data-ready-store", "data"),
         Input("topoff-histo-selected-wave", "data"),
-        State("f-fecha", "date"),
-        State("f-technology", "value"),
-        State("f-vendor", "value"),
-        State("f-cluster", "value"),
-        State("topoff-site-filter", "value"),
-        State("topoff-rnc-filter", "value"),
-        State("topoff-nodeb-filter", "value"),
+        Input("f-fecha", "date"),
+        Input("applied-filters-store", "data"),
+        Input("topoff-site-filter", "value"),
+        Input("topoff-rnc-filter", "value"),
+        Input("topoff-nodeb-filter", "value"),
         State("topoff-heatmap-page-state", "data"),
         prevent_initial_call=True,
     )
-    def refresh_topoff_histograma_ps(
-        _trigger,
+    def refresh_topoff_histogramas(
+        _ready,
         sel_wave,
         fecha,
-        technologies,
-        vendors,
-        clusters,
+        applied_filters,
         sites,
         rncs,
         nodebs,
         hi_page_state,
     ):
-        """Construye histo PS (pct y unit) usando la misma paginaciÃ³n."""
+        applied_filters = applied_filters or {}
+        technologies = applied_filters.get("technology") or None
+        vendors = applied_filters.get("vendor") or None
+        clusters = applied_filters.get("cluster") or None
+        """Construye histogramas PS y CS en una sola ronda de callback."""
         if DATA_SOURCE == "api":
-            try:
-                fig_pct, fig_unit, page_info = _run_topoff_histo_api_for_domain(
-                    "PS",
+            def _run(dom):
+                return _run_topoff_histo_api_for_domain(
+                    dom,
                     sel_wave,
                     fecha,
                     technologies,
@@ -775,11 +776,24 @@ def topoff_heatmap_callbacks(app):
                     nodebs,
                     hi_page_state,
                 )
-            except Exception:
-                return go.Figure(), go.Figure(), {"total_rows": 0, "offset": 0, "limit": 50, "showing": 0}
-            return fig_pct, fig_unit, page_info
 
-        fig_pct, fig_unit, page_info, is_cache = _run_topoff_histo_for_domain(
+            try:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    fut_ps = executor.submit(_run, "PS")
+                    fut_cs = executor.submit(_run, "CS")
+                    ps_pct, ps_unit, page_info = fut_ps.result()
+                    cs_pct, cs_unit, _cs_page_info = fut_cs.result()
+            except Exception:
+                return (
+                    go.Figure(),
+                    go.Figure(),
+                    {"total_rows": 0, "offset": 0, "limit": 50, "showing": 0},
+                    go.Figure(),
+                    go.Figure(),
+                )
+            return ps_pct, ps_unit, page_info, cs_pct, cs_unit
+
+        fig_ps_pct, fig_ps_unit, page_info, is_cache_ps = _run_topoff_histo_for_domain(
             "PS",
             sel_wave,
             fecha,
@@ -790,62 +804,9 @@ def topoff_heatmap_callbacks(app):
             rncs,
             nodebs,
             hi_page_state,
-            _trigger,
+            _ready,
         )
-        if is_cache:
-            return no_update, no_update, no_update
-        return fig_pct, fig_unit, page_info
-
-    # =================================================
-    # G) Render HISTOGRAMA TopOff CS (2 figs)
-    # =================================================
-    @app.callback(
-        Output("topoff-hi-pct-cs", "figure"),
-        Output("topoff-hi-unit-cs", "figure"),
-        Input("topoff-histo-trigger", "data"),
-        Input("topoff-histo-selected-wave", "data"),
-        State("f-fecha", "date"),
-        State("f-technology", "value"),
-        State("f-vendor", "value"),
-        State("f-cluster", "value"),
-        State("topoff-site-filter", "value"),
-        State("topoff-rnc-filter", "value"),
-        State("topoff-nodeb-filter", "value"),
-        State("topoff-heatmap-page-state", "data"),
-        prevent_initial_call=True,
-    )
-    def refresh_topoff_histograma_cs(
-        _trigger,
-        sel_wave,
-        fecha,
-        technologies,
-        vendors,
-        clusters,
-        sites,
-        rncs,
-        nodebs,
-        hi_page_state,
-    ):
-        """Construye histo CS (pct y unit)."""
-        if DATA_SOURCE == "api":
-            try:
-                fig_pct, fig_unit, _page_info = _run_topoff_histo_api_for_domain(
-                    "CS",
-                    sel_wave,
-                    fecha,
-                    technologies,
-                    vendors,
-                    clusters,
-                    sites,
-                    rncs,
-                    nodebs,
-                    hi_page_state,
-                )
-            except Exception:
-                return go.Figure(), go.Figure()
-            return fig_pct, fig_unit
-
-        fig_pct, fig_unit, _page_info, is_cache = _run_topoff_histo_for_domain(
+        fig_cs_pct, fig_cs_unit, _page_info_cs, is_cache_cs = _run_topoff_histo_for_domain(
             "CS",
             sel_wave,
             fecha,
@@ -856,11 +817,11 @@ def topoff_heatmap_callbacks(app):
             rncs,
             nodebs,
             hi_page_state,
-            _trigger,
+            _ready,
         )
-        if is_cache:
-            return no_update, no_update
-        return fig_pct, fig_unit
+        if is_cache_ps and is_cache_cs:
+            return no_update, no_update, no_update, no_update, no_update
+        return fig_ps_pct, fig_ps_unit, page_info, fig_cs_pct, fig_cs_unit
 
     # -------------------------------------------------
     # J) Click en % PS -> selecciona wave
