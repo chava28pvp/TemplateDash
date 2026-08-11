@@ -235,7 +235,7 @@ def umbral_callbacks(app):
             )
 
             scope = "(Global)" if network is None else f"({network})"
-            sync_result = _sync_thresholds_if_api(profile="main")
+            sync_result = _sync_thresholds_if_api(profile=profile)
             return (
                 UM_MANAGER.config(),
                 f"Severidad guardada para {metric} {scope} - Tabla {profile}." + _sync_suffix(sync_result),
@@ -264,7 +264,7 @@ def umbral_callbacks(app):
             )
 
             scope = "(Global)" if network is None else f"({network})"
-            sync_result = _sync_thresholds_if_api(profile="main")
+            sync_result = _sync_thresholds_if_api(profile=profile)
             return (
                 UM_MANAGER.config(),
                 f"Rango guardado para {metric} {scope} - Tabla {profile}." + _sync_suffix(sync_result),

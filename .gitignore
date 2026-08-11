@@ -1,5 +1,6 @@
 config.py
-__pycache__
+**/__pycache__/
+*.pyc
 venv/
 venv_tmp/
 env/
@@ -11,5 +12,5 @@ dist/
 *.pkg
 *.pyz
 .runtime-api/logs/
+.runtime-api/*.log
 .runtime-api/umbrales.json
-serverless/
