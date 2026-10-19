@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 import requests
 import urllib3
 
+from src.dataAccess import sample_policy
+
 from src.config import (
     HEATMAP_QUERY_API_CA_BUNDLE,
     HEATMAP_QUERY_API_CACHE_TTL,
@@ -54,6 +56,8 @@ def call_operation(operation: str, payload: Optional[Dict[str, Any]] = None) -> 
         raise MainVisualsApiError("HEATMAP_QUERY_API_URL no esta configurado.")
 
     body = dict(payload or {})
+    if operation in {"main_heatmap", "heatmap", "histogram", "histograma", "histo", "integrity_heatmap", "heatmap_integrity"}:
+        body = sample_policy.prepare_read_payload(body)
     body["operation"] = operation
     cache_key = _cache_key(body)
     now = time.time()
@@ -95,6 +99,7 @@ def call_operation(operation: str, payload: Optional[Dict[str, Any]] = None) -> 
     if not data.get("ok", data.get("success", False)):
         message = ((data.get("error") or {}).get("message")) or str(data.get("error") or data)
         raise MainVisualsApiError(f"heatmap API operation={operation} fallo: {message}")
+    sample_policy.require_policy_support(body, data, MainVisualsApiError)
     if HEATMAP_QUERY_API_CACHE_TTL > 0:
         _API_CACHE[cache_key] = {"ts": now, "data": copy.deepcopy(data)}
     return data
@@ -335,7 +340,7 @@ def _prefetch_following_pages(operation: str, payload: Dict[str, Any], *, page: 
     for next_page in range(int(page) + 1, int(page) + count + 1):
         next_payload = copy.deepcopy(payload)
         next_payload["pagination"] = {"page": next_page, "page_size": int(page_size)}
-        body = dict(next_payload)
+        body = sample_policy.prepare_read_payload(next_payload)
         body["operation"] = operation
         cache_key = _cache_key(body)
         if cache_key in _API_CACHE or cache_key in _PREFETCH_INFLIGHT:

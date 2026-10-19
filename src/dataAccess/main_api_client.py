@@ -9,6 +9,8 @@ import pandas as pd
 import requests
 import urllib3
 
+from src.dataAccess import sample_policy
+
 from src.config import (
     MAIN_QUERY_API_CA_BUNDLE,
     MAIN_QUERY_API_CACHE_TTL,
@@ -43,11 +45,18 @@ def clear_cache() -> None:
         _API_CACHE.clear()
 
 
-def call_operation(operation: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def call_operation(operation: str, payload: Optional[Dict[str, Any]] = None, *, apply_sample_policy=True) -> Dict[str, Any]:
     if not MAIN_QUERY_API_URL:
         raise MainApiError("MAIN_QUERY_API_URL no esta configurado.")
 
     body = dict(payload or {})
+    if apply_sample_policy and operation in {
+        "page", "kpis", "table_page", "main_table_page", "latest_slot",
+        "distinct_catalogs", "catalogs", "integrity_baseline_week",
+        "progress_max_by_network", "alarm_state", "alarm_meta", "by_keys",
+        "context", "table_context", "main_table_context",
+    }:
+        body = sample_policy.prepare_read_payload(body)
     body["operation"] = operation
     cache_key = _cache_key(body)
     now = time.time()
@@ -86,6 +95,7 @@ def call_operation(operation: str, payload: Optional[Dict[str, Any]] = None) -> 
     if not data.get("ok", data.get("success", False)):
         message = ((data.get("error") or {}).get("message")) or str(data.get("error") or data)
         raise MainApiError(f"main API operation={operation} fallo: {message}")
+    sample_policy.require_policy_support(body, data, MainApiError)
     if MAIN_QUERY_API_CACHE_TTL > 0:
         with _API_CACHE_LOCK:
             _API_CACHE[cache_key] = {"ts": now, "data": copy.deepcopy(data)}
@@ -336,6 +346,8 @@ def fetch_distinct_catalogs(*, fecha=None, hora=None, networks=None, technologie
 
 
 def fetch_latest_slot():
+    if sample_policy.enabled():
+        sample_policy.refresh_excluded_slot()
     data = call_operation("latest_slot", {})
     return data.get("data")
 

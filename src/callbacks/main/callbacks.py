@@ -19,6 +19,7 @@ from src.dataAccess.data_access import fetch_kpis, COLMAP, fetch_kpis_paginated_
 from src.config import DATA_SOURCE, PROFILE_MAIN_CALLBACKS
 from src.dataAccess.data_acess_topoff import fetch_topoff_distinct, fetch_latest_available_slot_topoff
 from src.dataAccess import main_api_client, topoff_api_client
+from src.dataAccess import sample_policy
 from dash.exceptions import PreventUpdate
 from src.callbacks.common import paginate_state, reset_page_state, toggle_bool, choose_common_available_slot, purge_expired_cache_entries
 from src.callbacks.main.heatmap_callbacks import purge_main_heatmap_caches
@@ -146,6 +147,11 @@ def _target_slot_or_clock(data_ready, hour_options):
     candidates = []
 
     slot = (data_ready or {}).get("slot") or {}
+    if sample_policy.enabled():
+        return (
+            _normalize_hour_to_options(f"{now.hour:02d}:00:00", hour_options),
+            now.strftime("%Y-%m-%d"),
+        )
     slot_hour = _normalize_hour_to_options(slot.get("hora"), hour_options)
     slot_date = slot.get("fecha")
     if slot_hour and slot_date:
@@ -335,6 +341,7 @@ def _make_ctx_key(fecha, hora, networks, technologies, vendors, clusters):
         return tuple(sorted(x))
     return (
         "main_ctx",
+        sample_policy.cache_token(),
         fecha, None if DATA_SOURCE == "api" else hora,
         _norm(networks),
         _norm(technologies),
@@ -466,6 +473,8 @@ def register_callbacks(app):
         else:
             topoff_slot = fetch_latest_available_slot_topoff()
         common_slot = choose_common_available_slot(main_slot, topoff_slot)
+        if sample_policy.enabled():
+            common_slot = main_slot
 
         if not common_slot:
             raise PreventUpdate
@@ -1133,9 +1142,10 @@ def register_callbacks(app):
         Input("f-fecha", "date"),
         Input("f-hora", "value"),
         Input("applied-filters-store", "data"),
+        Input("data-ready-store", "data"),
         prevent_initial_call=False,
     )
-    def build_main_context(fecha, hora, applied_filters):
+    def build_main_context(fecha, hora, applied_filters, _data_ready=None):
         """
            Construye un 'contexto' pesado para evitar repetir cálculos en refresh_table:
            - Baseline semanal de integridad (por network/vendor/cluster/tech)
