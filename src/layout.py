@@ -6,7 +6,9 @@ from src.config import DATA_READY_POLL_MS
 from src.Utils.utils_time import default_date_str, default_hour_str
 from components.umbral_config_modal import create_umbral_config_modal
 
+
 def serve_layout():
+    # El layout organiza filtros globales, tablas y paneles visuales en una vista.
     return dbc.Container([
         # Header principal
         dbc.Row([
@@ -700,7 +702,7 @@ def serve_layout():
 
                                 dbc.Col(html.Div(id="topoff-total-rows-banner", className="text-muted"), width=True),
 
-                                # 👇 NUEVO: botón export a Excel para TopOff
+                                # El boton descarga la pagina TopOff que se muestra en pantalla.
                                 dbc.Col(
                                     dbc.Button(
                                         "Exportar Excel",
@@ -723,7 +725,7 @@ def serve_layout():
                                 ),
                             ], className="g-2 align-items-center"),
 
-                            # 👇 NUEVO: target de descarga
+                            # Componente de descarga usado por el callback de exportacion.
                             dcc.Download(id="topoff-download-excel"),
 
                         ]),
@@ -928,7 +930,7 @@ def serve_layout():
 
                                 ],
 
-                                # 👇 Namespace TopOff pero SIN scroll en este wrapper
+                                # El contenedor mantiene visible el panel completo de TopOff.
                                 className="topoff-board",
                                 style={"height": "auto", "overflow": "visible"}
                             ),

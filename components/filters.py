@@ -2,6 +2,8 @@ from dash import html, dcc
 import dash_bootstrap_components as dbc
 from src.Utils.utils_time import default_date_str, default_hour_str
 
+
+# Los filtros principales alimentan las consultas de ambas tablas.
 def build_filters(
     network_options=None,
     technology_options=None,
@@ -45,7 +47,7 @@ def build_filters(
                     )
                 ], md=3),
 
-                # >>> NUEVO/CLAVE: Network multi-selección
+                # El selector de red admite varias opciones para filtrar la vista.
                 dbc.Col([
                     dbc.Label("Network"),
                     dcc.Dropdown(

@@ -1,4 +1,5 @@
 # Callback para exportar a Excel EXACTAMENTE la misma página que estás viendo en la tabla,
+# La exportacion reutiliza filtros, orden de la pagina visible y formatos condicionales.
 from io import BytesIO
 from dash import Output, Input, State, callback, dcc
 import pandas as pd
@@ -189,8 +190,7 @@ def export_callback(app):
         sort_net = None
         ascending = True
 
-        # Nota: aquí solo usamos sort_state si NO estamos en "global" puro,
-        #       tal como lo tenías originalmente.
+        # El sort local solo aplica cuando la consulta global no define ya el orden.
         if sort_mode != "global" and sort_state and sort_state.get("column"):
             col = sort_state["column"]
             ascending = bool(sort_state.get("ascending", True))
@@ -320,7 +320,7 @@ def export_callback(app):
         # 8) Escribir XLSX con formatos (severity + progress)
         raw_cfg = load_threshold_cfg()
 
-        # Por ahora fijo "main" (si luego quieres, lo haces dinámico por estado)
+        # La exportacion de esta tabla usa los umbrales del perfil main.
         profile_name = "main"
         profiles = raw_cfg.get("profiles") or {}
         profile_cfg = profiles.get(profile_name, {})

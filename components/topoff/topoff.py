@@ -5,6 +5,8 @@ import pandas as pd
 
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
 
+# Estas constantes controlan el orden, agrupacion y formato de columnas TopOff.
+
 # =============== Configuración visual ===============
 # Columnas “llave” que siempre van a la izquierda (identifican la fila)
 ROW_KEYS = [
@@ -88,7 +90,6 @@ PROGRESS_COLS = {
     "cs_rrc_fail",
     "cs_rab_fail",
     "cs_drop_abnrel",
-    # "tnl_fail", "tnl_abn",  # si luego las quieres como barras, se agregan aquí
 }
 
 # Columnas que pintan severidad (porcentajes)
@@ -386,7 +387,7 @@ def render_topoff_table(df: pd.DataFrame, sort_state=None):
     # ======================================================
     body_rows = []
 
-    # Nota: aquí NO aplicas el sort directo; asumo que el callback ya te manda df ordenado
+    # El callback resuelve el orden de filas para mantener una sola regla de sort.
     for _, r in df[visible].iterrows():
         tds = []
 

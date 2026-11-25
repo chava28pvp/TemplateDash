@@ -32,6 +32,7 @@ _DFTS_TTL = 300
 
 _MAIN_CTX_CACHE = {}
 _MAIN_CTX_TTL = 120
+# El contexto compartido evita repetir consultas de baseline, progreso y alarmas.
 MOCK_INTEGRITY_BASELINE = False
 MOCK_BASELINE_MULT = 1.25
 MOCK_ONLY_NETWORKS = {"NET", "ATT", "TEF"}
@@ -636,7 +637,7 @@ def register_callbacks(app):
            """
         sort_state = sort_state or {"column": None, "ascending": True}
 
-        # ✅ Bloquea disparos “fantasma” por re-render
+        # Evita procesar un clic anterior cuando el header se vuelve a renderizar.
         if not ctx.triggered:
             raise PreventUpdate
 
@@ -701,9 +702,8 @@ def register_callbacks(app):
 
     # -------------------------------------------------
     # 4) Tabla + Charts + Indicadores de paginación (UN SOLO callback)
-    #    ← Este callback es el ÚNICO que escribe en table-container y charts
+    # Este callback centraliza la actualizacion de tabla y graficas.
     # -------------------------------------------------
-    # ... (resto de imports iguales)
     @app.callback(
         Output("table-container", "children"),
         Output("page-indicator", "children"),

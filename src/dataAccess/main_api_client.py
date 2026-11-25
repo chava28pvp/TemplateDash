@@ -32,6 +32,7 @@ _API_CACHE = {}
 _API_CACHE_LOCK = threading.Lock()
 
 
+# Traduce las consultas de la vista principal al contrato del servicio API.
 class MainApiError(RuntimeError):
     pass
 

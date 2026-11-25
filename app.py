@@ -16,9 +16,10 @@ from src.callbacks.umbrales_callbacks import umbral_callbacks
 from src.callbacks.main.heatmap_callbacks import heatmap_callbacks, start_main_prewarm_thread
 from src.callbacks.topoff.topoff_callback import register_topoff_callbacks
 from src.config import APP_LOG_PATH, ASSETS_DIR
-# Tema Bootstrap (elige otro si quieres: LUX, COSMO, CYBORG, etc.)
+
+# Cache breve para evitar repetir calculos durante las actualizaciones de la vista.
 cache = Cache(config={
-    "CACHE_TYPE": "SimpleCache",          # para empezar; puedes cambiar a Redis luego
+    "CACHE_TYPE": "SimpleCache",
     "CACHE_DEFAULT_TIMEOUT": 60           # TTL por defecto
 })
 external_stylesheets = [dbc.themes.LUX]
@@ -30,7 +31,8 @@ app = Dash(
     assets_folder=str(ASSETS_DIR),
 )
 cache.init_app(app.server)
-server = app.server  # para despliegue (gunicorn, etc.)
+# Se expone el servidor Flask para despliegues WSGI.
+server = app.server
 app.config.suppress_callback_exceptions = True
 app.title = "Dashboard Master"
 app.layout = serve_layout
@@ -42,6 +44,7 @@ file_handler.setFormatter(
 )
 
 root_logger = logging.getLogger()
+# Evita registrar dos veces el mismo archivo si el modulo se carga mas de una vez.
 if not any(
     isinstance(handler, logging.FileHandler)
     and getattr(handler, "baseFilename", None) == str(APP_LOG_PATH)
@@ -55,9 +58,11 @@ app_logger = logging.getLogger(__name__)
 
 @server.errorhandler(Exception)
 def log_unhandled_exception(error):
+    # Conserva el traceback en el log antes de propagar el error.
     app_logger.exception("Unhandled server error", exc_info=error)
     raise error
 
+# Cada registro conecta una seccion visual con sus callbacks y consultas.
 register_callbacks(app)
 umbral_callbacks(app)
 export_callback(app)
@@ -68,6 +73,7 @@ export_topoff_callback(app)
 integrity_callbacks(app)
 start_main_prewarm_thread()
 
+# Al seleccionar un cluster, desplaza la vista hacia el histograma correspondiente.
 app.clientside_callback(
     """
     function(ts_list) {
@@ -120,6 +126,7 @@ app.clientside_callback(
     prevent_initial_call=True,
 )
 def toggle_table_focus(_main_clicks, _topoff_clicks, _overlay_clicks, focus_state):
+    # Solo una tabla puede permanecer expandida a la vez.
     focus_state = focus_state or {"main": False, "topoff": False}
     triggered = ctx.triggered_id
 
@@ -148,6 +155,7 @@ def toggle_table_focus(_main_clicks, _topoff_clicks, _overlay_clicks, focus_stat
     Input("table-focus-store", "data"),
 )
 def sync_table_focus_ui(focus_state):
+    # El estado del store controla las clases visuales y el texto de los botones.
     focus_state = focus_state or {"main": False, "topoff": False}
     main_on = bool(focus_state.get("main"))
     topoff_on = bool(focus_state.get("topoff"))
@@ -172,10 +180,12 @@ def sync_table_focus_ui(focus_state):
     )
 
 def run_local_server(open_browser: bool = True) -> None:
+    # El host y el puerto se pueden ajustar desde las variables de entorno.
     host = os.getenv("DASH_HOST", "127.0.0.1")
     port = int(os.getenv("PORT", os.getenv("DASH_PORT", "8050")))
 
     if open_browser:
+        # Da tiempo al servidor para iniciar antes de abrir el navegador.
         def _open_browser() -> None:
             webbrowser.open(f"http://{host}:{port}", new=1)
 

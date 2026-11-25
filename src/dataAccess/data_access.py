@@ -20,6 +20,7 @@ _TABLE_NAME = "Dashboard_Master"
 logger = logging.getLogger(__name__)
 
 
+# Mantiene una salida comun para las consultas, sea que usen SQL o la API.
 def _use_api() -> bool:
     return DATA_SOURCE == "api" and main_api_client.is_configured()
 
@@ -918,7 +919,7 @@ def fetch_kpis_paginated_severity_sort(
     # Construye expresiones de severidad a partir del JSON
     cfg = load_threshold_cfg()  # data/umbrales.json
     severity_expr, crit_expr, thr_params = _build_severity_expressions_from_json(cfg, profile="main")
-    # 👇 flag de completitud usando INTEGRITY como % (>=80 = completo)
+    # El porcentaje de integridad define si la fila cuenta como completa.
     complete_flag_expr, integrity_order_expr = _integrity_complete_order_exprs()
 
     # COUNT con al menos un KPI en nivel 'critico'

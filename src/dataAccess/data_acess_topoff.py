@@ -250,14 +250,14 @@ def _select_list_with_aliases(friendly_cols: List[str]) -> List[str]:
         if friendly == "hora":
             parts.append(f"{_time_select_expr(real)} AS {friendly}")
 
-        # ✅ CLAVE: cluster siempre “limpio” y nunca vacío
+        # El cluster usa el valor limpio y toma el sitio como respaldo si viene vacio.
         elif friendly == "cluster":
             # cluster := NOC_CLUSTER si tiene algo, si no := SITE_ATT
             parts.append(
                 f"COALESCE(NULLIF(TRIM({_quote(real)}), ''), TRIM({_quote(COLMAP['site_att'])})) AS {friendly}"
             )
 
-        # ✅ opcional: limpiar llaves de texto para evitar merges rotos por espacios
+        # Se eliminan espacios en llaves de texto para que coincidan en los cruces.
         elif friendly in ("technology", "vendor", "region", "province", "municipality", "site_att", "rnc", "nodeb"):
             parts.append(f"NULLIF(TRIM({_quote(real)}), '') AS {friendly}")
 
@@ -277,7 +277,7 @@ def _filters_where_and_params(
     municipalities: Optional[List[str]] = None,
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
-    clusters: Optional[List[str]] = None,   # <--- NUEVO
+    clusters: Optional[List[str]] = None,
     sites: Optional[List[str]] = None,
     rncs: Optional[List[str]] = None,
     nodebs: Optional[List[str]] = None,
@@ -316,7 +316,7 @@ def _filters_where_and_params(
     municipalities = _as_list(municipalities)
     technologies   = _as_list(technologies)
     vendors        = _as_list(vendors)
-    clusters       = _as_list(clusters)   # <--- NUEVO
+    clusters       = _as_list(clusters)
     sites          = _as_list(sites)
     rncs           = _as_list(rncs)
     nodebs         = _as_list(nodebs)
@@ -363,7 +363,7 @@ def _filters_where_and_params(
         use_vendors = True
 
     # ========================
-    # NUEVO: filtro por cluster
+    # El filtro de cluster se combina con los demas filtros de la consulta.
     # ========================
     if clusters:
         where.append(f"{_quote(COLMAP['cluster'])} IN :clusters")
@@ -497,7 +497,7 @@ def _hora_to_range_prev_and_current(hora: Optional[str]):
 def fetch_topoff_paginated(
     *,
     fecha: Optional[str] = None,
-    hora: Optional[str] = None,  # <--- NUEVO
+    hora: Optional[str] = None,
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
     clusters: Optional[List[str]] = None,
@@ -608,7 +608,7 @@ def fetch_latest_available_slot_topoff():
 def fetch_topoff_paginated_global_sort(
     *,
     fecha: Optional[str] = None,
-    hora: Optional[str] = None,  # <--- NUEVO
+    hora: Optional[str] = None,
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
     clusters: Optional[List[str]] = None,
@@ -677,7 +677,7 @@ def fetch_topoff_paginated_global_sort(
         else:
             real_expr = f"NULLIF({_quote(real)}, '')"
 
-        # ✅ SIN coma final
+        # La lista de columnas se cierra sin agregar una coma al ultimo elemento.
         if sort_by_friendly == "site_att" and ascending:
             order_by = (
                 f"{_quote(COLMAP['fecha'])} DESC, "
@@ -728,7 +728,7 @@ def fetch_topoff_paginated_global_sort(
 def fetch_topoff_paginated_severity_global_sort(
     *,
     fecha: Optional[str] = None,
-    hora: Optional[str] = None,  # <--- NUEVO
+    hora: Optional[str] = None,
     technologies: Optional[List[str]] = None,
     vendors: Optional[List[str]] = None,
     clusters: Optional[List[str]] = None,
@@ -1037,10 +1037,10 @@ def fetch_alarm_meta_for_topoff(
     f_clu_raw = _quote(COLMAP["cluster"])
     f_site_raw = _quote(COLMAP["site_att"])
 
-    # ✅ cluster “canon”: coalesce(trim(cluster), trim(site))
+    # Se unifica el cluster y el sitio en una llave limpia para los resultados.
     f_clu = f"COALESCE(NULLIF(TRIM({f_clu_raw}), ''), TRIM({f_site_raw}))"
 
-    # ✅ llaves limpias (opcional pero recomendado)
+    # Las llaves de texto se limpian antes de usarlas en filtros y cruces.
     f_site = f"NULLIF(TRIM({f_site_raw}), '')"
     f_rnc = f"NULLIF(TRIM({_quote(COLMAP['rnc'])}), '')"
     f_nb = f"NULLIF(TRIM({_quote(COLMAP['nodeb'])}), '')"

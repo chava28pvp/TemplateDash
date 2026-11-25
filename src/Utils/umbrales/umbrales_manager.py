@@ -9,16 +9,17 @@ from copy import deepcopy
 
 from src.config import UMBRAL_JSON_PATH
 
+# Estas metricas generan la configuracion inicial de severidad y progreso.
 SEVERITY_BASES: List[str] = [
     "ps_rrc_ia_percent", "ps_rab_ia_percent", "ps_s1_ia_percent", "ps_drop_dc_percent",
     "cs_rrc_ia_percent", "cs_rab_ia_percent", "cs_drop_dc_percent",
-    # 👇 métricas extra usadas en TopOff
+    # Metrica adicional usada en TopOff.
     "rtx_tnl_tx_percent",
 ]
 PROGRESS_BASES: List[str] = [
     "ps_rrc_fail", "ps_rab_fail", "ps_s1_fail", "ps_drop_abnrel",
     "cs_rrc_fail", "cs_rab_fail", "cs_drop_abnrel",
-    # 👇 opcional si quieres configurar barras para TNL
+    # Permite configurar barras de progreso para TNL.
     "tnl_fail", "tnl_abn",
 ]
 SEVERITY_COLORS = {

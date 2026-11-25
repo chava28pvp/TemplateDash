@@ -5,6 +5,7 @@ import pandas as pd
 from src.Utils.umbrales.utils_umbrales import cell_severity, progress_cfg
 import numpy as np
 
+# Estos grupos definen el orden y la presentacion de columnas en la tabla principal.
 # =========================
 # Configuración / Constantes
 # =========================

@@ -18,6 +18,7 @@ DEFAULT_PAGE_SIZE = 50
 DEFAULT_SORT_STATE = {"column": None, "ascending": True}
 
 
+# Registra opciones, paginacion, orden y renderizado de la vista TopOff.
 def register_topoff_callbacks(app):
 
     # -----------------------------------------------------
@@ -207,7 +208,7 @@ def register_topoff_callbacks(app):
         sort_mode = (sort_mode or "recent").lower()
         if sort_mode == "alarmado":
             order_mode = "alarmado"
-        elif sort_mode == "sitio":  # <--- NUEVO MODO
+        elif sort_mode == "sitio":
             order_mode = "sitio"
         else:
             order_mode = "recent"
